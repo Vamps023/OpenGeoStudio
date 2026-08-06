@@ -30,6 +30,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes('@babylonjs')) return 'babylon';
           if (id.includes('maplibre-gl')) return 'maplibre';
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/zustand')) return 'react-vendor';
         },
