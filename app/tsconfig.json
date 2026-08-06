@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "lib": ["ES2020"],
+    "rootDir": "..",
+    "outDir": "../dist-electron",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "sourceMap": true,
+    "declaration": false,
+    "composite": false,
+    "ignoreDeprecations": "5.0",
+    "paths": {
+      "@/*": ["../renderer/*"],
+      "@shared/*": ["../shared/*"],
+      "@types/*": ["../shared/types/*"],
+      "@modules/*": ["../modules/*"],
+      "@ogscore/*": ["../core/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "../shared/types/**/*.ts",
+    "../core/**/*.ts",
+    "../modules/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "native",
+    "__tests__",
+    "../dist-electron",
+    "../modules/**/client/**/*.tsx",
+    "../modules/**/client/**/*.ts"
+  ]
+}

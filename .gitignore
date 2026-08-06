@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-electron/
+dist-release/
+release/
+
+# Native addon build
+app/native/build/
+app/native/*.node
+
+# Logs
+*.log
+electron-*.log
+main-*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test output
+test-output/
+coverage/
+
+# Vite cache
+.vite/
+
+# Temp files
+*.tmp
+*.bak

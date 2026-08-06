@@ -1,0 +1,118 @@
+{
+  "name": "opengeostudio",
+  "version": "1.0.0",
+  "description": "Open-source geospatial terrain creation platform",
+  "private": true,
+  "main": "dist-electron/app/main.js",
+  "author": "OpenGeoStudio",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "dev": "vite --open",
+    "dev:electron": "cross-env NODE_NO_WARNINGS=1 concurrently \"vite\" \"wait-on http://localhost:5173 && npm run build:electron && cross-env NODE_ENV=development VITE_DEV_SERVER_URL=http://localhost:5173 electron dist-electron/app/main.js\"",
+    "build": "npm run build:vite && npm run build:electron && electron-builder",
+    "build:win": "npm run build:vite && npm run build:electron && electron-builder --win",
+    "build:mac": "npm run build:vite && npm run build:electron && electron-builder --mac",
+    "build:linux": "npm run build:vite && npm run build:electron && electron-builder --linux",
+    "build:vite": "vite build",
+    "build:electron": "tsc --project app/tsconfig.json && node -e \"require('fs').mkdirSync('dist-electron', {recursive:true}); require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'})+\\\"\\n\\\");\"",
+    "lint": "eslint . --report-unused-disable-directives",
+    "preview": "vite preview",
+    "rebuild:native": "cd app/native && npx node-gyp rebuild",
+    "clean:release": "node -e \"try { require('fs').rmSync('release', {recursive: true, force: true}); console.log('release/ deleted') } catch(e) { console.log('release/ not found or locked:', e.message) }\"",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "postinstall": "node scripts/rebuild-native-for-electron.cjs"
+  },
+  "dependencies": {
+    "@turf/turf": "^7.3.5",
+    "esbuild": "^0.28.1",
+    "geotiff": "^3.0.5",
+    "lucide-react": "^1.28.0",
+    "maplibre-gl": "^5.24.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "sharp": "^0.35.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.2.4",
+    "cross-env": "^10.1.0",
+    "electron": "^42.5.1",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "fast-check": "^4.9.0",
+    "globals": "^17.7.0",
+    "postcss": "^8.5.20",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10",
+    "wait-on": "^9.0.10",
+    "ws": "^8.21.1"
+  },
+  "build": {
+    "appId": "com.opengeostudio.app",
+    "productName": "OpenGeoStudio",
+    "directories": {
+      "output": "dist-release"
+    },
+    "files": [
+      "dist",
+      "dist-electron",
+      "!node_modules",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/detect-libc/**/*",
+      "node_modules/semver/**/*",
+      "node_modules/geotiff/**/*",
+      "node_modules/@petamoriken/float16/**/*",
+      "node_modules/pako/**/*",
+      "node_modules/parse-headers/**/*",
+      "node_modules/quick-lru/**/*",
+      "node_modules/web-worker/**/*",
+      "node_modules/xml-utils/**/*",
+      "node_modules/zstddec/**/*",
+      "node_modules/@img/colour/**/*",
+      "node_modules/@img/sharp-win32-x64/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/logo/logo.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/logo/logo.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  }
+}
