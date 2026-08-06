@@ -9,7 +9,7 @@
 import React from 'react';
 import {
   MousePointer2, Spline, PenTool, Undo2, Redo2, Trash2,
-  Check, Mountain, Grid3x3, Magnet, Square, Box, Map as MapIcon,
+  Check, Mountain, Grid3x3, Magnet, Square, Box,
 } from 'lucide-react';
 import { useRoadStudioStore } from './store/roadStudioStore';
 
@@ -71,8 +71,6 @@ export const RoadToolbar: React.FC = () => {
   const setPointType = useRoadStudioStore((s) => s.setPointType);
   const viewMode = useRoadStudioStore((s) => s.viewMode);
   const setViewMode = useRoadStudioStore((s) => s.setViewMode);
-  const showMapOverlay = useRoadStudioStore((s) => s.showMapOverlay);
-  const setShowMapOverlay = useRoadStudioStore((s) => s.setShowMapOverlay);
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -106,15 +104,6 @@ export const RoadToolbar: React.FC = () => {
         icon={<Box size={14} />}
         label="3D"
         shortcut="3"
-      />
-
-      <div className="w-px h-6 bg-edge mx-1" />
-
-      {/* ─── Map Overlay ──────────────────────── */}
-      <IconButton
-        onClick={() => setShowMapOverlay(!showMapOverlay)}
-        icon={<MapIcon size={16} />}
-        label={`Satellite map ${showMapOverlay ? 'ON' : 'OFF'}`}
       />
 
       <div className="w-px h-6 bg-edge mx-1" />
