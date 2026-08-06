@@ -678,7 +678,7 @@ function App(): React.JSX.Element {
         aria-label="Go to Home"
         title="Home — Recent Projects"
       >
-        <img src="./logo/logo.png" alt="OpenGeoStudio" className="w-5 h-5 rounded object-contain" />
+        <img src="./logo/logo.svg" alt="OpenGeoStudio" className="w-5 h-5 rounded object-contain" />
         <span className="text-2xs font-semibold tracking-wide text-fg-primary hidden sm:inline">OpenGeoStudio</span>
         <span className="text-3xs px-1.5 py-0.5 bg-accent/20 text-accent rounded font-mono">v{APP_VERSION}</span>
       </button>
@@ -761,7 +761,7 @@ function App(): React.JSX.Element {
   if (!initialized) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-surface-base text-fg-secondary gap-4">
-        <img src="./logo/logo.png" alt="OpenGeoStudio" className="w-16 h-16 rounded-lg object-contain" />
+        <img src="./logo/logo.svg" alt="OpenGeoStudio" className="w-16 h-16 rounded-lg object-contain" />
         <div className="text-center">
           <div className="text-lg font-semibold text-fg-primary mb-1">OpenGeoStudio</div>
           <Spinner label="Loading modules…" />

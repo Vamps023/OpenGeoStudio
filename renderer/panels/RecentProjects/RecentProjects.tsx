@@ -416,7 +416,7 @@ export const RecentProjects: React.FC = () => {
       {/* ─── Welcome Header ──────────────────────────────────── */}
       <div className="px-8 py-8 border-b border-edge bg-gradient-to-b from-surface-panel to-surface-base">
         <div className="flex items-center gap-4 mb-2">
-          <img src="./logo/logo.png" alt="OpenGeoStudio" className="w-12 h-12 rounded-lg" />
+          <img src="./logo/logo.svg" alt="OpenGeoStudio" className="w-12 h-12 rounded-lg" />
           <div>
             <h1 className="text-xl font-bold text-fg-primary">OpenGeoStudio</h1>
             <p className="text-2xs text-fg-secondary">Modular Geospatial Terrain Studio</p>
