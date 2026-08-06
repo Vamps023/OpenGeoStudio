@@ -11,7 +11,7 @@
 
 import React, { useState, useEffect, useMemo, Suspense, useCallback, useRef } from 'react';
 import {
-  Map, Layers, Download, Box, X, Mountain, Home,
+  Map, Layers, Download, Box, X, Mountain, Home, Road,
   CheckCircle, ListTodo, FileCode, Search, ListTree,
   Settings, Package, Workflow, Terminal, FolderTree, Clock,
   Square, FilePlus, FolderOpen,
@@ -45,7 +45,7 @@ const APP_VERSION = (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 
 // Maps icon name strings from contributions to lucide-react components.
 // Only icons actually referenced by module/core contributions are listed.
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string; size?: number }>> = {
-  Map, Layers, Download, Box, Mountain, Home, CheckCircle, ListTodo,
+  Map, Layers, Download, Box, Mountain, Home, Road, CheckCircle, ListTodo,
   FileCode, Search, ListTree, Settings, Package, Workflow, Terminal, FolderTree,
   Clock, Square, FilePlus, FolderOpen, History, Info, BarChart, Save,
   XCircle, MousePointer, ZoomIn, ZoomOut, Network, Maximize, RotateCw, FileOutput,
@@ -583,6 +583,7 @@ function App(): React.JSX.Element {
   const centerType = wsLayout?.center;
   const centerPanelId = savedLayout?.centerPanel ?? (
     centerType === 'map' ? 'map-viewport'
+    : centerType === 'road-studio' ? 'road-studio-viewport'
     : centerType === 'table' ? 'recent-projects'
     : null
   );

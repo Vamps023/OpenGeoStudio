@@ -8,6 +8,7 @@
 import type { AppBootstrap } from './bootstrap';
 import { TerrainModule } from '../../modules/terrain/module';
 import { ExportModule } from '../../modules/export/module';
+import { RoadStudioModule } from '../../modules/road-studio/module';
 
 /**
  * Register all built-in modules with the bootstrap.
@@ -16,11 +17,13 @@ import { ExportModule } from '../../modules/export/module';
 export function registerBuiltinModules(bootstrap: AppBootstrap): void {
   bootstrap.registerModule(TerrainModule);
   bootstrap.registerModule(ExportModule);
+  bootstrap.registerModule(RoadStudioModule);
 }
 
 /** List of all built-in module IDs (for workspace validation etc.) */
 export const BUILTIN_MODULE_IDS = [
   'terrain',
   'export',
+  'road-studio',
   'home',
 ] as const;

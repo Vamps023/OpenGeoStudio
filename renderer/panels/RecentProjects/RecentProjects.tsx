@@ -15,7 +15,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Clock, FilePlus, FolderOpen, Search, Pin, Star,
-  Mountain, FileText,
+  Mountain, FileText, Box, Road,
   Cpu, CheckCircle, Layers, X, Folder,
 } from 'lucide-react';
 import { useCoreStore } from '../../core/coreStore';
@@ -30,6 +30,7 @@ const APP_VERSION = (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 
 
 const TEMPLATES = [
   { id: 'terrain', name: 'Terrain', icon: Mountain, description: 'DEM, heightmaps, satellite, terrain generation, validation, export', workspace: 'terrain', color: 'text-ok' },
+  { id: 'road-studio', name: 'Road Studio', icon: Road, description: 'Draw and edit roads in 2D/3D with Bezier pen tool and elevation control', workspace: 'road-studio', color: 'text-accent' },
 ];
 
 // ─── Recent project type ──────────────────────────────────────

@@ -54,6 +54,19 @@ registerPanel(
 );
 
 // ═══════════════════════════════════════════════════════════════
+// Road Studio Module Panels
+// ═══════════════════════════════════════════════════════════════
+
+registerPanel(
+  'road-studio-viewport',
+  'Road Studio',
+  'Road',
+  'center',
+  () => import('../../modules/road-studio/client/RoadStudioWorkspace').then(m => ({ default: m.RoadStudioWorkspace })),
+  { defaultVisible: true, closeable: false },
+);
+
+// ═══════════════════════════════════════════════════════════════
 // Framework Panels
 // ═══════════════════════════════════════════════════════════════
 
