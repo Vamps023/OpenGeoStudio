@@ -143,17 +143,56 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     });
 
     map.on('click', (e) => {
+      // Use latest store state (avoid stale closure)
+      const st = useRoadStudioStore.getState();
+
       // Shift+click = road selection for intersection creation
       if (e.originalEvent.shiftKey) {
-        // Query features at click point to find road surface layers
-        const features = map.queryRenderedFeatures(e.point, {
-          layers: roadsRef.current.map((r) => `rd-surface-${r.id}`).filter((id) => map.getLayer(id)),
-        });
-        if (features.length > 0) {
-          const roadId = features[0].properties.roadId;
-          if (roadId) {
-            store.toggleRoadSelection(roadId);
+        const clickLat = e.lngLat.lat;
+        const clickLon = e.lngLat.lng;
+        const refLat = refLatRef.current;
+        const refLon = refLonRef.current;
+
+        // Method 1: Try queryRenderedFeatures on road surface layers
+        const roadLayers = roadsRef.current
+          .map((r) => `rd-surface-${r.id}`)
+          .filter((id) => map.getLayer(id));
+        let selectedRoadId: string | null = null;
+
+        if (roadLayers.length > 0) {
+          const features = map.queryRenderedFeatures(e.point, { layers: roadLayers });
+          if (features.length > 0) {
+            selectedRoadId = features[0].properties.roadId;
           }
+        }
+
+        // Method 2: Fallback — find closest road by distance to click point
+        if (!selectedRoadId) {
+          const clickLocal = geoToLocal(clickLat, clickLon, refLat, refLon);
+          let closestRoadId: string | null = null;
+          let closestDist = Infinity;
+          for (const road of roadsRef.current) {
+            if (road.points.length < 2) continue;
+            const samples = sampleRoad(road, refLat, refLon, 24);
+            const halfW = road.width / 2 + 3; // add tolerance
+            for (const s of samples) {
+              const dx = s.x - clickLocal.x;
+              const dy = s.y - clickLocal.y;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d < closestDist) {
+                closestDist = d;
+                closestRoadId = road.id;
+              }
+            }
+          }
+          // Only select if within road width + tolerance
+          if (closestRoadId && closestDist < 50) {
+            selectedRoadId = closestRoadId;
+          }
+        }
+
+        if (selectedRoadId) {
+          st.toggleRoadSelection(selectedRoadId);
         }
         return;
       }
@@ -163,7 +202,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const cpFeatures = map.queryRenderedFeatures(e.point, { layers: ['cp-dot'] });
         if (cpFeatures.length > 0) {
           const { roadId, pointIndex } = cpFeatures[0].properties;
-          store.setSelection({ roadId, pointIndices: [pointIndex], handle: null });
+          st.setSelection({ roadId, pointIndices: [pointIndex], handle: null });
           return;
         }
       }
@@ -189,10 +228,10 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
       const drawingId = drawingRoadIdRef.current;
       if (!drawingId) {
-        store.startNewRoad(finalLat, finalLon);
+        st.startNewRoad(finalLat, finalLon);
       } else {
-        store.pushHistory('Add control point');
-        store.addControlPoint(drawingId, finalLat, finalLon);
+        st.pushHistory('Add control point');
+        st.addControlPoint(drawingId, finalLat, finalLon);
       }
     });
 
@@ -986,21 +1025,42 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         if (button === 1) { isMiddleDown = true; dragStateRef.current.mode = 'rotate'; }
         else if (button === 2) { dragStateRef.current.mode = 'pan'; }
         else if (button === 0) {
+          const st3d = useRoadStudioStore.getState();
           // Shift+click on road mesh = toggle road selection (for intersection)
           if ((evt as any).shiftKey && roadPick?.hit && roadPick.pickedMesh) {
             const roadName = roadPick.pickedMesh.name; // "road_<id>"
             const roadId = roadName.replace('road_', '');
-            store.toggleRoadSelection(roadId);
+            st3d.toggleRoadSelection(roadId);
+          } else if ((evt as any).shiftKey) {
+            // Shift+click but missed road mesh — try closest road by distance
+            const pickInfo = scene.pick(scene.pointerX, scene.pointerY, (m) => m === ground);
+            if (pickInfo?.hit && pickInfo.pickedPoint) {
+              const px = pickInfo.pickedPoint.x;
+              const py = pickInfo.pickedPoint.z;
+              let closestId: string | null = null;
+              let closestDist = Infinity;
+              for (const road of roadsRef.current) {
+                if (road.points.length < 2) continue;
+                const samples = sampleRoad(road, refLatRef.current, refLonRef.current, 24);
+                for (const s of samples) {
+                  const d = Math.sqrt((s.x - px) ** 2 + (s.y - py) ** 2);
+                  if (d < closestDist) { closestDist = d; closestId = road.id; }
+                }
+              }
+              if (closestId && closestDist < 50) {
+                st3d.toggleRoadSelection(closestId);
+              }
+            }
           } else if (pickResult?.hit && pickResult.pickedMesh?.metadata?.type === 'control-point') {
             const meta = pickResult.pickedMesh.metadata;
             dragStateRef.current = { mode: 'move-point', roadId: meta.roadId, pointIndex: meta.pointIndex, handle: null };
-            store.setSelection({ roadId: meta.roadId, pointIndices: [meta.pointIndex], handle: null });
+            st3d.setSelection({ roadId: meta.roadId, pointIndices: [meta.pointIndex], handle: null });
           } else if (pickResult?.hit && pickResult.pickedMesh?.metadata?.type === 'handle') {
             const meta = pickResult.pickedMesh.metadata;
             dragStateRef.current = { mode: 'move-handle', roadId: meta.roadId, pointIndex: meta.pointIndex, handle: meta.handle };
-            store.setSelection({ roadId: meta.roadId, pointIndices: [meta.pointIndex], handle: meta.handle });
+            st3d.setSelection({ roadId: meta.roadId, pointIndices: [meta.pointIndex], handle: meta.handle });
           } else {
-            store.setSelection({ roadId: null, pointIndices: [], handle: null });
+            st3d.setSelection({ roadId: null, pointIndices: [], handle: null });
           }
         }
       }
@@ -1024,7 +1084,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         if (ds.mode === 'move-point' && gp?.hit) {
           const w = gp.pickedPoint!;
           const geo = localToGeo(w.x, w.z, refLatRef.current, refLonRef.current);
-          store.updateControlPoint(ds.roadId!, ds.pointIndex, geo.lat, geo.lon);
+          useRoadStudioStore.getState().updateControlPoint(ds.roadId!, ds.pointIndex, geo.lat, geo.lon);
         } else if (ds.mode === 'move-handle' && gp?.hit) {
           const w = gp.pickedPoint!;
           const road = roadsRef.current.find((r) => r.id === ds.roadId);
@@ -1033,7 +1093,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             if (pt) {
               const pl = geoToLocal(pt.lat, pt.lon, refLatRef.current, refLonRef.current);
               const off = localToGeo(w.x - pl.x, w.z - pl.y, 0, 0);
-              store.setHandle(ds.roadId!, ds.pointIndex, ds.handle!, { lat: off.lat, lon: off.lon });
+              useRoadStudioStore.getState().setHandle(ds.roadId!, ds.pointIndex, ds.handle!, { lat: off.lat, lon: off.lon });
             }
           }
         }
