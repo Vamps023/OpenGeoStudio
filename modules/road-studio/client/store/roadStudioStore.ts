@@ -6,8 +6,8 @@
  */
 
 import { create } from 'zustand';
-import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile } from '../../shared/types';
-import { generateId, ROAD_PROFILES } from '../../shared/types';
+import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection } from '../../shared/types';
+import { generateId, ROAD_PROFILES, detectIntersections } from '../../shared/types';
 
 interface RoadStudioState {
   /** All roads in the project */
@@ -39,6 +39,8 @@ interface RoadStudioState {
   viewMode: 'top' | 'perspective';
   /** Whether the satellite map overlay is shown in top view */
   showMapOverlay: boolean;
+  /** Detected intersections (auto-computed from road endpoints) */
+  intersections: Intersection[];
 
   // ─── Actions ────────────────────────────────────
 
@@ -99,6 +101,9 @@ interface RoadStudioState {
   /** Clear all roads */
   clearAll: () => void;
 
+  /** Recompute intersections from current roads */
+  recomputeIntersections: () => void;
+
   /** Get the currently drawing road */
   getDrawingRoad: () => Road | null;
 }
@@ -127,6 +132,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   penDragging: false,
   viewMode: 'top',
   showMapOverlay: false,
+  intersections: [],
 
   setTool: (tool) => {
     const state = get();
@@ -426,7 +432,14 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       roads: [],
       selection: { roadId: null, pointIndices: [], handle: null },
       drawingRoadId: null,
+      intersections: [],
     });
+  },
+
+  recomputeIntersections: () => {
+    const state = get();
+    const intersections = detectIntersections(state.roads);
+    set({ intersections });
   },
 
   getDrawingRoad: () => {

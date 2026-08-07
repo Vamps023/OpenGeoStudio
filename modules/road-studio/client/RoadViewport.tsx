@@ -25,9 +25,14 @@ import { useRoadStudioStore } from './store/roadStudioStore';
 import {
   type Road,
   type ControlPoint,
+  type Intersection,
   geoToLocal,
   localToGeo,
   sampleRoad,
+  detectIntersections,
+  computeIntersectionPolygon,
+  convexHull,
+  distanceMeters,
 } from '../shared/types';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
@@ -59,6 +64,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     roadId: null, pointIndices: [], handle: null,
   });
   const roadsRef = useRef<Road[]>([]);
+  const intersectionsRef = useRef<Intersection[]>([]);
   const refLatRef = useRef(18.52);
   const refLonRef = useRef(73.85);
   const gridSizeRef = useRef(10);
@@ -77,7 +83,13 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
   useEffect(() => { toolRef.current = store.tool; }, [store.tool]);
   useEffect(() => { selectionRef.current = store.selection; }, [store.selection]);
-  useEffect(() => { roadsRef.current = store.roads; updateAllViews(); }, [store.roads]);
+  useEffect(() => {
+    roadsRef.current = store.roads;
+    // Recompute intersections whenever roads change
+    intersectionsRef.current = detectIntersections(store.roads);
+    if (store.recomputeIntersections) store.recomputeIntersections();
+    updateAllViews();
+  }, [store.roads]);
   useEffect(() => { refLatRef.current = store.refLat; refLonRef.current = store.refLon; updateAllViews(); }, [store.refLat, store.refLon]);
   useEffect(() => { gridSizeRef.current = store.gridSize; }, [store.gridSize]);
   useEffect(() => { snapEnabledRef.current = store.snapEnabled; }, [store.snapEnabled]);
@@ -176,14 +188,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     const style = map.getStyle();
     if (style?.layers) {
       for (const layer of style.layers) {
-        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-')) {
+        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-')) {
           map.removeLayer(layer.id);
         }
       }
     }
     if (style?.sources) {
       for (const src of Object.keys(style.sources)) {
-        if (src.startsWith('rd-') || src.startsWith('cp-')) {
+        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-')) {
           map.removeSource(src);
         }
       }
@@ -421,6 +433,165 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           },
         });
       }
+    }
+
+    // ─── Intersection polygons (asphalt fill + crosswalk markings) ───
+    const intersections = intersectionsRef.current;
+    for (const ix of intersections) {
+      if (ix.connections.length < 2) continue;
+
+      // Compute intersection polygon in local meters
+      const polyLocal = computeIntersectionPolygon(ix, roads, refLat, refLon);
+      if (polyLocal.length < 3) continue;
+
+      // Convert to lat/lon for GeoJSON
+      const polyCoords: [number, number][] = polyLocal.map((p) => {
+        const geo = localToGeo(p.x, p.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+      // Close the ring
+      polyCoords.push(polyCoords[0]);
+
+      const ixSrcId = `ix-src-${ix.id}`;
+      map.addSource(ixSrcId, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: { ixId: ix.id, name: ix.name },
+          geometry: { type: 'Polygon', coordinates: [polyCoords] },
+        },
+      });
+
+      // Intersection surface (asphalt, slightly lighter than road)
+      map.addLayer({
+        id: `ix-surface-${ix.id}`,
+        type: 'fill',
+        source: ixSrcId,
+        paint: {
+          'fill-color': '#404040',
+          'fill-opacity': 0.95,
+        },
+      });
+
+      // Intersection outline (thin white dashed)
+      map.addLayer({
+        id: `ix-outline-${ix.id}`,
+        type: 'line',
+        source: ixSrcId,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 1,
+          'line-dasharray': [1, 1],
+          'line-opacity': 0.4,
+        },
+      });
+
+      // Crosswalk markings at each connected road entry
+      for (const conn of ix.connections) {
+        const road = roads.find((r) => r.id === conn.roadId);
+        if (!road || road.points.length < 2) continue;
+
+        const samples = sampleRoad(road, refLat, refLon, 16);
+        const ixLocal = geoToLocal(ix.lat, ix.lon, refLat, refLon);
+        const halfW = road.width / 2;
+
+        // Find closest sample to intersection
+        let closestIdx = 0;
+        let closestDist = Infinity;
+        for (let i = 0; i < samples.length; i++) {
+          const d = Math.sqrt((samples[i].x - ixLocal.x) ** 2 + (samples[i].y - ixLocal.y) ** 2);
+          if (d < closestDist) { closestDist = d; closestIdx = i; }
+        }
+
+        // Place crosswalk ~3m before the intersection on this road
+        const dir = conn.end === 'start' ? 1 : -1; // toward intersection
+        const cwIdx = closestIdx + dir * 2; // a few samples back from intersection
+        if (cwIdx < 0 || cwIdx >= samples.length) continue;
+
+        const s = samples[cwIdx];
+        let tx: number, ty: number;
+        if (cwIdx === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (cwIdx === samples.length - 1) { tx = s.x - samples[cwIdx - 1].x; ty = s.y - samples[cwIdx - 1].y; }
+        else { tx = samples[cwIdx + 1].x - samples[cwIdx - 1].x; ty = samples[cwIdx + 1].y - samples[cwIdx - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+
+        // Crosswalk = series of stripes perpendicular to road
+        const stripeCount = 5;
+        const stripeWidth = 0.4; // meters
+        const stripeGap = 0.6; // meters
+        const crosswalkLength = stripeCount * (stripeWidth + stripeGap);
+        const cwFeatures: any[] = [];
+
+        for (let st = 0; st < stripeCount; st++) {
+          const offsetAlong = -crosswalkLength / 2 + st * (stripeWidth + stripeGap);
+          // Stripe is a thin rectangle perpendicular to road direction
+          const cx = s.x + (tx / len) * offsetAlong;
+          const cy = s.y + (ty / len) * offsetAlong;
+          // Four corners of the stripe
+          const p1 = localToGeo(cx + nx * halfW, cy + ny * halfW, refLat, refLon);
+          const p2 = localToGeo(cx - nx * halfW, cy - ny * halfW, refLat, refLon);
+          const p3 = localToGeo(
+            cx + (tx / len) * stripeWidth + nx * halfW,
+            cy + (ty / len) * stripeWidth + ny * halfW,
+            refLat, refLon
+          );
+          const p4 = localToGeo(
+            cx + (tx / len) * stripeWidth - nx * halfW,
+            cy + (ty / len) * stripeWidth - ny * halfW,
+            refLat, refLon
+          );
+          cwFeatures.push({
+            type: 'Feature',
+            properties: { ixId: ix.id, conn: conn.roadId },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[p1.lon, p1.lat], [p2.lon, p2.lat], [p4.lon, p4.lat], [p3.lon, p3.lat], [p1.lon, p1.lat]]],
+            },
+          });
+        }
+
+        if (cwFeatures.length > 0) {
+          const cwSrcId = `cw-src-${ix.id}-${conn.roadId}`;
+          map.addSource(cwSrcId, {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: cwFeatures },
+          });
+          map.addLayer({
+            id: `cw-${ix.id}-${conn.roadId}`,
+            type: 'fill',
+            source: cwSrcId,
+            paint: {
+              'fill-color': '#ffffff',
+              'fill-opacity': 0.8,
+            },
+          });
+        }
+      }
+
+      // Intersection center marker (small dot)
+      const ixCenterSrc = `ix-center-src-${ix.id}`;
+      map.addSource(ixCenterSrc, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: { ixId: ix.id },
+          geometry: { type: 'Point', coordinates: [ix.lon, ix.lat] },
+        },
+      });
+      map.addLayer({
+        id: `ix-center-${ix.id}`,
+        type: 'circle',
+        source: ixCenterSrc,
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#ff6b6b',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.5,
+        },
+      });
     }
 
     // ─── Control points as circles ──────────────────────────────
@@ -968,6 +1139,151 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
 
       createCPMeshes(road, refLat, refLon, scene, selection);
+    }
+
+    // ─── Intersection surfaces in 3D ───────────────────────────
+    const intersections = intersectionsRef.current;
+    for (const ix of intersections) {
+      if (ix.connections.length < 2) continue;
+
+      const polyLocal = computeIntersectionPolygon(ix, roads, refLat, refLon);
+      if (polyLocal.length < 3) continue;
+
+      // Build intersection surface as a custom mesh (filled polygon at road height)
+      const positions: number[] = [];
+      const indices: number[] = [];
+      const uvs: number[] = [];
+
+      // Use the intersection center as the first vertex (fan triangulation)
+      const ixLocal = geoToLocal(ix.lat, ix.lon, refLat, refLon);
+      const zHeight = ix.z + 0.03; // slightly above road surface
+
+      // Center vertex
+      positions.push(ixLocal.x, zHeight, ixLocal.y);
+      uvs.push(0.5, 0.5);
+
+      // Boundary vertices
+      for (let i = 0; i < polyLocal.length; i++) {
+        positions.push(polyLocal[i].x, zHeight, polyLocal[i].y);
+        // UV based on distance from center
+        const dx = polyLocal[i].x - ixLocal.x;
+        const dy = polyLocal[i].y - ixLocal.y;
+        uvs.push(0.5 + dx / 20, 0.5 + dy / 20);
+      }
+
+      // Fan triangulation from center
+      for (let i = 0; i < polyLocal.length; i++) {
+        const next = (i + 1) % polyLocal.length;
+        indices.push(0, i + 1, next + 1);
+      }
+
+      const ixMesh = new Mesh(`ix_surface_${ix.id}`, scene);
+      const ixVertexData = new VertexData();
+      ixVertexData.positions = positions;
+      ixVertexData.indices = indices;
+      ixVertexData.uvs = uvs;
+      const ixNormals: number[] = [];
+      VertexData.ComputeNormals(positions, indices, ixNormals);
+      ixVertexData.normals = ixNormals;
+      ixVertexData.applyToMesh(ixMesh, true);
+
+      const ixMat = new StandardMaterial(`ix_mat_${ix.id}`, scene);
+      ixMat.backFaceCulling = false;
+      const ixTex = getTexture('asphalt', scene);
+      if (ixTex) {
+        ixMat.diffuseTexture = ixTex;
+        ixMat.diffuseColor = new Color3(0.9, 0.9, 0.9);
+        ixTex.wrapU = Texture.WRAP_ADDRESSMODE;
+        ixTex.wrapV = Texture.WRAP_ADDRESSMODE;
+      } else {
+        ixMat.diffuseColor = new Color3(0.25, 0.25, 0.25);
+      }
+      ixMat.emissiveColor = new Color3(0.12, 0.12, 0.12);
+      ixMat.specularColor = new Color3(0.05, 0.05, 0.05);
+      ixMesh.material = ixMat;
+      ixMesh.isPickable = false;
+      roadMeshesRef.current.set(`ix_surface_${ix.id}`, ixMesh);
+
+      // ─── Crosswalk stripes at each connected road entry ────────
+      for (const conn of ix.connections) {
+        const road = roads.find((r) => r.id === conn.roadId);
+        if (!road || road.points.length < 2) continue;
+
+        const samples = sampleRoad(road, refLat, refLon, 16);
+        const halfW = road.width / 2;
+
+        // Find closest sample to intersection
+        let closestIdx = 0;
+        let closestDist = Infinity;
+        for (let i = 0; i < samples.length; i++) {
+          const d = Math.sqrt((samples[i].x - ixLocal.x) ** 2 + (samples[i].y - ixLocal.y) ** 2);
+          if (d < closestDist) { closestDist = d; closestIdx = i; }
+        }
+
+        const dir = conn.end === 'start' ? 1 : -1;
+        const cwIdx = closestIdx + dir * 2;
+        if (cwIdx < 0 || cwIdx >= samples.length) continue;
+
+        const s = samples[cwIdx];
+        let tx: number, ty: number;
+        if (cwIdx === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (cwIdx === samples.length - 1) { tx = s.x - samples[cwIdx - 1].x; ty = s.y - samples[cwIdx - 1].y; }
+        else { tx = samples[cwIdx + 1].x - samples[cwIdx - 1].x; ty = samples[cwIdx + 1].y - samples[cwIdx - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+
+        // Create crosswalk stripes as thin meshes
+        const stripeCount = 5;
+        const stripeWidth = 0.4;
+        const stripeGap = 0.6;
+        const crosswalkLength = stripeCount * (stripeWidth + stripeGap);
+
+        for (let st = 0; st < stripeCount; st++) {
+          const offsetAlong = -crosswalkLength / 2 + st * (stripeWidth + stripeGap);
+          const cx = s.x + (tx / len) * offsetAlong;
+          const cy = s.y + (ty / len) * offsetAlong;
+
+          // Stripe corners (perpendicular to road)
+          const sL: Vector3[] = [new Vector3(cx + nx * halfW, s.z + 0.05, cy + ny * halfW)];
+          const sR: Vector3[] = [new Vector3(cx - nx * halfW, s.z + 0.05, cy - ny * halfW)];
+          const sL2: Vector3[] = [new Vector3(
+            cx + (tx / len) * stripeWidth + nx * halfW,
+            s.z + 0.05,
+            cy + (ty / len) * stripeWidth + ny * halfW
+          )];
+          const sR2: Vector3[] = [new Vector3(
+            cx + (tx / len) * stripeWidth - nx * halfW,
+            s.z + 0.05,
+            cy + (ty / len) * stripeWidth - ny * halfW
+          )];
+
+          // Build stripe as a small strip mesh
+          const stripeMesh = buildStripMesh(
+            `cw_${ix.id}_${conn.roadId}_${st}`,
+            [sL[0], sL2[0]], [sR[0], sR2[0]], 1, 1, scene
+          );
+          const stripeMat = new StandardMaterial(`cw_mat_${ix.id}_${st}`, scene);
+          stripeMat.backFaceCulling = false;
+          stripeMat.diffuseColor = new Color3(0.95, 0.95, 0.95);
+          stripeMat.emissiveColor = new Color3(0.2, 0.2, 0.2);
+          stripeMat.specularColor = new Color3(0, 0, 0);
+          stripeMesh.material = stripeMat;
+          stripeMesh.isPickable = false;
+          roadMeshesRef.current.set(`cw_${ix.id}_${conn.roadId}_${st}`, stripeMesh);
+        }
+      }
+
+      // Intersection center marker (small red sphere)
+      const ixMarker = MeshBuilder.CreateSphere(`ix_marker_${ix.id}`, { diameter: 1.5, segments: 8 }, scene);
+      ixMarker.position = new Vector3(ixLocal.x, zHeight + 1, ixLocal.y);
+      const ixMarkerMat = new StandardMaterial(`ix_marker_mat_${ix.id}`, scene);
+      ixMarkerMat.diffuseColor = new Color3(1, 0.3, 0.3);
+      ixMarkerMat.emissiveColor = new Color3(0.4, 0.1, 0.1);
+      ixMarkerMat.specularColor = new Color3(0, 0, 0);
+      ixMarker.material = ixMarkerMat;
+      ixMarker.isPickable = false;
+      roadMeshesRef.current.set(`ix_marker_${ix.id}`, ixMarker);
     }
   }
 
