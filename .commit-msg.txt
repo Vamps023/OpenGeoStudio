@@ -1,11 +1,14 @@
-Phase 3: Migrate store to call C++ via IPC
+Phase 4: Implement clothoid (Euler spiral) in C++
 
-- detectIntersection() is now async, calls C++ roadEngine.generateIntersection()
-- Falls back to TypeScript generateIntersection() if C++ engine unavailable
-- roadEngineClient.ts: Added toCppRoad() conversion (lat/lon to local x/y)
-- RoadToolbar.tsx: Updated onClick handler to be async
-- Both builds pass (electron + vite)
-- All 7 tests pass
+- clothoid.hpp: Fresnel integrals, clothoid computation, fitting
+  - computeClothoid(): generates Euler spiral with linear curvature change
+  - fitClothoid(): iteratively fits clothoid between two points+tangents
+  - Uses Simpson's rule for numerical integration
+  - Achieves G2 continuity (continuous curvature) for highway design
+- road_bridge.cpp: Added roadComputeClothoid N-API binding
+- IPC channel: road:computeClothoid
+- roadEngineClient.ts: Added ClothoidResult type and computeClothoid API
+- 8 tests pass (including clothoid 90-degree transition test)
 
 Generated with Devin (https://devin.ai)
 

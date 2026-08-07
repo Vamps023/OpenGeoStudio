@@ -10,8 +10,19 @@
  *   const intersection = await roadEngine.generateIntersection(road1, road2, refLat, refLon);
  */
 
-import type { Road, GeneratedIntersection, CircleArc, ControlPoint } from './types';
+import type { Road, GeneratedIntersection, CircleArc, ControlPoint, Point2D } from './types';
 import { geoToLocal as tsGeoToLocal, localToGeo as tsLocalToGeo } from './types';
+
+// ─── Clothoid result type ──────────────────────────────────
+export interface ClothoidResult {
+  points: Point2D[];
+  tangentIn: Point2D;
+  tangentOut: Point2D;
+  totalAngle: number;  // radians
+  A: number;           // clothoid parameter
+  L: number;           // total length
+  isLeftTurn: boolean;
+}
 
 // ─── Global window type augmentation ───────────────────────
 declare global {
@@ -21,6 +32,7 @@ declare global {
         getVersion(): Promise<string>;
         generateIntersection(road1: unknown, road2: unknown, refLat: number, refLon: number): Promise<unknown>;
         computeCircleArc(sp: { x: number; y: number }, sd: { x: number; y: number }, ep: { x: number; y: number }, segments?: number): Promise<unknown>;
+        computeClothoid(sp: { x: number; y: number }, sd: { x: number; y: number }, ep: { x: number; y: number }, ed: { x: number; y: number }, initialA?: number, segments?: number): Promise<unknown>;
         sampleCenterline(road: unknown, numSamples?: number): Promise<unknown>;
         geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
         localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -90,6 +102,14 @@ export interface RoadEngineAPI {
     endPoint: { x: number; y: number },
     segments?: number
   ): Promise<CircleArc>;
+  computeClothoid(
+    startPoint: { x: number; y: number },
+    startDirection: { x: number; y: number },
+    endPoint: { x: number; y: number },
+    endDirection: { x: number; y: number },
+    initialA?: number,
+    segments?: number
+  ): Promise<ClothoidResult>;
   sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>>;
   geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
   localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -128,6 +148,17 @@ class NativeRoadEngine implements RoadEngineAPI {
     segments?: number
   ): Promise<CircleArc> {
     return this.api.computeCircleArc(startPoint, startDirection, endPoint, segments) as Promise<CircleArc>;
+  }
+
+  async computeClothoid(
+    startPoint: { x: number; y: number },
+    startDirection: { x: number; y: number },
+    endPoint: { x: number; y: number },
+    endDirection: { x: number; y: number },
+    initialA?: number,
+    segments?: number
+  ): Promise<ClothoidResult> {
+    return this.api.computeClothoid(startPoint, startDirection, endPoint, endDirection, initialA, segments) as Promise<ClothoidResult>;
   }
 
   async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
@@ -234,6 +265,14 @@ export const roadEngine = {
     ep: { x: number; y: number },
     segments?: number
   ) => getRoadEngine().computeCircleArc(sp, sd, ep, segments),
+  computeClothoid: (
+    sp: { x: number; y: number },
+    sd: { x: number; y: number },
+    ep: { x: number; y: number },
+    ed: { x: number; y: number },
+    initialA?: number,
+    segments?: number
+  ) => getRoadEngine().computeClothoid(sp, sd, ep, ed, initialA, segments),
   sampleCenterline: (road: Road, numSamples?: number) =>
     getRoadEngine().sampleCenterline(road, numSamples),
   geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) =>

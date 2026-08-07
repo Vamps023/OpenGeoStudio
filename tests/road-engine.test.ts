@@ -136,4 +136,33 @@ describeIfAddon('C++ Road Geometry Engine', () => {
     // Should have at least 3 approaches
     expect(ix.approaches.length).toBeGreaterThanOrEqual(3);
   });
+
+  it('should compute a clothoid (Euler spiral) transition', () => {
+    const result = addon.roadComputeClothoid(
+      { x: 0, y: 0 },      // start point
+      { x: 1, y: 0 },      // start direction (east)
+      { x: 100, y: 50 },   // end point
+      { x: 0, y: 1 },      // end direction (north)
+      50,                   // initial A
+      64                    // segments
+    );
+
+    // Should have 65 points (segments + 1)
+    expect(result.points.length).toBe(65);
+
+    // Start point should be at origin
+    expect(result.points[0].x).toBeCloseTo(0, 1);
+    expect(result.points[0].y).toBeCloseTo(0, 1);
+
+    // Total angle should be ~90 degrees (π/2 radians)
+    expect(result.totalAngle).toBeCloseTo(Math.PI / 2, 1);
+
+    // Tangent in should be east, tangent out should be north
+    expect(result.tangentIn.x).toBeCloseTo(1, 1);
+    expect(result.tangentOut.y).toBeCloseTo(1, 1);
+
+    // Clothoid parameters should be positive
+    expect(result.A).toBeGreaterThan(0);
+    expect(result.L).toBeGreaterThan(0);
+  });
 });

@@ -27,6 +27,7 @@ export const ROAD_COMPUTE_CIRCLE_ARC = 'road:computeCircleArc' as const;
 export const ROAD_SAMPLE_CENTERLINE = 'road:sampleCenterline' as const;
 export const ROAD_GEO_TO_LOCAL = 'road:geoToLocal' as const;
 export const ROAD_LOCAL_TO_GEO = 'road:localToGeo' as const;
+export const ROAD_COMPUTE_CLOTHOID = 'road:computeClothoid' as const;
 
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;

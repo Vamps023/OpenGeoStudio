@@ -15,6 +15,7 @@ import {
   ROAD_GET_VERSION,
   ROAD_GENERATE_INTERSECTION,
   ROAD_COMPUTE_CIRCLE_ARC,
+  ROAD_COMPUTE_CLOTHOID,
   ROAD_SAMPLE_CENTERLINE,
   ROAD_GEO_TO_LOCAL,
   ROAD_LOCAL_TO_GEO,
@@ -34,6 +35,14 @@ export interface RoadEngineAddon {
     startPoint: { x: number; y: number },
     startDirection: { x: number; y: number },
     endPoint: { x: number; y: number },
+    segments?: number
+  ): unknown;
+  roadComputeClothoid(
+    startPoint: { x: number; y: number },
+    startDirection: { x: number; y: number },
+    endPoint: { x: number; y: number },
+    endDirection: { x: number; y: number },
+    initialA?: number,
     segments?: number
   ): unknown;
   roadSampleCenterline(road: unknown, numSamples?: number): unknown;
@@ -98,6 +107,13 @@ export async function registerRoadEngineHandlers(): Promise<void> {
       throw new Error('Road engine native addon not available');
     }
     return addon.roadComputeCircleArc(startPoint, startDirection, endPoint, segments);
+  });
+
+  ipcMain.handle(ROAD_COMPUTE_CLOTHOID, async (_event, startPoint, startDirection, endPoint, endDirection, initialA, segments) => {
+    if (!addon) {
+      throw new Error('Road engine native addon not available');
+    }
+    return addon.roadComputeClothoid(startPoint, startDirection, endPoint, endDirection, initialA, segments);
   });
 
   ipcMain.handle(ROAD_SAMPLE_CENTERLINE, async (_event, road, numSamples) => {

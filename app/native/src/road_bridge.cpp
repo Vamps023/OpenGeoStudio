@@ -3,6 +3,7 @@
 #include "road/road.hpp"
 #include "road/arc.hpp"
 #include "road/intersection.hpp"
+#include "road/clothoid.hpp"
 #include <sstream>
 
 namespace geo {
@@ -233,11 +234,55 @@ static Napi::Value RoadLocalToGeo(const Napi::CallbackInfo& info) {
     return obj;
 }
 
+// roadComputeClothoid(startPoint, startDirection, endPoint, endDirection, initialA?, segments?) → ClothoidResult
+static Napi::Value RoadComputeClothoid(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 4) {
+        Napi::TypeError::New(env, "Expected (startPoint, startDirection, endPoint, endDirection)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    auto spObj = info[0].As<Napi::Object>();
+    Point2D startPoint = {spObj.Get("x").As<Napi::Number>().DoubleValue(),
+                          spObj.Get("y").As<Napi::Number>().DoubleValue()};
+
+    auto sdObj = info[1].As<Napi::Object>();
+    Vec2 startDirection = {sdObj.Get("x").As<Napi::Number>().DoubleValue(),
+                           sdObj.Get("y").As<Napi::Number>().DoubleValue()};
+
+    auto epObj = info[2].As<Napi::Object>();
+    Point2D endPoint = {epObj.Get("x").As<Napi::Number>().DoubleValue(),
+                        epObj.Get("y").As<Napi::Number>().DoubleValue()};
+
+    auto edObj = info[3].As<Napi::Object>();
+    Vec2 endDirection = {edObj.Get("x").As<Napi::Number>().DoubleValue(),
+                         edObj.Get("y").As<Napi::Number>().DoubleValue()};
+
+    double initialA = (info.Length() >= 5 && info[4].IsNumber())
+        ? info[4].As<Napi::Number>().DoubleValue() : 50.0;
+    int segments = (info.Length() >= 6 && info[5].IsNumber())
+        ? info[5].As<Napi::Number>().Int32Value() : 64;
+
+    ClothoidResult result = fitClothoid(startPoint, startDirection,
+                                         endPoint, endDirection, initialA, segments);
+
+    auto obj = Napi::Object::New(env);
+    obj.Set("points", pointsToJs(env, result.points));
+    obj.Set("tangentIn", pointToJs(env, result.tangentIn));
+    obj.Set("tangentOut", pointToJs(env, result.tangentOut));
+    obj.Set("totalAngle", Napi::Number::New(env, result.totalAngle));
+    obj.Set("A", Napi::Number::New(env, result.params.A));
+    obj.Set("L", Napi::Number::New(env, result.params.L));
+    obj.Set("isLeftTurn", Napi::Boolean::New(env, result.params.isLeftTurn));
+    return obj;
+}
+
 // ─── Init function ─────────────────────────────────────────
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
     exports.Set("roadGenerateIntersection", Napi::Function::New(env, RoadGenerateIntersection));
     exports.Set("roadComputeCircleArc", Napi::Function::New(env, RoadComputeCircleArc));
+    exports.Set("roadComputeClothoid", Napi::Function::New(env, RoadComputeClothoid));
     exports.Set("roadSampleCenterline", Napi::Function::New(env, RoadSampleCenterline));
     exports.Set("roadGeoToLocal", Napi::Function::New(env, RoadGeoToLocal));
     exports.Set("roadLocalToGeo", Napi::Function::New(env, RoadLocalToGeo));
