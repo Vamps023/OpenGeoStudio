@@ -345,6 +345,116 @@ inline std::vector<Point2D> offsetPolyline(const std::vector<Point2D>& points, d
     return result;
 }
 
+// ─── Polygon Validation ────────────────────────────────────
+
+struct PolygonValidationResult {
+    bool isValid = true;
+    bool hasDuplicateVertices = false;
+    bool hasSelfIntersections = false;
+    bool hasZeroLengthEdges = false;
+    bool hasInvalidWinding = false;
+    int duplicateCount = 0;
+    int intersectionCount = 0;
+    int zeroEdgeCount = 0;
+    double signedArea = 0;
+    bool isCCW = false;
+    std::string errorMessage;
+};
+
+// Validate a polygon for common geometric issues
+inline PolygonValidationResult validatePolygon(const std::vector<Point2D>& polygon) {
+    PolygonValidationResult result;
+
+    if (polygon.size() < 3) {
+        result.isValid = false;
+        result.errorMessage = "Polygon has fewer than 3 vertices";
+        return result;
+    }
+
+    // Check for duplicate consecutive vertices
+    for (size_t i = 0; i < polygon.size(); i++) {
+        size_t j = (i + 1) % polygon.size();
+        if (polygon[i].distanceTo(polygon[j]) < EPSILON) {
+            result.hasDuplicateVertices = true;
+            result.duplicateCount++;
+        }
+    }
+
+    // Check for zero-length edges
+    for (size_t i = 0; i < polygon.size(); i++) {
+        size_t j = (i + 1) % polygon.size();
+        if (polygon[i].distanceTo(polygon[j]) < EPSILON) {
+            result.hasZeroLengthEdges = true;
+            result.zeroEdgeCount++;
+        }
+    }
+
+    // Compute signed area (shoelace formula)
+    result.signedArea = 0;
+    for (size_t i = 0; i < polygon.size(); i++) {
+        size_t j = (i + 1) % polygon.size();
+        result.signedArea += polygon[i].x * polygon[j].y - polygon[j].x * polygon[i].y;
+    }
+    result.signedArea /= 2.0;
+    result.isCCW = result.signedArea > 0;
+
+    if (std::abs(result.signedArea) < EPSILON) {
+        result.hasInvalidWinding = true;
+        result.errorMessage = "Polygon has zero area (degenerate)";
+    }
+
+    // Check for self-intersections (edge-edge intersection)
+    for (size_t i = 0; i < polygon.size(); i++) {
+        size_t i2 = (i + 1) % polygon.size();
+        for (size_t j = i + 2; j < polygon.size(); j++) {
+            size_t j2 = (j + 1) % polygon.size();
+            // Skip adjacent edges
+            if (j == i2 || j2 == i) continue;
+
+            Point2D hit = lineIntersection(polygon[i], polygon[i2] - polygon[i],
+                                           polygon[j], polygon[j2] - polygon[j]);
+            if (isValid(hit)) {
+                // Check if intersection is within both segments
+                double t1 = (hit - polygon[i]).dot(polygon[i2] - polygon[i]) /
+                            polygon[i2].distanceTo(polygon[i]);
+                double t2 = (hit - polygon[j]).dot(polygon[j2] - polygon[j]) /
+                            polygon[j2].distanceTo(polygon[j]);
+                if (t1 > EPSILON && t1 < 1 - EPSILON && t2 > EPSILON && t2 < 1 - EPSILON) {
+                    result.hasSelfIntersections = true;
+                    result.intersectionCount++;
+                }
+            }
+        }
+    }
+
+    result.isValid = !result.hasDuplicateVertices && !result.hasSelfIntersections &&
+                     !result.hasZeroLengthEdges && !result.hasInvalidWinding;
+
+    if (!result.isValid && result.errorMessage.empty()) {
+        result.errorMessage = "Polygon validation failed";
+        if (result.hasDuplicateVertices) result.errorMessage += " (duplicate vertices)";
+        if (result.hasSelfIntersections) result.errorMessage += " (self-intersections)";
+        if (result.hasZeroLengthEdges) result.errorMessage += " (zero-length edges)";
+    }
+
+    return result;
+}
+
+// Clean a polygon: remove duplicate consecutive vertices
+inline std::vector<Point2D> cleanPolygon(const std::vector<Point2D>& polygon) {
+    std::vector<Point2D> cleaned;
+    for (const auto& p : polygon) {
+        if (cleaned.empty() || p.distanceTo(cleaned.back()) > EPSILON) {
+            cleaned.push_back(p);
+        }
+    }
+    // Check first/last
+    if (cleaned.size() > 1 && cleaned.front().distanceTo(cleaned.back()) < EPSILON) {
+        cleaned.pop_back();
+    }
+    return cleaned;
+}
+
 // ─── Bezier curves ─────────────────────────────────────────
 
 // Quadratic Bezier: B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2

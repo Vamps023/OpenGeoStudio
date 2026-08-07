@@ -75,6 +75,25 @@ interface RoadStudioState {
   splinePoints: Array<{ x: number; y: number }> | null;
   /** Spline tool: start tangent direction */
   splineStartTangent: Point2D | null;
+  /** Geometry Debug Mode — shows intermediate construction steps */
+  debugMode: boolean;
+  /** Debug layer toggles — each shows a different construction step */
+  debugLayers: {
+    centerline: boolean;
+    leftEdge: boolean;
+    rightEdge: boolean;
+    laneBoundaries: boolean;
+    offsetCurves: boolean;
+    roadPolygon: boolean;
+    filletArcs: boolean;
+    tangentPoints: boolean;
+    trimPoints: boolean;
+    intersectionPolygon: boolean;
+    triangulation: boolean;
+    vertexNormals: boolean;
+    uvGrid: boolean;
+    samplePoints: boolean;
+  };
   /** View mode: 'top' = 2D top-down, 'perspective' = 3D angled */
   viewMode: 'top' | 'perspective';
   /** Whether the satellite map overlay is shown in top view */
@@ -175,6 +194,13 @@ interface RoadStudioState {
   /** Generic: cancel any in-progress tool operation */
   cancelDrawing: () => void;
 
+  /** Toggle geometry debug mode */
+  toggleDebugMode: () => void;
+  /** Toggle a specific debug layer */
+  toggleDebugLayer: (layer: keyof RoadStudioState['debugLayers']) => void;
+  /** Set debug mode on/off */
+  setDebugMode: (enabled: boolean) => void;
+
   /** Undo */
   undo: () => void;
   /** Redo */
@@ -243,6 +269,23 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   polylinePoints: null,
   splinePoints: null,
   splineStartTangent: null,
+  debugMode: false,
+  debugLayers: {
+    centerline: true,
+    leftEdge: true,
+    rightEdge: true,
+    laneBoundaries: false,
+    offsetCurves: false,
+    roadPolygon: false,
+    filletArcs: true,
+    tangentPoints: true,
+    trimPoints: true,
+    intersectionPolygon: true,
+    triangulation: false,
+    vertexNormals: false,
+    uvGrid: false,
+    samplePoints: false,
+  },
   viewMode: 'top',
   showMapOverlay: false,
   intersections: [],
@@ -819,6 +862,24 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     previewPoint: null,
     drawingRoadId: null,
   }),
+
+  // ─── Geometry Debug Mode ─────────────────────────────────
+  toggleDebugMode: () => {
+    const state = get();
+    set({ debugMode: !state.debugMode });
+  },
+
+  toggleDebugLayer: (layer) => {
+    const state = get();
+    set({
+      debugLayers: {
+        ...state.debugLayers,
+        [layer]: !state.debugLayers[layer],
+      },
+    });
+  },
+
+  setDebugMode: (enabled) => set({ debugMode: enabled }),
 
   pushHistory: (description) => {
     const state = get();

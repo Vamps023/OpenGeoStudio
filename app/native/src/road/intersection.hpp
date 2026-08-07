@@ -347,6 +347,19 @@ inline GeneratedIntersection generateIntersection(
     // Step 6: Generate polygon
     result.polygon = generateEdgeBasedPolygon(result.approaches, center, cornerRadius);
 
+    // Step 6b: Validate and clean polygon
+    auto validation = validatePolygon(result.polygon);
+    if (validation.hasDuplicateVertices || validation.hasZeroLengthEdges) {
+        result.polygon = cleanPolygon(result.polygon);
+        // Re-validate after cleaning
+        validation = validatePolygon(result.polygon);
+    }
+    if (!validation.isValid) {
+        printf("[Intersection] WARNING: Polygon validation failed: %s (verts=%zu, area=%.2f, intersections=%d)\n",
+               validation.errorMessage.c_str(), result.polygon.size(),
+               validation.signedArea, validation.intersectionCount);
+    }
+
     // Step 7: Lane connections
     result.laneConnections = generateLaneConnections(result.approaches, center);
 

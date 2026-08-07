@@ -81,6 +81,10 @@ export const RoadToolbar: React.FC = () => {
   const roadPickMode = useRoadStudioStore((s) => s.roadPickMode);
   const setRoadPickMode = useRoadStudioStore((s) => s.setRoadPickMode);
   const getEngineInfo = useRoadStudioStore((s) => s.getEngineInfo);
+  const debugMode = useRoadStudioStore((s) => s.debugMode);
+  const toggleDebugMode = useRoadStudioStore((s) => s.toggleDebugMode);
+  const debugLayers = useRoadStudioStore((s) => s.debugLayers);
+  const toggleDebugLayer = useRoadStudioStore((s) => s.toggleDebugLayer);
   const engineInfo = getEngineInfo();
 
   // Selected control point
@@ -319,6 +323,40 @@ export const RoadToolbar: React.FC = () => {
         <div className={`w-1.5 h-1.5 rounded-full ${engineInfo.isNative ? 'bg-green-400' : 'bg-orange-400'}`} />
         {engineInfo.version}
       </div>
+
+      {/* ─── Debug Mode Toggle ──────────── */}
+      <button
+        onClick={() => toggleDebugMode()}
+        className={`flex items-center gap-1 px-2 h-8 rounded-md text-xs font-medium transition-colors ${
+          debugMode
+            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+            : 'text-fg-secondary hover:text-fg-primary hover:bg-surface-elevated border border-transparent'
+        }`}
+        title="Toggle Geometry Debug Mode (Ctrl+Shift+G)"
+      >
+        <Meh size={14} />
+        <span className="hidden sm:inline">Debug</span>
+      </button>
+
+      {/* ─── Debug Layer Toggles ──────────── */}
+      {debugMode && (
+        <div className="flex items-center gap-1 flex-wrap">
+          {(Object.keys(debugLayers) as Array<keyof typeof debugLayers>).map((layer) => (
+            <button
+              key={layer}
+              onClick={() => toggleDebugLayer(layer)}
+              className={`px-1.5 h-6 rounded text-[10px] font-mono transition-colors ${
+                debugLayers[layer]
+                  ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                  : 'text-fg-secondary hover:text-fg-primary bg-surface-elevated border border-transparent'
+              }`}
+              title={`Toggle ${layer} debug layer`}
+            >
+              {layer}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

@@ -1,47 +1,59 @@
-Implement SCANeR-style road creation tools in C++ engine
+Stabilize geometry engine: fix mesh, tools, intersection, pipeline
 
-Add 6 road creation tools matching SCANeR Studio behavior:
+Major stabilization effort across the entire geometry pipeline.
 
-1. Segment — straight line with tangent continuity
-2. Circle Arc — constant-radius arc (G1 continuous)
-3. Clothoid Arc — Euler spiral transition (G2 continuous)
-4. Polyline — multi-point with optional fillet corner smoothing
-5. Bezier — cubic Bezier with handle constraints
-6. Clothoid Spline — G2-continuous multi-segment clothoid
+C++ Engine Fixes:
+- offsetPolyline: replaced simple perpendicular offset with miter-joint
+  algorithm (correct for curves, prevents edge self-intersection)
+- triangulatePolygon: added winding order normalization (handles both
+  CCW and CW polygons via shoelace formula)
+- generateRoadMesh: miter-joint edge offsets, arc-length UV mapping
+  (tiles every 10m), proper vertex/index counts
+- generateIntersectionMesh: local UV mapping (bounding box based)
+  instead of world-space
+- sampleCenterline: arc-length parameterization (uniform sample density
+  regardless of segment curvature)
+- sampleCenterline3D: z interpolation by arc length, not by sample index
+- buildApproachCenterline: fixed gap issue, always produces valid trim
+  point at exact trimDist from center
+- generateEdgeBasedPolygon: added corner distance validation, duplicate
+  point cleanup
+- MeshData struct: added vertexCount, indexCount, triangleCount fields
+- generateLaneBoundaries: new function for lane boundary polylines
 
-C++ Implementation (road_tools.hpp):
-- createSegment(), createCircleArc(), createClothoidArc()
-- createPolyline() with fillet radius for corner smoothing
-- createBezier() with handle in/out as relative offsets
-- createClothoidSpline() using Catmull-Rom tangent estimation
-  plus Walton-Meek style clothoid fitting per span
-- Helper functions: tangentAtEnd(), tangentAtStart(),
-  connectSegment(), connectClothoid()
+Build Fix:
+- build:electron script now copies native addon to dist-electron/native/
+  (was missing, causing "addon not available" error at runtime)
 
-N-API Bindings (road_bridge.cpp):
-- 6 new functions: roadCreateSegment, roadCreateCircleArc,
-  roadCreateClothoidArc, roadCreatePolyline, roadCreateBezier,
-  roadCreateClothoidSpline
-- roadToJs() serializer for Road objects
-- parsePoint(), parsePoints(), parseToolParams() parsers
+Tool Implementation (RoadViewport.tsx):
+- All 6 tools now have click handlers: Segment, Arc, Clothoid, Polyline,
+  Bezier, Spline
+- Real-time preview for all tools (line-to-cursor, arc, clothoid,
+  polyline points, spline points)
+- Right-click to finish drawing (SCANeR-style)
+- Escape to cancel any in-progress operation
+- Enter to finish current operation
+- Snapping helper for all tools
 
-IPC Layer:
-- 6 new IPC channels in ipcChannels-electron.ts
-- Handlers in roadEngineHandler.ts
-- Preload bridge in preload.ts
-- Client API in roadEngineClient.ts
+Store (roadStudioStore.ts):
+- New state: previewPoint, clothoidPreview, polylinePoints, splinePoints
+- New actions: setPreviewPoint, startClothoid/updateClothoidPreview/
+  finishClothoid/cancelClothoid, startPolyline/addPolylinePoint/
+  finishPolyline/cancelPolyline, startSpline/addSplinePoint/
+  finishSpline/cancelSpline, cancelDrawing
+- Fixed addControlPoint: now selects the newly added point (was always
+  selecting point 0)
+- All new tool actions use C++ engine for geometry computation
 
-UI:
-- Tool type expanded: select|line|pen|arc|clothoid|polyline|spline
-- RoadToolbar updated with all 6 tools (Segment, Arc, Clothoid,
-  Polyline, Bezier, Spline)
-
-Build:
-- package.json: build:road-engine uses Python 3.13 (node-gyp 12
-  requires Python 3.8+; system has 3.6 via VS, 3.13 via msstore)
-- Clean rebuild against Electron 42.5.1 headers (ABI 146)
-
-Tests: 20/20 pass (11 existing + 9 new tool tests)
+Tests: 28/28 pass (20 existing + 8 new validation tests)
+- Miter-joint edge generation
+- Arc-length UV mapping
+- CW polygon triangulation
+- CCW polygon triangulation
+- Arc-length sample distribution
+- Arc-length z interpolation
+- Intersection polygon no duplicate points
+- Multi-lane road mesh vertex count
 
 Generated with Devin (https://devin.ai)
 

@@ -111,6 +111,9 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { gridSizeRef.current = store.gridSize; }, [store.gridSize]);
   useEffect(() => { snapEnabledRef.current = store.snapEnabled; }, [store.snapEnabled]);
   useEffect(() => { drawingRoadIdRef.current = store.drawingRoadId; }, [store.drawingRoadId]);
+  const debugMode = store.debugMode;
+  const debugLayers = store.debugLayers;
+  useEffect(() => { updateAllViews(); }, [debugMode, debugLayers]);
 
   // Track shift key globally — more reliable than e.originalEvent.shiftKey in Electron
   useEffect(() => {
@@ -135,6 +138,11 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         } else {
           st.finishDrawing();
         }
+      }
+      // Ctrl+Shift+G: Toggle geometry debug mode
+      if (e.key === 'g' && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        useRoadStudioStore.getState().toggleDebugMode();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -449,7 +457,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
     // Remove old layers/sources (including all preview layers)
     const style = map.getStyle();
-    const previewPrefixes = ['rd-', 'cp-', 'ix-', 'cw-', 'gi-', 'arc-', 'line-', 'clothoid-', 'polyline-', 'spline-'];
+    const previewPrefixes = ['rd-', 'cp-', 'ix-', 'cw-', 'gi-', 'arc-', 'line-', 'clothoid-', 'polyline-', 'spline-', 'dbg-'];
     if (style?.layers) {
       for (const layer of style.layers) {
         if (previewPrefixes.some((p) => layer.id.startsWith(p))) {
@@ -1280,6 +1288,231 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           layout: { 'line-cap': 'round' },
           paint: { 'line-color': '#4ecca3', 'line-width': 3, 'line-opacity': 0.5, 'line-dasharray': [3, 2] },
         });
+      }
+    }
+
+    // ─── Geometry Debug Mode overlays ───────────────────────────
+    if (debugMode) {
+      const dbg = debugLayers;
+      const dbgPrefix = 'dbg-';
+
+      // Helper to add a debug line layer
+      const addDbgLine = (id: string, coords: [number, number][], color: string, width = 2, opacity = 0.8) => {
+        const srcId = `${dbgPrefix}${id}-src`;
+        map.addSource(srcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } },
+        });
+        map.addLayer({
+          id: `${dbgPrefix}${id}`,
+          type: 'line',
+          source: srcId,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': color, 'line-width': width, 'line-opacity': opacity },
+        });
+      };
+
+      // Helper to add debug circle markers
+      const addDbgCircles = (id: string, points: Array<{ x: number; y: number }>, color: string, radius = 4) => {
+        const features = points.map((p) => {
+          const geo = localToGeo(p.x, p.y, refLat, refLon);
+          return { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [geo.lon, geo.lat] } };
+        });
+        const srcId = `${dbgPrefix}${id}-src`;
+        map.addSource(srcId, { type: 'geojson', data: { type: 'FeatureCollection', features } });
+        map.addLayer({
+          id: `${dbgPrefix}${id}`,
+          type: 'circle',
+          source: srcId,
+          paint: { 'circle-radius': radius, 'circle-color': color, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1 },
+        });
+      };
+
+      // Helper to add debug polygon fill
+      const addDbgPolygon = (id: string, polygon: Array<{ x: number; y: number }>, color: string, opacity = 0.3) => {
+        if (polygon.length < 3) return;
+        const coords: [number, number][] = polygon.map((p) => {
+          const geo = localToGeo(p.x, p.y, refLat, refLon);
+          return [geo.lon, geo.lat];
+        });
+        coords.push(coords[0]); // close ring
+        const srcId = `${dbgPrefix}${id}-src`;
+        map.addSource(srcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [coords] } },
+        });
+        map.addLayer({
+          id: `${dbgPrefix}${id}`,
+          type: 'fill',
+          source: srcId,
+          paint: { 'fill-color': color, 'fill-opacity': opacity },
+        });
+        // Also add outline
+        map.addLayer({
+          id: `${dbgPrefix}${id}-outline`,
+          type: 'line',
+          source: srcId,
+          paint: { 'line-color': color, 'line-width': 2, 'line-opacity': 0.8 },
+        });
+      };
+
+      // Render debug overlays for each road
+      for (const road of roads) {
+        const samples = getCachedSamples(road.id);
+        if (samples.length < 2) continue;
+
+        const halfW = road.width / 2;
+
+        // Centerline (cyan)
+        if (dbg.centerline) {
+          const coords = samples.map((s) => {
+            const geo = localToGeo(s.x, s.y, refLat, refLon);
+            return [geo.lon, geo.lat] as [number, number];
+          });
+          addDbgLine(`cl-${road.id}`, coords, '#00ffff', 2, 0.9);
+        }
+
+        // Sample points (yellow dots)
+        if (dbg.samplePoints) {
+          addDbgCircles(`samples-${road.id}`, samples, '#ffff00', 3);
+        }
+
+        // Left edge (green)
+        if (dbg.leftEdge) {
+          const leftEdge: [number, number][] = [];
+          for (let i = 0; i < samples.length; i++) {
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - samples[0].x; ty = samples[1].y - samples[0].y; }
+            else if (i === samples.length - 1) { tx = samples[i].x - samples[i - 1].x; ty = samples[i].y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len, ny = tx / len;
+            const geo = localToGeo(samples[i].x + nx * halfW, samples[i].y + ny * halfW, refLat, refLon);
+            leftEdge.push([geo.lon, geo.lat]);
+          }
+          addDbgLine(`le-${road.id}`, leftEdge, '#00ff00', 2, 0.8);
+        }
+
+        // Right edge (red)
+        if (dbg.rightEdge) {
+          const rightEdge: [number, number][] = [];
+          for (let i = 0; i < samples.length; i++) {
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - samples[0].x; ty = samples[1].y - samples[0].y; }
+            else if (i === samples.length - 1) { tx = samples[i].x - samples[i - 1].x; ty = samples[i].y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len, ny = tx / len;
+            const geo = localToGeo(samples[i].x - nx * halfW, samples[i].y - ny * halfW, refLat, refLon);
+            rightEdge.push([geo.lon, geo.lat]);
+          }
+          addDbgLine(`re-${road.id}`, rightEdge, '#ff0000', 2, 0.8);
+        }
+
+        // Lane boundaries (orange)
+        if (dbg.laneBoundaries && road.laneCount > 1) {
+          const laneWidth = road.width / road.laneCount;
+          const numBoundaries = road.laneCount - 1;
+          for (let b = 0; b < numBoundaries; b++) {
+            const offset = (b - (numBoundaries - 1) / 2.0) * laneWidth;
+            const boundaryCoords: [number, number][] = [];
+            for (let i = 0; i < samples.length; i++) {
+              let tx: number, ty: number;
+              if (i === 0) { tx = samples[1].x - samples[0].x; ty = samples[1].y - samples[0].y; }
+              else if (i === samples.length - 1) { tx = samples[i].x - samples[i - 1].x; ty = samples[i].y - samples[i - 1].y; }
+              else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+              const len = Math.sqrt(tx * tx + ty * ty) || 1;
+              const nx = -ty / len, ny = tx / len;
+              const geo = localToGeo(samples[i].x + nx * offset, samples[i].y + ny * offset, refLat, refLon);
+              boundaryCoords.push([geo.lon, geo.lat]);
+            }
+            addDbgLine(`lb-${road.id}-${b}`, boundaryCoords, '#ff8800', 1, 0.6);
+          }
+        }
+
+        // Road polygon (semi-transparent blue fill)
+        if (dbg.roadPolygon) {
+          const leftEdge: Array<{ x: number; y: number }> = [];
+          const rightEdge: Array<{ x: number; y: number }> = [];
+          for (let i = 0; i < samples.length; i++) {
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - samples[0].x; ty = samples[1].y - samples[0].y; }
+            else if (i === samples.length - 1) { tx = samples[i].x - samples[i - 1].x; ty = samples[i].y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len, ny = tx / len;
+            leftEdge.push({ x: samples[i].x + nx * halfW, y: samples[i].y + ny * halfW });
+            rightEdge.push({ x: samples[i].x - nx * halfW, y: samples[i].y - ny * halfW });
+          }
+          const polygon = [...leftEdge, ...rightEdge.reverse()];
+          addDbgPolygon(`rp-${road.id}`, polygon, '#0088ff', 0.2);
+        }
+      }
+
+      // Intersection debug overlays
+      for (const gen of genIntersections) {
+        // Intersection polygon (magenta)
+        if (dbg.intersectionPolygon && gen.polygon.length >= 3) {
+          addDbgPolygon(`ix-poly-${gen.center.x}-${gen.center.y}`, gen.polygon, '#ff00ff', 0.2);
+        }
+
+        // Trim points (red squares)
+        if (dbg.trimPoints) {
+          const trimPts: Array<{ x: number; y: number }> = [];
+          for (const approach of gen.approaches) {
+            if (approach.centerline.length >= 2) {
+              trimPts.push(approach.centerline[0]);
+              trimPts.push(approach.centerline[approach.centerline.length - 1]);
+            }
+          }
+          addDbgCircles(`ix-trim-${gen.center.x}-${gen.center.y}`, trimPts, '#ff0000', 5);
+        }
+
+        // Tangent points (cyan dots at approach edges)
+        if (dbg.tangentPoints) {
+          const tanPts: Array<{ x: number; y: number }> = [];
+          for (const approach of gen.approaches) {
+            if (approach.centerline.length >= 2) {
+              const p = approach.centerline[0];
+              const next = approach.centerline[1];
+              const tx = next.x - p.x, ty = next.y - p.y;
+              const len = Math.sqrt(tx * tx + ty * ty) || 1;
+              const nx = -ty / len, ny = tx / len;
+              const halfW = approach.width / 2;
+              tanPts.push({ x: p.x + nx * halfW, y: p.y + ny * halfW });
+              tanPts.push({ x: p.x - nx * halfW, y: p.y - ny * halfW });
+            }
+          }
+          addDbgCircles(`ix-tan-${gen.center.x}-${gen.center.y}`, tanPts, '#00ffff', 4);
+        }
+
+        // Fillet arcs (orange) — render approach centerlines
+        if (dbg.filletArcs) {
+          for (const approach of gen.approaches) {
+            if (approach.centerline.length >= 2) {
+              const coords = approach.centerline.map((p) => {
+                const geo = localToGeo(p.x, p.y, refLat, refLon);
+                return [geo.lon, geo.lat] as [number, number];
+              });
+              addDbgLine(`ix-arc-${gen.center.x}-${gen.center.y}-${approach.direction}`, coords, '#ff8800', 2, 0.7);
+            }
+          }
+        }
+
+        // Triangulation (render triangle edges)
+        if (dbg.triangulation && gen.polygon.length >= 3) {
+          // Simple fan triangulation for visualization
+          const coords: [number, number][] = [];
+          for (let i = 1; i < gen.polygon.length - 1; i++) {
+            const g0 = localToGeo(gen.polygon[0].x, gen.polygon[0].y, refLat, refLon);
+            const g1 = localToGeo(gen.polygon[i].x, gen.polygon[i].y, refLat, refLon);
+            const g2 = localToGeo(gen.polygon[i + 1].x, gen.polygon[i + 1].y, refLat, refLon);
+            coords.push([g0.lon, g0.lat], [g1.lon, g1.lat], [g2.lon, g2.lat], [g0.lon, g0.lat]);
+          }
+          if (coords.length >= 2) {
+            addDbgLine(`ix-tri-${gen.center.x}-${gen.center.y}`, coords, '#ff00ff', 1, 0.4);
+          }
+        }
       }
     }
 
