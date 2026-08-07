@@ -14,7 +14,7 @@
     "sourceMap": true,
     "declaration": false,
     "composite": false,
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["../renderer/*"],
       "@shared/*": ["../shared/*"],
