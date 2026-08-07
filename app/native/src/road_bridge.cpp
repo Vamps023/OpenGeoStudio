@@ -4,6 +4,7 @@
 #include "road/arc.hpp"
 #include "road/intersection.hpp"
 #include "road/clothoid.hpp"
+#include "road/mesh.hpp"
 #include <sstream>
 
 namespace geo {
@@ -277,6 +278,92 @@ static Napi::Value RoadComputeClothoid(const Napi::CallbackInfo& info) {
     return obj;
 }
 
+// Serialize MeshData to a JS object
+static Napi::Object meshToJs(Napi::Env env, const MeshData& mesh) {
+    auto obj = Napi::Object::New(env);
+
+    // Vertices as Float32Array
+    auto verts = Napi::Float32Array::New(env, mesh.vertices.size());
+    for (size_t i = 0; i < mesh.vertices.size(); i++) {
+        verts[i] = static_cast<float>(mesh.vertices[i]);
+    }
+    obj.Set("vertices", verts);
+
+    // Normals as Float32Array
+    auto norms = Napi::Float32Array::New(env, mesh.normals.size());
+    for (size_t i = 0; i < mesh.normals.size(); i++) {
+        norms[i] = static_cast<float>(mesh.normals[i]);
+    }
+    obj.Set("normals", norms);
+
+    // UVs as Float32Array
+    auto uvs = Napi::Float32Array::New(env, mesh.uvs.size());
+    for (size_t i = 0; i < mesh.uvs.size(); i++) {
+        uvs[i] = static_cast<float>(mesh.uvs[i]);
+    }
+    obj.Set("uvs", uvs);
+
+    // Indices as Uint32Array
+    auto indices = Napi::Uint32Array::New(env, mesh.indices.size());
+    for (size_t i = 0; i < mesh.indices.size(); i++) {
+        indices[i] = mesh.indices[i];
+    }
+    obj.Set("indices", indices);
+
+    // Metadata
+    obj.Set("vertexCount", Napi::Number::New(env, mesh.vertices.size() / 3));
+    obj.Set("indexCount", Napi::Number::New(env, mesh.indices.size()));
+    obj.Set("triangleCount", Napi::Number::New(env, mesh.indices.size() / 3));
+
+    return obj;
+}
+
+// roadGenerateRoadMesh(road, numSamples?) → MeshData
+static Napi::Value RoadGenerateRoadMesh(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (road)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Road road = parseRoad(info[0].As<Napi::Object>());
+    int numSamples = (info.Length() >= 2 && info[1].IsNumber())
+        ? info[1].As<Napi::Number>().Int32Value() : 32;
+
+    MeshData mesh = generateRoadMesh(road, numSamples);
+    return meshToJs(env, mesh);
+}
+
+// roadGenerateIntersectionMesh(intersection, z?) → MeshData
+static Napi::Value RoadGenerateIntersectionMesh(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (intersection)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    auto ixObj = info[0].As<Napi::Object>();
+    GeneratedIntersection ix;
+
+    // Parse intersection from JS
+    auto centerObj = ixObj.Get("center").As<Napi::Object>();
+    ix.center = {centerObj.Get("x").As<Napi::Number>().DoubleValue(),
+                 centerObj.Get("y").As<Napi::Number>().DoubleValue()};
+
+    auto polyArr = ixObj.Get("polygon").As<Napi::Array>();
+    for (uint32_t i = 0; i < polyArr.Length(); i++) {
+        auto p = polyArr.Get(i).As<Napi::Object>();
+        ix.polygon.push_back({p.Get("x").As<Napi::Number>().DoubleValue(),
+                              p.Get("y").As<Napi::Number>().DoubleValue()});
+    }
+
+    double z = (info.Length() >= 2 && info[1].IsNumber())
+        ? info[1].As<Napi::Number>().DoubleValue() : 0.0;
+
+    MeshData mesh = generateIntersectionMesh(ix, z);
+    return meshToJs(env, mesh);
+}
+
 // ─── Init function ─────────────────────────────────────────
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
@@ -286,6 +373,8 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadSampleCenterline", Napi::Function::New(env, RoadSampleCenterline));
     exports.Set("roadGeoToLocal", Napi::Function::New(env, RoadGeoToLocal));
     exports.Set("roadLocalToGeo", Napi::Function::New(env, RoadLocalToGeo));
+    exports.Set("roadGenerateRoadMesh", Napi::Function::New(env, RoadGenerateRoadMesh));
+    exports.Set("roadGenerateIntersectionMesh", Napi::Function::New(env, RoadGenerateIntersectionMesh));
     return exports;
 }
 

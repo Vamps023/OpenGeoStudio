@@ -38,6 +38,8 @@ import {
   ROAD_GEO_TO_LOCAL,
   ROAD_LOCAL_TO_GEO,
   ROAD_COMPUTE_CLOTHOID,
+  ROAD_GENERATE_ROAD_MESH,
+  ROAD_GENERATE_INTERSECTION_MESH,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -107,6 +109,8 @@ export interface ElectronAPI {
     generateIntersection: (road1: unknown, road2: unknown, refLat: number, refLon: number) => Promise<unknown>;
     computeCircleArc: (startPoint: { x: number; y: number }, startDirection: { x: number; y: number }, endPoint: { x: number; y: number }, segments?: number) => Promise<unknown>;
     computeClothoid: (startPoint: { x: number; y: number }, startDirection: { x: number; y: number }, endPoint: { x: number; y: number }, endDirection: { x: number; y: number }, initialA?: number, segments?: number) => Promise<unknown>;
+    generateRoadMesh: (road: unknown, numSamples?: number) => Promise<unknown>;
+    generateIntersectionMesh: (intersection: unknown, z?: number) => Promise<unknown>;
     sampleCenterline: (road: unknown, numSamples?: number) => Promise<unknown>;
     geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) => Promise<{ x: number; y: number }>;
     localToGeo: (x: number, y: number, refLat: number, refLon: number) => Promise<{ lat: number; lon: number }>;
@@ -172,6 +176,10 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(ROAD_COMPUTE_CIRCLE_ARC, startPoint, startDirection, endPoint, segments),
     computeClothoid: (startPoint, startDirection, endPoint, endDirection, initialA, segments) =>
       ipcRenderer.invoke(ROAD_COMPUTE_CLOTHOID, startPoint, startDirection, endPoint, endDirection, initialA, segments),
+    generateRoadMesh: (road, numSamples) =>
+      ipcRenderer.invoke(ROAD_GENERATE_ROAD_MESH, road, numSamples),
+    generateIntersectionMesh: (intersection, z) =>
+      ipcRenderer.invoke(ROAD_GENERATE_INTERSECTION_MESH, intersection, z),
     sampleCenterline: (road, numSamples) =>
       ipcRenderer.invoke(ROAD_SAMPLE_CENTERLINE, road, numSamples),
     geoToLocal: (lat, lon, refLat, refLon) =>

@@ -1,14 +1,14 @@
-Phase 4: Implement clothoid (Euler spiral) in C++
+Phase 5: Implement mesh tessellation in C++
 
-- clothoid.hpp: Fresnel integrals, clothoid computation, fitting
-  - computeClothoid(): generates Euler spiral with linear curvature change
-  - fitClothoid(): iteratively fits clothoid between two points+tangents
-  - Uses Simpson's rule for numerical integration
-  - Achieves G2 continuity (continuous curvature) for highway design
-- road_bridge.cpp: Added roadComputeClothoid N-API binding
-- IPC channel: road:computeClothoid
-- roadEngineClient.ts: Added ClothoidResult type and computeClothoid API
-- 8 tests pass (including clothoid 90-degree transition test)
+- mesh.hpp: Ear-clipping polygon triangulation + road strip mesh generation
+  - triangulatePolygon(): ear-clipping algorithm for simple polygons
+  - generateRoadMesh(): triangle strip along centerline with normals and UVs
+  - generateIntersectionMesh(): triangulated intersection polygon
+  - Returns typed arrays (Float32Array, Uint32Array) for direct GPU upload
+- road_bridge.cpp: Added roadGenerateRoadMesh and roadGenerateIntersectionMesh
+- IPC channels: road:generateRoadMesh, road:generateIntersectionMesh
+- roadEngineClient.ts: Added MeshData type and mesh generation API
+- 10 tests pass (including road mesh and intersection mesh tests)
 
 Generated with Devin (https://devin.ai)
 

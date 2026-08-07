@@ -24,6 +24,17 @@ export interface ClothoidResult {
   isLeftTurn: boolean;
 }
 
+// ─── Mesh data type ────────────────────────────────────────
+export interface MeshData {
+  vertices: Float32Array;   // x, y, z interleaved
+  normals: Float32Array;    // nx, ny, nz
+  uvs: Float32Array;        // u, v
+  indices: Uint32Array;     // triangle indices
+  vertexCount: number;
+  indexCount: number;
+  triangleCount: number;
+}
+
 // ─── Global window type augmentation ───────────────────────
 declare global {
   interface Window {
@@ -33,6 +44,8 @@ declare global {
         generateIntersection(road1: unknown, road2: unknown, refLat: number, refLon: number): Promise<unknown>;
         computeCircleArc(sp: { x: number; y: number }, sd: { x: number; y: number }, ep: { x: number; y: number }, segments?: number): Promise<unknown>;
         computeClothoid(sp: { x: number; y: number }, sd: { x: number; y: number }, ep: { x: number; y: number }, ed: { x: number; y: number }, initialA?: number, segments?: number): Promise<unknown>;
+        generateRoadMesh(road: unknown, numSamples?: number): Promise<unknown>;
+        generateIntersectionMesh(intersection: unknown, z?: number): Promise<unknown>;
         sampleCenterline(road: unknown, numSamples?: number): Promise<unknown>;
         geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
         localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -110,6 +123,8 @@ export interface RoadEngineAPI {
     initialA?: number,
     segments?: number
   ): Promise<ClothoidResult>;
+  generateRoadMesh(road: Road, numSamples?: number): Promise<MeshData>;
+  generateIntersectionMesh(intersection: GeneratedIntersection, z?: number): Promise<MeshData>;
   sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>>;
   geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
   localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -159,6 +174,15 @@ class NativeRoadEngine implements RoadEngineAPI {
     segments?: number
   ): Promise<ClothoidResult> {
     return this.api.computeClothoid(startPoint, startDirection, endPoint, endDirection, initialA, segments) as Promise<ClothoidResult>;
+  }
+
+  async generateRoadMesh(road: Road, numSamples?: number): Promise<MeshData> {
+    const cppRoad = toCppRoad(road, 0, 0);  // mesh uses local coords
+    return this.api.generateRoadMesh(cppRoad, numSamples) as Promise<MeshData>;
+  }
+
+  async generateIntersectionMesh(intersection: GeneratedIntersection, z?: number): Promise<MeshData> {
+    return this.api.generateIntersectionMesh(intersection, z) as Promise<MeshData>;
   }
 
   async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
@@ -273,6 +297,10 @@ export const roadEngine = {
     initialA?: number,
     segments?: number
   ) => getRoadEngine().computeClothoid(sp, sd, ep, ed, initialA, segments),
+  generateRoadMesh: (road: Road, numSamples?: number) =>
+    getRoadEngine().generateRoadMesh(road, numSamples),
+  generateIntersectionMesh: (intersection: GeneratedIntersection, z?: number) =>
+    getRoadEngine().generateIntersectionMesh(intersection, z),
   sampleCenterline: (road: Road, numSamples?: number) =>
     getRoadEngine().sampleCenterline(road, numSamples),
   geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) =>

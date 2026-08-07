@@ -165,4 +165,48 @@ describeIfAddon('C++ Road Geometry Engine', () => {
     expect(result.A).toBeGreaterThan(0);
     expect(result.L).toBeGreaterThan(0);
   });
+
+  it('should generate a road mesh', () => {
+    const road = {
+      id: 'r1',
+      name: 'Test Road',
+      width: 8.0,
+      laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 100, y: 0, z: 5, type: 'corner' },
+      ],
+    };
+
+    const mesh = addon.roadGenerateRoadMesh(road, 32);
+
+    // Should have vertices, normals, UVs, and indices
+    expect(mesh.vertices.length).toBeGreaterThan(0);
+    expect(mesh.normals.length).toBe(mesh.vertices.length);
+    expect(mesh.uvs.length).toBe(mesh.vertices.length / 3 * 2);
+    expect(mesh.indices.length).toBeGreaterThan(0);
+    expect(mesh.triangleCount).toBe(mesh.indices.length / 3);
+
+    // Vertex count should be 2 * (samples + 1) = 66
+    expect(mesh.vertexCount).toBe(66);
+  });
+
+  it('should generate an intersection mesh', () => {
+    const road1 = {
+      id: 'r1', width: 8, laneCount: 2,
+      points: [{ x: -100, y: 0, z: 0, type: 'corner' }, { x: 100, y: 0, z: 0, type: 'corner' }],
+    };
+    const road2 = {
+      id: 'r2', width: 8, laneCount: 2,
+      points: [{ x: 0, y: -100, z: 0, type: 'corner' }, { x: 0, y: 100, z: 0, type: 'corner' }],
+    };
+
+    const ix = addon.roadGenerateIntersection(road1, road2, 37.7749, -122.4194);
+    const mesh = addon.roadGenerateIntersectionMesh(ix, 0);
+
+    // Should have vertices and triangles
+    expect(mesh.vertexCount).toBeGreaterThan(0);
+    expect(mesh.triangleCount).toBeGreaterThan(0);
+    expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
+  });
 });
