@@ -1260,7 +1260,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
     // ─── Line/Pen preview (line from last point to cursor) ───
     const drawingRoadId = useRoadStudioStore.getState().drawingRoadId;
-    if (drawingRoadId && previewPoint && (tool === 'line' || tool === 'pen')) {
+    const currentTool = toolRef.current;
+    if (drawingRoadId && previewPoint && (currentTool === 'line' || currentTool === 'pen')) {
       const road = roads.find((r) => r.id === drawingRoadId);
       if (road && road.points.length >= 1) {
         const lastPt = road.points[road.points.length - 1];
