@@ -1,35 +1,27 @@
-Phase 2.8: Editor integration — RoadViewport uses buildRoad() pipeline
+Phase 3 prep: 3D debug overlays + Road Inspector panel
 
-Replaces the TypeScript mesh-building code in RoadViewport.tsx with
-the C++ buildRoad() output. The 3D viewport now uploads typed arrays
-from the lane engine directly to Babylon.js GPU buffers.
+Track 1 — Debug Overlays (RoadViewport.tsx):
+  - 4 new debug layers: laneCenters, laneBoundaryLines, laneIds, meshWireframe
+  - Lane centerlines rendered as colored lines (yellow=center, green=right, red=left)
+  - Lane boundaries rendered as lines (white=road edge, teal=inner boundaries)
+  - Lane IDs rendered as colored spheres at centerline midpoints
+  - Mesh wireframe rendered as magenta line overlay on asphalt triangles
+  - All overlays use cached buildRoad() data (no extra C++ calls)
+  - Toggle via Debug mode in toolbar
 
-Changes to RoadViewport.tsx:
-  - Added buildCacheRef (Map<string, RoadBuildResult>) alongside
-    the existing sampleCacheRef
-  - refreshSampleCache() now calls both sampleCenterline() (for 2D)
-    and buildRoad() (for 3D) per road
-  - update3DMeshes() now checks for cached buildRoad() result first:
-    - If available: uploads Float32Array/Uint32Array directly to
-      Babylon VertexData (with Y/Z swap for Babylon's Y-up system)
-    - If not available: falls back to legacy TS mesh building
-  - Materials mapped from C++ section types:
-    - asphalt → asphalt texture, pickable
-    - yellow_marking → yellow dashed center, not pickable
-    - white_marking → white edge/divider, not pickable
-  - Curbs and sidewalks still generated in TS (Phase 2 doesn't
-    generate those yet — they use the sample cache)
-  - Control point meshes unchanged
-  - Intersection surfaces unchanged (Phase 3 territory)
-  - Legacy buildDashedMarking extracted to module-level function
-    for fallback path
+Track 2 — Road Inspector Panel (RoadInspector.tsx):
+  - New right-dock panel registered as 'road-inspector'
+  - Shows road metadata: name, ID, width, lanes, length, control points
+  - Shows road profile: type, surface, lane width, sidewalk, curb toggles
+  - Shows lane engine data: lane sections, centerlines, boundaries, road marks
+  - Shows per-lane details: ID, length, sample count
+  - Shows mesh statistics: vertices, triangles, sections per material
+  - Shows adapter report: exact/legacy/unsupported segment counts + warnings
+  - Shows intersection connections: start/end node IDs
+  - Uses existing FormSection, NumberField, TextField, SelectField, BooleanField
+  - Live-updates when road selection changes
 
-Verified in Electron:
-  - Native addon loads correctly (ABI 146 for Electron 42.5.1)
-  - buildRoad() called for each road in the project
-  - Mesh sizes: 224-876 vertices per road (adaptive sampling)
-  - Intersection detection still works (60 polygon pts, 4 approaches)
-  - Split roads after intersection are rebuilt with buildRoad()
+Track 3 — Phase 3 C++ (in progress):
+  - road_graph.hpp being created (RoadGraph, RoadNode, RoadEdge)
 
-No regression: 141 vitest + 463 doctest all pass.
-TypeScript build: clean. Vite build: clean.
+Build: clean. Tests: 141/141 pass.
