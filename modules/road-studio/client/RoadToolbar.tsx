@@ -9,7 +9,7 @@
 import React from 'react';
 import {
   MousePointer2, Spline, PenTool, Undo2, Redo2, Trash2,
-  Check, Mountain, Grid3x3, Magnet, Square, Box, GitMerge, X,
+  Check, Mountain, Grid3x3, Magnet, Square, Box, GitMerge, X, Circle,
 } from 'lucide-react';
 import { useRoadStudioStore } from './store/roadStudioStore';
 import { ROAD_PROFILES } from '../shared/types';
@@ -94,6 +94,7 @@ export const RoadToolbar: React.FC = () => {
         <ToolButton active={tool === 'select'} onClick={() => setTool('select')} icon={<MousePointer2 size={14} />} label="Select" shortcut="V" />
         <ToolButton active={tool === 'line'} onClick={() => setTool('line')} icon={<Spline size={14} />} label="Line" shortcut="L" />
         <ToolButton active={tool === 'pen'} onClick={() => setTool('pen')} icon={<PenTool size={14} />} label="Pen" shortcut="P" />
+        <ToolButton active={tool === 'arc'} onClick={() => setTool('arc')} icon={<Circle size={14} />} label="Arc" shortcut="A" />
       </div>
 
       <div className="w-px h-6 bg-edge mx-1" />

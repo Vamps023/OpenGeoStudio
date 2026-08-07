@@ -27,6 +27,7 @@ import {
   type ControlPoint,
   type Intersection,
   type GeneratedIntersection,
+  type Point2D,
   geoToLocal,
   localToGeo,
   sampleRoad,
@@ -34,6 +35,7 @@ import {
   computeIntersectionPolygon,
   convexHull,
   distanceMeters,
+  computeCircleArc,
 } from '../shared/types';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
@@ -91,6 +93,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { selectionRef.current = store.selection; }, [store.selection]);
   useEffect(() => { selectedRoadIdsRef.current = store.selectedRoadIds; updateAllViews(); }, [store.selectedRoadIds]);
   useEffect(() => { generatedIntersectionsRef.current = store.generatedIntersections; updateAllViews(); }, [store.generatedIntersections]);
+  useEffect(() => { updateAllViews(); }, [store.arcPreview]);
   useEffect(() => {
     roadsRef.current = store.roads;
     // Recompute intersections whenever roads change
@@ -238,6 +241,52 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
 
       const tool = toolRef.current;
+
+      // ─── Arc tool ───────────────────────────────────────────
+      if (tool === 'arc') {
+        const clickLat = e.lngLat.lat;
+        const clickLon = e.lngLat.lng;
+        const refLat = refLatRef.current;
+        const refLon = refLonRef.current;
+        const clickLocal = geoToLocal(clickLat, clickLon, refLat, refLon);
+
+        // If no arc in progress, start one
+        if (!st.arcStartPoint) {
+          // Determine start direction from the last road segment
+          let startDir: Point2D = { x: 1, y: 0 }; // default: east
+          let startPoint = clickLocal;
+
+          // If there's a drawing road, use its last segment direction
+          const drawingId = drawingRoadIdRef.current;
+          if (drawingId) {
+            const road = roadsRef.current.find((r) => r.id === drawingId);
+            if (road && road.points.length >= 2) {
+              const p0 = road.points[road.points.length - 2];
+              const p1 = road.points[road.points.length - 1];
+              const l0 = geoToLocal(p0.lat, p0.lon, refLat, refLon);
+              const l1 = geoToLocal(p1.lat, p1.lon, refLat, refLon);
+              const dx = l1.x - l0.x;
+              const dy = l1.y - l0.y;
+              const len = Math.sqrt(dx * dx + dy * dy) || 1;
+              startDir = { x: dx / len, y: dy / len };
+              startPoint = l1;
+            }
+          } else {
+            // No drawing road — start from click point with default direction
+            // But first, start a new road with this point
+            st.startNewRoad(clickLat, clickLon);
+            // The arc will be added as a second point to this road
+            return;
+          }
+
+          st.startArc(startPoint, startDir);
+        } else {
+          // Arc in progress — finish it
+          st.finishArc();
+        }
+        return;
+      }
+
       if (tool !== 'line' && tool !== 'pen') return;
 
       let finalLat = e.lngLat.lat;
@@ -270,7 +319,16 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       const roadLayers = roadsRef.current.map((r) => `rd-surface-${r.id}`).filter((id) => map.getLayer(id));
       const cpLayers = map.getLayer('cp-dot') ? ['cp-dot'] : [];
       const features = map.queryRenderedFeatures(e.point, { layers: [...roadLayers, ...cpLayers] });
-      map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
+      const st = useRoadStudioStore.getState();
+
+      // Arc tool: update preview on mouse move
+      if (st.arcStartPoint && toolRef.current === 'arc') {
+        const mouseLocal = geoToLocal(e.lngLat.lat, e.lngLat.lon, refLatRef.current, refLonRef.current);
+        st.updateArcPreview(mouseLocal);
+        map.getCanvas().style.cursor = 'crosshair';
+      } else {
+        map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
+      }
     });
 
     mapRef.current = map;
@@ -295,14 +353,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     const style = map.getStyle();
     if (style?.layers) {
       for (const layer of style.layers) {
-        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-') || layer.id.startsWith('gi-')) {
+        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-') || layer.id.startsWith('gi-') || layer.id.startsWith('arc-')) {
           map.removeLayer(layer.id);
         }
       }
     }
     if (style?.sources) {
       for (const src of Object.keys(style.sources)) {
-        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-') || src.startsWith('gi-')) {
+        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-') || src.startsWith('gi-') || src.startsWith('arc-')) {
           map.removeSource(src);
         }
       }
@@ -905,6 +963,88 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           'circle-stroke-width': 2,
         },
       });
+    }
+
+    // ─── Arc preview (while drawing with arc tool) ─────────────
+    const arcPreview = useRoadStudioStore.getState().arcPreview;
+    if (arcPreview && arcPreview.points && arcPreview.points.length >= 2) {
+      const arcCoords: [number, number][] = arcPreview.points.map((p) => {
+        const geo = localToGeo(p.x, p.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+
+      // Arc centerline preview (dashed green)
+      const arcSrcId = 'arc-preview-src';
+      map.addSource(arcSrcId, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: arcCoords } },
+      });
+      map.addLayer({
+        id: 'arc-preview-line',
+        type: 'line',
+        source: arcSrcId,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#4ecca3',
+          'line-width': 4,
+          'line-opacity': 0.6,
+          'line-dasharray': [3, 2],
+        },
+      });
+
+      // Arc road surface preview (semi-transparent fill)
+      const halfW = useRoadStudioStore.getState().defaultWidth / 2;
+      const leftEdge: [number, number][] = [];
+      const rightEdge: [number, number][] = [];
+      for (let i = 0; i < arcPreview.points.length; i++) {
+        const p = arcPreview.points[i];
+        let tx: number, ty: number;
+        if (i === 0) { tx = arcPreview.points[1].x - p.x; ty = arcPreview.points[1].y - p.y; }
+        else if (i === arcPreview.points.length - 1) { tx = p.x - arcPreview.points[i - 1].x; ty = p.y - arcPreview.points[i - 1].y; }
+        else { tx = arcPreview.points[i + 1].x - arcPreview.points[i - 1].x; ty = arcPreview.points[i + 1].y - arcPreview.points[i - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+        const lGeo = localToGeo(p.x + nx * halfW, p.y + ny * halfW, refLat, refLon);
+        const rGeo = localToGeo(p.x - nx * halfW, p.y - ny * halfW, refLat, refLon);
+        leftEdge.push([lGeo.lon, lGeo.lat]);
+        rightEdge.push([rGeo.lon, rGeo.lat]);
+      }
+      const arcPolygonCoords = [...leftEdge, ...rightEdge.reverse()];
+      arcPolygonCoords.push(arcPolygonCoords[0]); // close ring
+
+      const arcFillSrcId = 'arc-preview-fill-src';
+      map.addSource(arcFillSrcId, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [arcPolygonCoords] } },
+      });
+      map.addLayer({
+        id: 'arc-preview-fill',
+        type: 'fill',
+        source: arcFillSrcId,
+        paint: { 'fill-color': '#3a3a3a', 'fill-opacity': 0.5 },
+      });
+
+      // Show radius info at center
+      if (isFinite(arcPreview.radius)) {
+        const centerGeo = localToGeo(arcPreview.center.x, arcPreview.center.y, refLat, refLon);
+        const rSrcId = 'arc-radius-src';
+        map.addSource(rSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: { radius: Math.round(arcPreview.radius) }, geometry: { type: 'Point', coordinates: [centerGeo.lon, centerGeo.lat] } },
+        });
+        map.addLayer({
+          id: 'arc-radius-marker',
+          type: 'circle',
+          source: rSrcId,
+          paint: {
+            'circle-radius': 4,
+            'circle-color': '#ffaa00',
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1,
+          },
+        });
+      }
     }
 
     // ─── Control points as circles ──────────────────────────────

@@ -143,7 +143,7 @@ export const ROAD_PROFILES: Record<string, RoadProfile> = {
 };
 
 /** Available editing tools */
-export type Tool = 'select' | 'line' | 'pen';
+export type Tool = 'select' | 'line' | 'pen' | 'arc';
 
 /** Selection state */
 export interface Selection {
@@ -1161,4 +1161,225 @@ function generateLaneConnections(
   }
 
   return connections;
+}
+
+// ═══════════════════════════════════════════════════════════
+// CIRCLE ARC TOOL — Constant-radius circular arc with tangent continuity
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Compute a circular arc between two points with tangent continuity.
+ *
+ * Given:
+ *  - startPoint: where the arc begins
+ *  - startDirection: the heading of the incoming straight (normalized)
+ *  - endPoint: where the arc should end (mouse position)
+ *
+ * Returns:
+ *  - center: the circle center
+ *  - radius: the arc radius
+ *  - startAngle: angle from center to start point
+ *  - endAngle: angle from center to end point
+ *  - sweep: the angular sweep (positive = left/CCW, negative = right/CW)
+ *  - points: sampled points along the arc
+ *  - tangentIn: direction at start (matches incoming straight)
+ *  - tangentOut: direction at end
+ */
+export interface CircleArc {
+  center: Point2D;
+  radius: number;
+  startAngle: number;
+  endAngle: number;
+  sweep: number; // radians, positive = CCW (left), negative = CW (right)
+  points: Point2D[];
+  tangentIn: Point2D;  // direction at arc start
+  tangentOut: Point2D; // direction at arc end
+}
+
+/**
+ * Compute a circular arc from a start point + direction to an end point.
+ *
+ * The arc starts tangent to the given direction (G1 continuity with the
+ * incoming straight), and passes through the end point.
+ *
+ * Algorithm:
+ * 1. The circle center is perpendicular to the start direction, at distance = radius
+ * 2. The radius is determined by the end point position
+ * 3. The center is on the side that makes the arc pass through the end point
+ */
+export function computeCircleArc(
+  startPoint: Point2D,
+  startDirection: Point2D,  // normalized
+  endPoint: Point2D,
+  segments: number = 32
+): CircleArc | null {
+  // Vector from start to end
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+  const chordLen = Math.sqrt(dx * dx + dy * dy);
+  if (chordLen < 0.1) return null;
+
+  // The angle of the chord
+  const chordAngle = Math.atan2(dy, dx);
+
+  // The angle of the start direction
+  const dirAngle = Math.atan2(startDirection.y, startDirection.x);
+
+  // The angle between the start direction and the chord
+  // This determines which side the center is on and the radius
+  const halfAngle = (chordAngle - dirAngle) / 2;
+
+  // If halfAngle is 0, the arc is a straight line (infinite radius)
+  if (Math.abs(halfAngle) < 1e-6) {
+    // Straight line — return a degenerate arc (just the chord)
+    const points: Point2D[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      points.push({
+        x: startPoint.x + dx * t,
+        y: startPoint.y + dy * t,
+      });
+    }
+    return {
+      center: { x: Infinity, y: Infinity },
+      radius: Infinity,
+      startAngle: 0,
+      endAngle: 0,
+      sweep: 0,
+      points,
+      tangentIn: startDirection,
+      tangentOut: startDirection,
+    };
+  }
+
+  // Radius from chord length and sweep angle
+  // chord = 2 * r * sin(sweep/2) → r = chord / (2 * sin(sweep/2))
+  // The sweep angle = 2 * halfAngle (but we need to determine direction)
+  // Actually: the angle between direction and chord = half the sweep angle
+  // So sweep = 2 * (chordAngle - dirAngle), but we need to normalize
+
+  // The center is perpendicular to the start direction
+  // Perpendicular: rotate direction 90°
+  // Left turn (CCW): center is to the left of the direction
+  // Right turn (CW): center is to the right
+
+  // Determine turn direction: cross product of direction and chord
+  const cross = startDirection.x * dy - startDirection.y * dx;
+  const isLeftTurn = cross > 0;
+
+  // The center is at distance r perpendicular to the start direction
+  // Perpendicular direction (left = +90°, right = -90°)
+  const perpDir = isLeftTurn
+    ? { x: -startDirection.y, y: startDirection.x }   // left (CCW)
+    : { x: startDirection.y, y: -startDirection.x };   // right (CW)
+
+  // The sweep angle: angle subtended by the arc at the center
+  // = 2 * angle between chord and tangent at start
+  // The angle between the start direction and the chord = |chordAngle - dirAngle|
+  // The inscribed angle theorem: sweep = 2 * (angle between tangent and chord)
+  let sweepAngle = 2 * Math.abs(chordAngle - dirAngle);
+  // Normalize to [0, 2π]
+  if (sweepAngle > Math.PI) sweepAngle = 2 * Math.PI - sweepAngle;
+
+  // Radius
+  const radius = chordLen / (2 * Math.sin(sweepAngle / 2));
+  if (radius < 0.5 || !isFinite(radius)) {
+    // Radius too small or invalid — fallback to straight line
+    const points: Point2D[] = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      points.push({
+        x: startPoint.x + dx * t,
+        y: startPoint.y + dy * t,
+      });
+    }
+    return {
+      center: { x: startPoint.x + perpDir.x * 1000, y: startPoint.y + perpDir.y * 1000 },
+      radius: 1000,
+      startAngle: 0,
+      endAngle: 0,
+      sweep: 0,
+      points,
+      tangentIn: startDirection,
+      tangentOut: { x: dx / chordLen, y: dy / chordLen },
+    };
+  }
+
+  // Center position
+  const center = {
+    x: startPoint.x + perpDir.x * radius,
+    y: startPoint.y + perpDir.y * radius,
+  };
+
+  // Start and end angles (from center)
+  const startAngle = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
+  const endAngle = Math.atan2(endPoint.y - center.y, endPoint.x - center.x);
+
+  // Sweep direction
+  const sweep = isLeftTurn
+    ? normalizeAngle(endAngle - startAngle)   // CCW (positive)
+    : -normalizeAngle(startAngle - endAngle);  // CW (negative)
+
+  // Sample points along the arc
+  const points: Point2D[] = [];
+  const absSweep = Math.abs(sweep);
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const angle = isLeftTurn
+      ? startAngle + sweep * t
+      : startAngle + sweep * t;
+    points.push({
+      x: center.x + radius * Math.cos(angle),
+      y: center.y + radius * Math.sin(angle),
+    });
+  }
+
+  // Tangent at end (perpendicular to radius at end point, in direction of travel)
+  const tangentOut = isLeftTurn
+    ? { x: -Math.sin(endAngle), y: Math.cos(endAngle) }   // CCW
+    : { x: Math.sin(endAngle), y: -Math.cos(endAngle) };   // CW
+
+  return {
+    center,
+    radius,
+    startAngle,
+    endAngle,
+    sweep,
+    points,
+    tangentIn: startDirection,
+    tangentOut,
+  };
+}
+
+/** Normalize angle to [0, 2π) */
+function normalizeAngle(a: number): number {
+  while (a < 0) a += 2 * Math.PI;
+  while (a >= 2 * Math.PI) a -= 2 * Math.PI;
+  return a;
+}
+
+/**
+ * Convert a CircleArc to control points for a Road.
+ * The arc is represented as a series of smooth control points.
+ */
+export function arcToControlPoints(
+  arc: CircleArc,
+  refLat: number,
+  refLon: number,
+  z: number = 0
+): ControlPoint[] {
+  const points: ControlPoint[] = [];
+  for (let i = 0; i < arc.points.length; i++) {
+    const geo = localToGeo(arc.points[i].x, arc.points[i].y, refLat, refLon);
+    points.push({
+      id: generateId(),
+      lat: geo.lat,
+      lon: geo.lon,
+      z,
+      handleIn: null,
+      handleOut: null,
+      type: 'smooth',
+    });
+  }
+  return points;
 }

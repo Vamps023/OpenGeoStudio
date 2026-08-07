@@ -6,8 +6,8 @@
  */
 
 import { create } from 'zustand';
-import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection } from '../../shared/types';
-import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal } from '../../shared/types';
+import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection, Point2D, CircleArc } from '../../shared/types';
+import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal, computeCircleArc } from '../../shared/types';
 
 interface RoadStudioState {
   /** All roads in the project */
@@ -39,6 +39,12 @@ interface RoadStudioState {
   drawingRoadId: string | null;
   /** Whether the pen tool is dragging (creating bezier handle) */
   penDragging: boolean;
+  /** Arc tool: the start point of the arc (in local meters) — null if not started */
+  arcStartPoint: Point2D | null;
+  /** Arc tool: the start direction (normalized) — from the last road segment */
+  arcStartDirection: Point2D | null;
+  /** Arc tool: current preview arc (updated on mouse move) */
+  arcPreview: CircleArc | null;
   /** View mode: 'top' = 2D top-down, 'perspective' = 3D angled */
   viewMode: 'top' | 'perspective';
   /** Whether the satellite map overlay is shown in top view */
@@ -97,6 +103,15 @@ interface RoadStudioState {
   /** Set pen dragging state */
   setPenDragging: (dragging: boolean) => void;
 
+  /** Arc tool: start an arc from a point with a given direction */
+  startArc: (startPoint: Point2D, startDirection: Point2D) => void;
+  /** Arc tool: update the arc preview based on mouse position */
+  updateArcPreview: (endPoint: Point2D) => void;
+  /** Arc tool: finish the arc — creates a new road from the arc */
+  finishArc: () => void;
+  /** Arc tool: cancel the current arc */
+  cancelArc: () => void;
+
   /** Undo */
   undo: () => void;
   /** Redo */
@@ -153,6 +168,9 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   redoStack: [],
   drawingRoadId: null,
   penDragging: false,
+  arcStartPoint: null,
+  arcStartDirection: null,
+  arcPreview: null,
   viewMode: 'top',
   showMapOverlay: false,
   intersections: [],
@@ -414,6 +432,64 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   },
 
   setPenDragging: (dragging) => set({ penDragging: dragging }),
+
+  startArc: (startPoint, startDirection) => {
+    set({ arcStartPoint: startPoint, arcStartDirection: startDirection, arcPreview: null });
+  },
+
+  updateArcPreview: (endPoint) => {
+    const state = get();
+    if (!state.arcStartPoint || !state.arcStartDirection) return;
+    const arc = computeCircleArc(state.arcStartPoint, state.arcStartDirection, endPoint, 32);
+    set({ arcPreview: arc });
+  },
+
+  finishArc: () => {
+    const state = get();
+    if (!state.arcPreview || !state.arcPreview.points || state.arcPreview.points.length < 2) {
+      set({ arcStartPoint: null, arcStartDirection: null, arcPreview: null });
+      return;
+    }
+
+    // Convert arc points to control points
+    const controlPoints: ControlPoint[] = state.arcPreview.points.map((p) => {
+      const geo = localToGeo(p.x, p.y, state.refLat, state.refLon);
+      return {
+        id: generateId(),
+        lat: geo.lat,
+        lon: geo.lon,
+        z: 0,
+        handleIn: null,
+        handleOut: null,
+        type: 'smooth' as const,
+      };
+    });
+
+    // Create a new road from the arc
+    const roadId = `road_${generateId()}`;
+    const road: Road = {
+      id: roadId,
+      name: `Arc Road ${state.roads.length + 1}`,
+      points: controlPoints,
+      width: state.defaultWidth,
+      laneCount: state.defaultLaneCount,
+      color: '#4ecca3',
+      profile: { ...ROAD_PROFILES.city_2x1 },
+      startIntersectionId: null,
+      endIntersectionId: null,
+    };
+
+    get().pushHistory('Finish arc road');
+    set({
+      roads: [...state.roads, road],
+      arcStartPoint: null,
+      arcStartDirection: null,
+      arcPreview: null,
+      selection: { roadId, pointIndices: [], handle: null },
+    });
+  },
+
+  cancelArc: () => set({ arcStartPoint: null, arcStartDirection: null, arcPreview: null }),
 
   pushHistory: (description) => {
     const state = get();
