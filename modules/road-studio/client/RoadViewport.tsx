@@ -493,34 +493,84 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     engineRef.current = engine;
     sceneRef.current = scene;
 
+    // ─── Camera — auto-focus on roads if any exist ─────────────
+    const roads = roadsRef.current;
+    const refLat = refLatRef.current;
+    const refLon = refLonRef.current;
+
+    let centerX = 0, centerZ = 0, count = 0;
+    for (const road of roads) {
+      for (const p of road.points) {
+        const local = geoToLocal(p.lat, p.lon, refLat, refLon);
+        centerX += local.x;
+        centerZ += local.y;
+        count++;
+      }
+    }
+    if (count > 0) { centerX /= count; centerZ /= count; }
+
+    // Compute bounding box for camera distance
+    let maxDist = 100;
+    if (count > 0) {
+      for (const road of roads) {
+        for (const p of road.points) {
+          const local = geoToLocal(p.lat, p.lon, refLat, refLon);
+          const d = Math.sqrt((local.x - centerX) ** 2 + (local.y - centerZ) ** 2);
+          maxDist = Math.max(maxDist, d);
+        }
+      }
+    }
+
     const camera = new ArcRotateCamera(
-      'camera', -Math.PI / 2, Math.PI / 3.5, 200, new Vector3(0, 0, 0), scene
+      'camera', -Math.PI / 2, Math.PI / 3.5,
+      Math.max(200, maxDist * 2.5),
+      new Vector3(centerX, 0, centerZ), scene
     );
     camera.attachControl(canvas, true);
     cameraRef.current = camera;
-    camera.lowerRadiusLimit = 10;
-    camera.upperRadiusLimit = 2000;
+    camera.lowerRadiusLimit = 5;
+    camera.upperRadiusLimit = 50000;
     camera.lowerBetaLimit = 0;
     camera.upperBetaLimit = Math.PI / 2.1;
     camera.wheelDeltaPercentage = 0.01;
+    camera.minZ = 0.1;
 
     const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
-    hemi.intensity = 0.7;
+    hemi.intensity = 0.8;
     const dir = new DirectionalLight('dir', new Vector3(-1, -2, -1), scene);
-    dir.intensity = 0.5;
+    dir.intensity = 0.4;
 
-    const ground = MeshBuilder.CreateGround('ground', { width: 4000, height: 4000, subdivisions: 2 }, scene);
+    // ─── Ground plane with satellite imagery ───────────────────
+    const groundSize = Math.max(4000, maxDist * 6);
+    const ground = MeshBuilder.CreateGround('ground', {
+      width: groundSize, height: groundSize, subdivisions: 2,
+    }, scene);
     const groundMat = new StandardMaterial('groundMat', scene);
-    groundMat.diffuseColor = new Color3(0.12, 0.14, 0.16);
+
+    // Try to load satellite tile as ground texture
+    // Use Esri tile at current zoom level centered on road area
+    const groundLat = refLat;
+    const groundLon = refLon;
+    const groundTileUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/${Math.floor((1 - Math.sin(groundLat * Math.PI / 180)) / 2 * Math.pow(2, 14))}/${Math.floor((groundLon + 180) / 360 * Math.pow(2, 14))}`;
+    try {
+      const groundTex = new Texture(groundTileUrl, scene, false, true);
+      groundMat.diffuseTexture = groundTex;
+      groundMat.diffuseColor = new Color3(0.6, 0.6, 0.6);
+    } catch {
+      groundMat.diffuseColor = new Color3(0.15, 0.17, 0.19);
+    }
     groundMat.specularColor = new Color3(0, 0, 0);
     ground.material = groundMat;
+    ground.position = new Vector3(centerX, 0, centerZ);
     groundRef.current = ground;
 
-    // Grid
+    // Grid — centered on road area
+    const gridExtent = Math.min(2000, maxDist * 2);
+    const gridStep = gridExtent > 500 ? 50 : 10;
     const gridPoints: Vector3[] = [];
-    for (let i = -2000; i <= 2000; i += 50) {
-      gridPoints.push(new Vector3(i, 0.01, -2000), new Vector3(i, 0.01, 2000));
-      gridPoints.push(new Vector3(-2000, 0.01, i), new Vector3(2000, 0.01, i));
+    for (let i = -gridExtent; i <= gridExtent; i += gridStep) {
+      gridPoints.push(new Vector3(centerX + i, 0.01, centerZ - gridExtent), new Vector3(centerX + i, 0.01, centerZ + gridExtent));
+      gridPoints.push(new Vector3(centerX - gridExtent, 0.01, centerZ + i), new Vector3(centerX + gridExtent, 0.01, centerZ + i));
     }
     const grid = MeshBuilder.CreateLines('grid', { points: gridPoints }, scene);
     grid.color = new Color3(0.2, 0.25, 0.28);
@@ -688,31 +738,64 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         return { nx: -ty / len, ny: tx / len };
       };
 
-      // Road surface
+      // Road surface — ribbon mesh with proper double-sided rendering
       const pL: Vector3[] = [], pR: Vector3[] = [];
       for (let i = 0; i < samples.length; i++) {
         const s = samples[i]; const { nx, ny } = normalAt(i);
-        pL.push(new Vector3(s.x + nx * halfW, s.z, s.y + ny * halfW));
-        pR.push(new Vector3(s.x - nx * halfW, s.z, s.y - ny * halfW));
+        pL.push(new Vector3(s.x + nx * halfW, s.z + 0.02, s.y + ny * halfW));
+        pR.push(new Vector3(s.x - nx * halfW, s.z + 0.02, s.y - ny * halfW));
       }
-      const roadMesh = MeshBuilder.CreateRibbon(`road_${road.id}`, { pathArray: [pL, pR] }, scene);
+      const roadMesh = MeshBuilder.CreateRibbon(`road_${road.id}`, {
+        pathArray: [pL, pR],
+        sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
       const roadMat = new StandardMaterial(`rmat_${road.id}`, scene);
       const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
-      if (tex) { roadMat.diffuseTexture = tex; roadMat.diffuseColor = new Color3(1, 1, 1); tex.uScale = road.points.length * 2; }
-      else roadMat.diffuseColor = Color3.FromHexString(road.color);
-      roadMat.specularColor = new Color3(0.1, 0.1, 0.1);
+      if (tex) {
+        roadMat.diffuseTexture = tex;
+        roadMat.diffuseColor = new Color3(1, 1, 1);
+        // UV: repeat texture along road length (every 10m) and across width (1x)
+        const roadLength = samples.reduce((sum, s, i) => {
+          if (i === 0) return 0;
+          return sum + Math.sqrt((s.x - samples[i-1].x) ** 2 + (s.y - samples[i-1].y) ** 2);
+        }, 0);
+        tex.uScale = Math.max(1, roadLength / 10);
+        tex.vScale = 1;
+        tex.wrapU = Texture.WRAP_ADDRESSMODE;
+        tex.wrapV = Texture.WRAP_ADDRESSMODE;
+      } else {
+        roadMat.diffuseColor = new Color3(0.23, 0.23, 0.23);
+      }
+      roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
       roadMesh.material = roadMat;
       roadMesh.isPickable = false;
       roadMeshesRef.current.set(road.id, roadMesh);
 
-      // Center line
+      // Center line (dashed yellow)
       const cp: Vector3[] = samples.map((s) => new Vector3(s.x, s.z + 0.05, s.y));
       if (cp.length >= 2) {
         const cl = MeshBuilder.CreateLines(`cl_${road.id}`, { points: cp }, scene);
         cl.color = new Color3(1, 0.9, 0.3); cl.isPickable = false;
       }
 
-      // Curbs
+      // Lane divider lines (white, offset by lane spacing)
+      if (road.laneCount > 1) {
+        const laneSpacing = road.width / road.laneCount;
+        for (let lane = 1; lane < road.laneCount; lane++) {
+          const offset = -halfW + laneSpacing * lane;
+          const divPoints: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i]; const { nx, ny } = normalAt(i);
+            divPoints.push(new Vector3(s.x + nx * offset, s.z + 0.04, s.y + ny * offset));
+          }
+          if (divPoints.length >= 2) {
+            const dl = MeshBuilder.CreateLines(`div_${road.id}_${lane}`, { points: divPoints }, scene);
+            dl.color = new Color3(1, 1, 1); dl.isPickable = false;
+          }
+        }
+      }
+
+      // Curbs — raised edges on both sides
       if (road.profile?.hasCurb) {
         const cw = 0.3, ch = 0.15;
         for (const side of [-1, 1]) {
@@ -722,15 +805,18 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             cL.push(new Vector3(s.x + nx * halfW * side, s.z + ch, s.y + ny * halfW * side));
             cR.push(new Vector3(s.x + nx * (halfW + cw) * side, s.z + ch, s.y + ny * (halfW + cw) * side));
           }
-          const cm = MeshBuilder.CreateRibbon(`curb_${road.id}_${side}`, { pathArray: [cL, cR] }, scene);
+          const cm = MeshBuilder.CreateRibbon(`curb_${road.id}_${side}`, {
+            pathArray: [cL, cR], sideOrientation: Mesh.DOUBLESIDE,
+          }, scene);
           const cmMat = new StandardMaterial(`curbM_${road.id}_${side}`, scene);
-          cmMat.diffuseColor = new Color3(0.5, 0.5, 0.5); cmMat.specularColor = new Color3(0, 0, 0);
+          cmMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+          cmMat.specularColor = new Color3(0, 0, 0);
           cm.material = cmMat; cm.isPickable = false;
           roadMeshesRef.current.set(`curb_${road.id}_${side}`, cm);
         }
       }
 
-      // Sidewalks
+      // Sidewalks — wider walking surface outside curbs
       if (road.profile?.hasSidewalk) {
         const sw = 2.0, sh = 0.15, cw = road.profile?.hasCurb ? 0.3 : 0;
         for (const side of [-1, 1]) {
@@ -740,11 +826,17 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             sL.push(new Vector3(s.x + nx * (halfW + cw) * side, s.z + sh, s.y + ny * (halfW + cw) * side));
             sR.push(new Vector3(s.x + nx * (halfW + cw + sw) * side, s.z + sh, s.y + ny * (halfW + cw + sw) * side));
           }
-          const sm = MeshBuilder.CreateRibbon(`sw_${road.id}_${side}`, { pathArray: [sL, sR] }, scene);
+          const sm = MeshBuilder.CreateRibbon(`sw_${road.id}_${side}`, {
+            pathArray: [sL, sR], sideOrientation: Mesh.DOUBLESIDE,
+          }, scene);
           const smMat = new StandardMaterial(`swM_${road.id}_${side}`, scene);
-          const stex = getTexture('cobblestone', scene);
-          if (stex) { smMat.diffuseTexture = stex; smMat.diffuseColor = new Color3(0.9, 0.9, 0.9); }
-          else smMat.diffuseColor = new Color3(0.7, 0.7, 0.7);
+          const stex = getTexture('sidewalk', scene);
+          if (stex) {
+            smMat.diffuseTexture = stex;
+            smMat.diffuseColor = new Color3(0.85, 0.85, 0.85);
+          } else {
+            smMat.diffuseColor = new Color3(0.65, 0.65, 0.65);
+          }
           smMat.specularColor = new Color3(0, 0, 0);
           sm.material = smMat; sm.isPickable = false;
           roadMeshesRef.current.set(`sw_${road.id}_${side}`, sm);
