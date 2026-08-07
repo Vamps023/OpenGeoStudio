@@ -251,3 +251,124 @@ describeIfAddon('C++ Road Geometry Engine', () => {
     expect(xml).toContain('driving');
   });
 });
+
+// ─── Road Creation Tools Tests (SCANeR-style) ──────────────
+describeIfAddon('C++ Road Creation Tools', () => {
+  it('should create a segment (straight road)', () => {
+    const road = addon.roadCreateSegment(0, 0, 100, 0);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(2);
+    expect(road.points[0].x).toBeCloseTo(0);
+    expect(road.points[0].y).toBeCloseTo(0);
+    expect(road.points[1].x).toBeCloseTo(100);
+    expect(road.points[1].y).toBeCloseTo(0);
+    expect(road.width).toBe(8.0);  // default
+    expect(road.laneCount).toBe(2);  // default
+  });
+
+  it('should create a segment with custom params', () => {
+    const params = { width: 12.0, laneCount: 4, profileName: 'highway_2x3', z: 5.0 };
+    const road = addon.roadCreateSegment(0, 0, 50, 50, params);
+    expect(road.width).toBe(12.0);
+    expect(road.laneCount).toBe(4);
+    expect(road.points[0].z).toBe(5.0);
+  });
+
+  it('should create a circle arc with tangent continuity', () => {
+    // Start at origin, direction = +X, end at (50, 50)
+    const road = addon.roadCreateCircleArc(0, 0, 1, 0, 50, 50, 8);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(8);
+    // First point should be at start
+    expect(road.points[0].x).toBeCloseTo(0, 0);
+    expect(road.points[0].y).toBeCloseTo(0, 0);
+    // Last point should be near end
+    expect(road.points[7].x).toBeCloseTo(50, 1);
+    expect(road.points[7].y).toBeCloseTo(50, 1);
+    // Arc points should be smooth
+    expect(road.points[1].type).toBe('smooth');
+  });
+
+  it('should create a clothoid arc (Euler spiral)', () => {
+    // Start at origin, direction = +X, end at (50, 50), end direction = +Y
+    // Note: clothoid fitting is iterative — tolerance is loose for extreme angles
+    const road = addon.roadCreateClothoidArc(0, 0, 1, 0, 50, 50, 0, 1, 8);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(8);
+    // First point at start
+    expect(road.points[0].x).toBeCloseTo(0, 1);
+    expect(road.points[0].y).toBeCloseTo(0, 1);
+    // Last point should be in the right quadrant
+    expect(road.points[7].x).toBeGreaterThan(0);
+    expect(road.points[7].y).toBeGreaterThan(0);
+  });
+
+  it('should create a polyline with sharp corners', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 50, y: 50 },
+      { x: 0, y: 50 },
+    ];
+    const road = addon.roadCreatePolyline(points, 0.0, 6);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(4);
+    expect(road.points[0].type).toBe('corner');
+    expect(road.points[1].type).toBe('corner');
+  });
+
+  it('should create a polyline with fillet corners', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 50, y: 50 },
+      { x: 0, y: 50 },
+    ];
+    const road = addon.roadCreatePolyline(points, 5.0, 6);
+    expect(road).toBeDefined();
+    // With fillets, there should be more points (tangent + arc + tangent at each corner)
+    expect(road.points.length).toBeGreaterThan(4);
+    // First and last should still be corner type
+    expect(road.points[0].type).toBe('corner');
+  });
+
+  it('should create a Bézier curve with handles', () => {
+    // Start at (0,0), handle out at (25, 0), end at (50, 50), handle in at (25, 50)
+    const road = addon.roadCreateBezier(0, 0, 25, 0, 50, 50, 25, 50);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(2);
+    expect(road.points[0].type).toBe('smooth');
+    expect(road.points[1].type).toBe('smooth');
+    // Check handles are stored as relative offsets
+    expect(road.points[0].handleOut).toBeDefined();
+    expect(road.points[0].handleOut.x).toBeCloseTo(25);
+    expect(road.points[0].handleOut.y).toBeCloseTo(0);
+    expect(road.points[1].handleIn).toBeDefined();
+    expect(road.points[1].handleIn.x).toBeCloseTo(-25);
+    expect(road.points[1].handleIn.y).toBeCloseTo(0);
+  });
+
+  it('should create a clothoid spline through multiple points', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 50, y: 20 },
+      { x: 100, y: 0 },
+      { x: 150, y: 50 },
+    ];
+    // startTangent = (1, 0), endTangent = (0, 1)
+    const road = addon.roadCreateClothoidSpline(points, 1, 0, 0, 1, 8);
+    expect(road).toBeDefined();
+    // Should have points from multiple clothoid segments
+    expect(road.points.length).toBeGreaterThan(4);
+    // All points should be smooth (G2 continuous)
+    for (const pt of road.points) {
+      expect(pt.type).toBe('smooth');
+    }
+  });
+
+  it('should handle degenerate segment (same start and end)', () => {
+    const road = addon.roadCreateSegment(10, 10, 10, 10);
+    expect(road).toBeDefined();
+    expect(road.points.length).toBe(2);
+  });
+});

@@ -149,7 +149,15 @@ export const ROAD_PROFILES: Record<string, RoadProfile> = {
 };
 
 /** Available editing tools */
-export type Tool = 'select' | 'line' | 'pen' | 'arc';
+/** Available editing tools (SCANeR-style) */
+export type Tool =
+  | 'select'
+  | 'line'        // Segment (straight road)
+  | 'pen'         // Bézier (cubic with handles)
+  | 'arc'         // Circle Arc (constant radius)
+  | 'clothoid'    // Clothoid Arc (Euler spiral transition)
+  | 'polyline'    // Polyline (multi-point, optional fillet)
+  | 'spline';     // Clothoid Spline (G2-continuous multi-segment)
 
 /** Selection state */
 export interface Selection {

@@ -32,6 +32,14 @@ export const ROAD_GENERATE_ROAD_MESH = 'road:generateRoadMesh' as const;
 export const ROAD_GENERATE_INTERSECTION_MESH = 'road:generateIntersectionMesh' as const;
 export const ROAD_EXPORT_OPENDRIVE = 'road:exportOpenDrive' as const;
 
+// ─── Road Creation Tools (SCANeR-style) ─────────────────────
+export const ROAD_CREATE_SEGMENT = 'road:createSegment' as const;
+export const ROAD_CREATE_CIRCLE_ARC = 'road:createCircleArc' as const;
+export const ROAD_CREATE_CLOTHOID_ARC = 'road:createClothoidArc' as const;
+export const ROAD_CREATE_POLYLINE = 'road:createPolyline' as const;
+export const ROAD_CREATE_BEZIER = 'road:createBezier' as const;
+export const ROAD_CREATE_CLOTHOID_SPLINE = 'road:createClothoidSpline' as const;
+
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
 export const DIALOG_SELECT_PACKAGE = 'dialog:selectPackage' as const;

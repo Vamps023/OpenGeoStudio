@@ -6,6 +6,7 @@
 #include "road/clothoid.hpp"
 #include "road/mesh.hpp"
 #include "road/opendrive.hpp"
+#include "road/road_tools.hpp"
 #include <sstream>
 #include <iostream>
 
@@ -146,6 +147,75 @@ static Napi::Object intersectionToJs(Napi::Env env, const GeneratedIntersection&
     obj.Set("crosswalks", crosswalks);
 
     return obj;
+}
+
+// Serialize a Road to a JS object (for tool creation results)
+static Napi::Object roadToJs(Napi::Env env, const Road& road) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("id", Napi::String::New(env, road.id));
+    obj.Set("name", Napi::String::New(env, road.name));
+    obj.Set("width", Napi::Number::New(env, road.width));
+    obj.Set("laneCount", Napi::Number::New(env, road.laneCount));
+
+    auto ptsArr = Napi::Array::New(env, road.points.size());
+    for (size_t i = 0; i < road.points.size(); i++) {
+        auto ptObj = Napi::Object::New(env);
+        ptObj.Set("x", Napi::Number::New(env, road.points[i].position.x));
+        ptObj.Set("y", Napi::Number::New(env, road.points[i].position.y));
+        ptObj.Set("z", Napi::Number::New(env, road.points[i].z));
+        ptObj.Set("type", Napi::String::New(env, road.points[i].type));
+        ptObj.Set("id", Napi::String::New(env, road.points[i].id));
+        if (road.points[i].hasHandleIn) {
+            auto h = Napi::Object::New(env);
+            h.Set("x", Napi::Number::New(env, road.points[i].handleIn.x));
+            h.Set("y", Napi::Number::New(env, road.points[i].handleIn.y));
+            ptObj.Set("handleIn", h);
+        } else {
+            ptObj.Set("handleIn", env.Null());
+        }
+        if (road.points[i].hasHandleOut) {
+            auto h = Napi::Object::New(env);
+            h.Set("x", Napi::Number::New(env, road.points[i].handleOut.x));
+            h.Set("y", Napi::Number::New(env, road.points[i].handleOut.y));
+            ptObj.Set("handleOut", h);
+        } else {
+            ptObj.Set("handleOut", env.Null());
+        }
+        ptsArr.Set(i, ptObj);
+    }
+    obj.Set("points", ptsArr);
+    return obj;
+}
+
+// Parse a Point2D from a JS object { x, y }
+static Point2D parsePoint(const Napi::Value& val) {
+    auto obj = val.As<Napi::Object>();
+    return {obj.Get("x").As<Napi::Number>().DoubleValue(),
+            obj.Get("y").As<Napi::Number>().DoubleValue()};
+}
+
+// Parse an array of Point2D from a JS array
+static std::vector<Point2D> parsePoints(const Napi::Value& val) {
+    std::vector<Point2D> pts;
+    auto arr = val.As<Napi::Array>();
+    pts.reserve(arr.Length());
+    for (uint32_t i = 0; i < arr.Length(); i++) {
+        pts.push_back(parsePoint(arr.Get(i)));
+    }
+    return pts;
+}
+
+// Parse RoadToolParams from a JS object (optional)
+static RoadToolParams parseToolParams(const Napi::Value& val) {
+    RoadToolParams params;
+    if (val.IsObject()) {
+        auto obj = val.As<Napi::Object>();
+        if (obj.Has("width")) params.width = obj.Get("width").As<Napi::Number>().DoubleValue();
+        if (obj.Has("laneCount")) params.laneCount = obj.Get("laneCount").As<Napi::Number>().Int32Value();
+        if (obj.Has("profileName")) params.profileName = obj.Get("profileName").As<Napi::String>().Utf8Value();
+        if (obj.Has("z")) params.z = obj.Get("z").As<Napi::Number>().DoubleValue();
+    }
+    return params;
 }
 
 // ─── N-API functions ───────────────────────────────────────
@@ -422,6 +492,113 @@ static Napi::Value RoadExportOpenDrive(const Napi::CallbackInfo& info) {
 }
 
 // ─── Init function ─────────────────────────────────────────
+// ─── Road Tool Creation Functions (SCANeR-style) ──────────
+
+// roadCreateSegment(startX, startY, endX, endY, params?) → Road
+static Napi::Value RoadCreateSegment(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 4) {
+        Napi::TypeError::New(env, "Expected (startX, startY, endX, endY, params?)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Point2D start{info[0].As<Napi::Number>().DoubleValue(), info[1].As<Napi::Number>().DoubleValue()};
+    Point2D end{info[2].As<Napi::Number>().DoubleValue(), info[3].As<Napi::Number>().DoubleValue()};
+    RoadToolParams params;
+    if (info.Length() >= 5) params = parseToolParams(info[4]);
+    Road road = createSegment(start, end, params);
+    return roadToJs(env, road);
+}
+
+// roadCreateCircleArc(startX, startY, dirX, dirY, endX, endY, numCPs?, params?) → Road
+static Napi::Value RoadCreateCircleArc(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 6) {
+        Napi::TypeError::New(env, "Expected (startX, startY, dirX, dirY, endX, endY, ...)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Point2D start{info[0].As<Napi::Number>().DoubleValue(), info[1].As<Napi::Number>().DoubleValue()};
+    Point2D dir{info[2].As<Napi::Number>().DoubleValue(), info[3].As<Napi::Number>().DoubleValue()};
+    Point2D end{info[4].As<Napi::Number>().DoubleValue(), info[5].As<Napi::Number>().DoubleValue()};
+    int numCPs = 8;
+    if (info.Length() >= 7 && info[6].IsNumber()) numCPs = info[6].As<Napi::Number>().Int32Value();
+    RoadToolParams params;
+    if (info.Length() >= 8) params = parseToolParams(info[7]);
+    Road road = createCircleArc(start, dir, end, numCPs, params);
+    return roadToJs(env, road);
+}
+
+// roadCreateClothoidArc(startX, startY, dirX, dirY, endX, endY, endDirX, endDirY, numCPs?, params?) → Road
+static Napi::Value RoadCreateClothoidArc(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 8) {
+        Napi::TypeError::New(env, "Expected (startX, startY, dirX, dirY, endX, endY, endDirX, endDirY, ...)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Point2D start{info[0].As<Napi::Number>().DoubleValue(), info[1].As<Napi::Number>().DoubleValue()};
+    Point2D dir{info[2].As<Napi::Number>().DoubleValue(), info[3].As<Napi::Number>().DoubleValue()};
+    Point2D end{info[4].As<Napi::Number>().DoubleValue(), info[5].As<Napi::Number>().DoubleValue()};
+    Point2D endDir{info[6].As<Napi::Number>().DoubleValue(), info[7].As<Napi::Number>().DoubleValue()};
+    int numCPs = 8;
+    if (info.Length() >= 9 && info[8].IsNumber()) numCPs = info[8].As<Napi::Number>().Int32Value();
+    RoadToolParams params;
+    if (info.Length() >= 10) params = parseToolParams(info[9]);
+    Road road = createClothoidArc(start, dir, end, endDir, numCPs, params);
+    return roadToJs(env, road);
+}
+
+// roadCreatePolyline(points[], filletRadius?, filletSegments?, params?) → Road
+static Napi::Value RoadCreatePolyline(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsArray()) {
+        Napi::TypeError::New(env, "Expected (points[], filletRadius?, ...)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    auto pts = parsePoints(info[0]);
+    double filletR = 0.0;
+    if (info.Length() >= 2 && info[1].IsNumber()) filletR = info[1].As<Napi::Number>().DoubleValue();
+    int filletSegs = 6;
+    if (info.Length() >= 3 && info[2].IsNumber()) filletSegs = info[2].As<Napi::Number>().Int32Value();
+    RoadToolParams params;
+    if (info.Length() >= 4) params = parseToolParams(info[3]);
+    Road road = createPolyline(pts, filletR, filletSegs, params);
+    return roadToJs(env, road);
+}
+
+// roadCreateBezier(startX, startY, handleOutX, handleOutY, endX, endY, handleInX, handleInY, params?) → Road
+static Napi::Value RoadCreateBezier(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 8) {
+        Napi::TypeError::New(env, "Expected (startX, startY, handleOutX, handleOutY, endX, endY, handleInX, handleInY, params?)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    Point2D start{info[0].As<Napi::Number>().DoubleValue(), info[1].As<Napi::Number>().DoubleValue()};
+    Point2D handleOut{info[2].As<Napi::Number>().DoubleValue(), info[3].As<Napi::Number>().DoubleValue()};
+    Point2D end{info[4].As<Napi::Number>().DoubleValue(), info[5].As<Napi::Number>().DoubleValue()};
+    Point2D handleIn{info[6].As<Napi::Number>().DoubleValue(), info[7].As<Napi::Number>().DoubleValue()};
+    RoadToolParams params;
+    if (info.Length() >= 9) params = parseToolParams(info[8]);
+    Road road = createBezier(start, handleOut, end, handleIn, params);
+    return roadToJs(env, road);
+}
+
+// roadCreateClothoidSpline(points[], startTangentX, startTangentY, endTangentX, endTangentY, segsPerSpan?, params?) → Road
+static Napi::Value RoadCreateClothoidSpline(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 5 || !info[0].IsArray()) {
+        Napi::TypeError::New(env, "Expected (points[], startTangentX, startTangentY, endTangentX, endTangentY, ...)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    auto pts = parsePoints(info[0]);
+    Point2D startTan{info[1].As<Napi::Number>().DoubleValue(), info[2].As<Napi::Number>().DoubleValue()};
+    Point2D endTan{info[3].As<Napi::Number>().DoubleValue(), info[4].As<Napi::Number>().DoubleValue()};
+    int segsPerSpan = 8;
+    if (info.Length() >= 6 && info[5].IsNumber()) segsPerSpan = info[5].As<Napi::Number>().Int32Value();
+    RoadToolParams params;
+    if (info.Length() >= 7) params = parseToolParams(info[6]);
+    Road road = createClothoidSpline(pts, startTan, endTan, segsPerSpan, params);
+    return roadToJs(env, road);
+}
+
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
     exports.Set("roadGenerateIntersection", Napi::Function::New(env, RoadGenerateIntersection));
@@ -433,6 +610,13 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGenerateRoadMesh", Napi::Function::New(env, RoadGenerateRoadMesh));
     exports.Set("roadGenerateIntersectionMesh", Napi::Function::New(env, RoadGenerateIntersectionMesh));
     exports.Set("roadExportOpenDrive", Napi::Function::New(env, RoadExportOpenDrive));
+    // Road creation tools (SCANeR-style)
+    exports.Set("roadCreateSegment", Napi::Function::New(env, RoadCreateSegment));
+    exports.Set("roadCreateCircleArc", Napi::Function::New(env, RoadCreateCircleArc));
+    exports.Set("roadCreateClothoidArc", Napi::Function::New(env, RoadCreateClothoidArc));
+    exports.Set("roadCreatePolyline", Napi::Function::New(env, RoadCreatePolyline));
+    exports.Set("roadCreateBezier", Napi::Function::New(env, RoadCreateBezier));
+    exports.Set("roadCreateClothoidSpline", Napi::Function::New(env, RoadCreateClothoidSpline));
     return exports;
 }
 

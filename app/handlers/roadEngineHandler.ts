@@ -22,6 +22,12 @@ import {
   ROAD_SAMPLE_CENTERLINE,
   ROAD_GEO_TO_LOCAL,
   ROAD_LOCAL_TO_GEO,
+  ROAD_CREATE_SEGMENT,
+  ROAD_CREATE_CIRCLE_ARC,
+  ROAD_CREATE_CLOTHOID_ARC,
+  ROAD_CREATE_POLYLINE,
+  ROAD_CREATE_BEZIER,
+  ROAD_CREATE_CLOTHOID_SPLINE,
 } from '../../shared/ipcChannels-electron';
 
 // ─── Native Addon Interface ────────────────────────────────
@@ -54,6 +60,13 @@ export interface RoadEngineAddon {
   roadSampleCenterline(road: unknown, numSamples?: number): unknown;
   roadGeoToLocal(lat: number, lon: number, refLat: number, refLon: number): { x: number; y: number };
   roadLocalToGeo(x: number, y: number, refLat: number, refLon: number): { lat: number; lon: number };
+  // Road creation tools (SCANeR-style)
+  roadCreateSegment(sx: number, sy: number, ex: number, ey: number, params?: unknown): unknown;
+  roadCreateCircleArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown): unknown;
+  roadCreateClothoidArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown): unknown;
+  roadCreatePolyline(points: unknown[], filletR?: number, filletSegs?: number, params?: unknown): unknown;
+  roadCreateBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): unknown;
+  roadCreateClothoidSpline(points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): unknown;
 }
 
 // ─── Lazy-loaded addon singleton ───────────────────────────
@@ -178,5 +191,42 @@ export async function registerRoadEngineHandlers(): Promise<void> {
       throw new Error('Road engine native addon not available');
     }
     return addon.roadLocalToGeo(x, y, refLat, refLon);
+  });
+
+  // ─── Road Creation Tools (SCANeR-style) ───────────────────
+  ipcMain.handle(ROAD_CREATE_SEGMENT, async (_event, sx, sy, ex, ey, params) => {
+    console.log(tag, 'createSegment()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreateSegment(sx, sy, ex, ey, params);
+  });
+
+  ipcMain.handle(ROAD_CREATE_CIRCLE_ARC, async (_event, sx, sy, dx, dy, ex, ey, numCPs, params) => {
+    console.log(tag, 'createCircleArc()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreateCircleArc(sx, sy, dx, dy, ex, ey, numCPs, params);
+  });
+
+  ipcMain.handle(ROAD_CREATE_CLOTHOID_ARC, async (_event, sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params) => {
+    console.log(tag, 'createClothoidArc()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreateClothoidArc(sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params);
+  });
+
+  ipcMain.handle(ROAD_CREATE_POLYLINE, async (_event, points, filletR, filletSegs, params) => {
+    console.log(tag, 'createPolyline() — points:', points?.length);
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreatePolyline(points, filletR, filletSegs, params);
+  });
+
+  ipcMain.handle(ROAD_CREATE_BEZIER, async (_event, sx, sy, hox, hoy, ex, ey, hix, hiy, params) => {
+    console.log(tag, 'createBezier()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreateBezier(sx, sy, hox, hoy, ex, ey, hix, hiy, params);
+  });
+
+  ipcMain.handle(ROAD_CREATE_CLOTHOID_SPLINE, async (_event, points, stx, sty, etx, ety, segsPerSpan, params) => {
+    console.log(tag, 'createClothoidSpline() — points:', points?.length);
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadCreateClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params);
   });
 }

@@ -10,6 +10,7 @@ import React from 'react';
 import {
   MousePointer2, Spline, PenTool, Undo2, Redo2, Trash2,
   Check, Mountain, Grid3x3, Magnet, Square, Box, GitMerge, X, Circle,
+  Waves, Route, Meh,
 } from 'lucide-react';
 import { useRoadStudioStore } from './store/roadStudioStore';
 import { ROAD_PROFILES } from '../shared/types';
@@ -94,9 +95,12 @@ export const RoadToolbar: React.FC = () => {
       {/* ─── Tools ─────────────────────────────── */}
       <div className="flex items-center gap-1">
         <ToolButton active={tool === 'select'} onClick={() => setTool('select')} icon={<MousePointer2 size={14} />} label="Select" shortcut="V" />
-        <ToolButton active={tool === 'line'} onClick={() => setTool('line')} icon={<Spline size={14} />} label="Line" shortcut="L" />
-        <ToolButton active={tool === 'pen'} onClick={() => setTool('pen')} icon={<PenTool size={14} />} label="Pen" shortcut="P" />
+        <ToolButton active={tool === 'line'} onClick={() => setTool('line')} icon={<Spline size={14} />} label="Segment" shortcut="L" />
         <ToolButton active={tool === 'arc'} onClick={() => setTool('arc')} icon={<Circle size={14} />} label="Arc" shortcut="A" />
+        <ToolButton active={tool === 'clothoid'} onClick={() => setTool('clothoid')} icon={<Waves size={14} />} label="Clothoid" shortcut="C" />
+        <ToolButton active={tool === 'polyline'} onClick={() => setTool('polyline')} icon={<Route size={14} />} label="Polyline" shortcut="O" />
+        <ToolButton active={tool === 'pen'} onClick={() => setTool('pen')} icon={<PenTool size={14} />} label="Bézier" shortcut="P" />
+        <ToolButton active={tool === 'spline'} onClick={() => setTool('spline')} icon={<Spline size={14} />} label="Spline" shortcut="S" />
       </div>
 
       <div className="w-px h-6 bg-edge mx-1" />

@@ -41,6 +41,12 @@ import {
   ROAD_GENERATE_ROAD_MESH,
   ROAD_GENERATE_INTERSECTION_MESH,
   ROAD_EXPORT_OPENDRIVE,
+  ROAD_CREATE_SEGMENT,
+  ROAD_CREATE_CIRCLE_ARC,
+  ROAD_CREATE_CLOTHOID_ARC,
+  ROAD_CREATE_POLYLINE,
+  ROAD_CREATE_BEZIER,
+  ROAD_CREATE_CLOTHOID_SPLINE,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -116,6 +122,13 @@ export interface ElectronAPI {
     sampleCenterline: (road: unknown, numSamples?: number) => Promise<unknown>;
     geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) => Promise<{ x: number; y: number }>;
     localToGeo: (x: number, y: number, refLat: number, refLon: number) => Promise<{ lat: number; lon: number }>;
+    // Road creation tools (SCANeR-style)
+    createSegment: (sx: number, sy: number, ex: number, ey: number, params?: unknown) => Promise<unknown>;
+    createCircleArc: (sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown) => Promise<unknown>;
+    createClothoidArc: (sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown) => Promise<unknown>;
+    createPolyline: (points: unknown[], filletR?: number, filletSegs?: number, params?: unknown) => Promise<unknown>;
+    createBezier: (sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown) => Promise<unknown>;
+    createClothoidSpline: (points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown) => Promise<unknown>;
   };
 }
 
@@ -190,6 +203,19 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(ROAD_GEO_TO_LOCAL, lat, lon, refLat, refLon),
     localToGeo: (x, y, refLat, refLon) =>
       ipcRenderer.invoke(ROAD_LOCAL_TO_GEO, x, y, refLat, refLon),
+    // Road creation tools (SCANeR-style)
+    createSegment: (sx, sy, ex, ey, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_SEGMENT, sx, sy, ex, ey, params),
+    createCircleArc: (sx, sy, dx, dy, ex, ey, numCPs, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_CIRCLE_ARC, sx, sy, dx, dy, ex, ey, numCPs, params),
+    createClothoidArc: (sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_CLOTHOID_ARC, sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params),
+    createPolyline: (points, filletR, filletSegs, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_POLYLINE, points, filletR, filletSegs, params),
+    createBezier: (sx, sy, hox, hoy, ex, ey, hix, hiy, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_BEZIER, sx, sy, hox, hoy, ex, ey, hix, hiy, params),
+    createClothoidSpline: (points, stx, sty, etx, ety, segsPerSpan, params) =>
+      ipcRenderer.invoke(ROAD_CREATE_CLOTHOID_SPLINE, points, stx, sty, etx, ety, segsPerSpan, params),
   },
 };
 

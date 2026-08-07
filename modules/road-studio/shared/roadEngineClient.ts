@@ -49,6 +49,13 @@ declare global {
         sampleCenterline(road: unknown, numSamples?: number): Promise<unknown>;
         geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
         localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
+        // Road creation tools
+        createSegment(sx: number, sy: number, ex: number, ey: number, params?: unknown): Promise<unknown>;
+        createCircleArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown): Promise<unknown>;
+        createClothoidArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown): Promise<unknown>;
+        createPolyline(points: unknown[], filletR?: number, filletSegs?: number, params?: unknown): Promise<unknown>;
+        createBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): Promise<unknown>;
+        createClothoidSpline(points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown>;
       };
     };
   }
@@ -126,6 +133,13 @@ export interface RoadEngineAPI {
   sampleCenterline(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>>;
   geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
   localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
+  // Road creation tools (SCANeR-style)
+  createSegment(sx: number, sy: number, ex: number, ey: number, params?: unknown): Promise<unknown>;
+  createCircleArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown): Promise<unknown>;
+  createClothoidArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown): Promise<unknown>;
+  createPolyline(points: Array<{ x: number; y: number }>, filletR?: number, filletSegs?: number, params?: unknown): Promise<unknown>;
+  createBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): Promise<unknown>;
+  createClothoidSpline(points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown>;
   /** Whether the C++ native engine is available */
   isNative(): boolean;
 }
@@ -224,6 +238,26 @@ class NativeRoadEngine implements RoadEngineAPI {
   async localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }> {
     return this.api.localToGeo(x, y, refLat, refLon);
   }
+
+  // ─── Road creation tools (SCANeR-style) ───────────────────
+  async createSegment(sx: number, sy: number, ex: number, ey: number, params?: unknown): Promise<unknown> {
+    return this.api.createSegment(sx, sy, ex, ey, params);
+  }
+  async createCircleArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown): Promise<unknown> {
+    return this.api.createCircleArc(sx, sy, dx, dy, ex, ey, numCPs, params);
+  }
+  async createClothoidArc(sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown): Promise<unknown> {
+    return this.api.createClothoidArc(sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params);
+  }
+  async createPolyline(points: Array<{ x: number; y: number }>, filletR?: number, filletSegs?: number, params?: unknown): Promise<unknown> {
+    return this.api.createPolyline(points, filletR, filletSegs, params);
+  }
+  async createBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): Promise<unknown> {
+    return this.api.createBezier(sx, sy, hox, hoy, ex, ey, hix, hiy, params);
+  }
+  async createClothoidSpline(points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown> {
+    return this.api.createClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params);
+  }
 }
 
 // ─── Lazy singleton ────────────────────────────────────────
@@ -282,4 +316,17 @@ export const roadEngine = {
     getRoadEngine().geoToLocal(lat, lon, refLat, refLon),
   localToGeo: (x: number, y: number, refLat: number, refLon: number) =>
     getRoadEngine().localToGeo(x, y, refLat, refLon),
+  // Road creation tools (SCANeR-style)
+  createSegment: (sx: number, sy: number, ex: number, ey: number, params?: unknown) =>
+    getRoadEngine().createSegment(sx, sy, ex, ey, params),
+  createCircleArc: (sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, numCPs?: number, params?: unknown) =>
+    getRoadEngine().createCircleArc(sx, sy, dx, dy, ex, ey, numCPs, params),
+  createClothoidArc: (sx: number, sy: number, dx: number, dy: number, ex: number, ey: number, edx: number, edy: number, numCPs?: number, params?: unknown) =>
+    getRoadEngine().createClothoidArc(sx, sy, dx, dy, ex, ey, edx, edy, numCPs, params),
+  createPolyline: (points: Array<{ x: number; y: number }>, filletR?: number, filletSegs?: number, params?: unknown) =>
+    getRoadEngine().createPolyline(points, filletR, filletSegs, params),
+  createBezier: (sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown) =>
+    getRoadEngine().createBezier(sx, sy, hox, hoy, ex, ey, hix, hiy, params),
+  createClothoidSpline: (points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown) =>
+    getRoadEngine().createClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params),
 };
