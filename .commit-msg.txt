@@ -1,80 +1,78 @@
-Phase 2.4: Lane boundary & centerline sampling
+Phase 2.5: Lane Network — persistent lane representation
 
-Introduces the sampling layer that converts lane evaluation (2.3)
-into polylines with adaptive refinement. First production feature
-— produces visible output (polylines) from the lane engine.
+Introduces the canonical lane network that all downstream subsystems
+consume. Generated once from RoadV2, shared by markings, mesh, AI,
+OpenDRIVE, and debug overlays.
 
-New file: lane_sampling.hpp
+New file: lane_network.hpp
   Separation of concerns:
     lane_engine.hpp   = Data model
     lane_geometry.hpp = Evaluation (single point)
     lane_sampling.hpp = Sampling (polyline generation)
+    lane_network.hpp  = Persistent lane representation (THIS FILE)
 
-  SamplePoint struct:
-    - position (Point2D): world-space x, y
-    - s: arc-length along reference line (for UV, OpenDRIVE)
-    - heading: heading angle (for lane markings, debug)
-    - laneOffset: lateral offset (for mesh generation)
-
-  LanePolyline struct:
-    - laneId, isBoundary, isOuter metadata
-    - vector<SamplePoint> points
+  LaneCenterline struct:
+    - laneId, type (Driving/Shoulder/Border)
+    - startS, endS, length
+    - vector<SamplePoint> samples (adaptively sampled)
+    - isDrivable(), isCenter/Left/Right()
     - positions() convenience accessor
-    - length() total polyline length
 
-  SamplingParams:
-    - maxError: 0.25m chord error tolerance
-    - maxSpacing: 10m maximum spacing between samples
-    - minSamples, maxSamples bounds
+  LaneBoundary struct:
+    - innerLaneId, outerLaneId (which lanes it separates)
+    - isRoadEdge (true for outer edge of road)
+    - startS, endS, length
+    - markType, markColor, markWidth (default markings assigned)
+    - vector<SamplePoint> samples
+    - id() debug string
 
-  Functions:
-    - sampleLaneCenter(road, laneId, params): lane centerline polyline
-    - sampleLaneBoundary(road, laneId, outer, params): lane edge polyline
-    - sampleAllBoundaries(road, params): all lane boundaries
-    - sampleAllCenterlines(road, params): all lane centerlines
+  LaneNetwork struct:
+    - roadId, totalLength, numLaneSections
+    - vector<LaneCenterline> centerlines
+    - vector<LaneBoundary> boundaries
+    - findCenterline(laneId), findCenterlines(laneId) (multi-section)
+    - findBoundaries(innerId, outerId)
+    - roadEdges(), centerLines()
+    - maxDrivableLanes()
 
-  Adaptive sampling:
-    - Curvature-based recursive midpoint displacement
-    - More samples in high-curvature regions (arcs, spirals, bezier)
-    - Fewer samples in straight regions
-    - maxSpacing ensures minimum sampling density
-    - Reuses Phase 1 sampleAdaptive philosophy
+  generateLaneNetwork(road, params):
+    - Generates all centerlines and boundaries from RoadV2
+    - Handles multi-section roads (separate centerlines per section)
+    - Handles legacy roads (synthesized from width/laneCount)
+    - Uses adaptive sampling from 2.4
+    - Assigns default markings:
+      - Center line (adjacent to lane 0): dashed yellow
+      - Inner lane boundaries: dashed white
+      - Road edges: solid white
 
-Tests (26 new doctest, 387 total, 3492 assertions):
-  Basic sampling (7):
-    - Straight road correct points
-    - Straight road few samples
-    - All points at correct y offset
-    - Inner/outer boundary edges
-    - positions() accessor
-    - length() computation
-  Adaptive sampling (3):
-    - Arc produces more samples than straight
-    - Bezier produces more samples than straight
-    - Custom error tolerance affects sample count
-  Continuity (3):
-    - Line→arc continuous
-    - Arc→spiral continuous (computed arc endpoint)
-    - Line→bezier continuous
+  Multi-section handling:
+    - Each section generates its own set of centerlines/boundaries
+    - Lane 1 in a 2→4 transition produces 2 centerlines
+    - Section s-ranges are [startS_i, startS_{i+1})
+    - Centerlines at section boundaries are position-continuous
+
+Tests (20 new doctest, 407 total, 3662 assertions):
+  Basic generation (4):
+    - 2-lane: 3 centerlines, correct lane IDs, metadata, positions
+  Boundaries (3):
+    - 2-lane: 4 boundaries, correct positions, markings assigned
+    - LaneBoundary::id() string
+  4-lane road (2):
+    - 5 centerlines, 6 boundaries, 2 road edges
+    - All centerline positions verified
   Multi-section (2):
-    - 2→4 lane transition
-    - Lane boundary continuity at section change
+    - 2→4 lane transition: 8 centerlines, lane 1 has 2
+    - Centerline continuous across section boundary
   Legacy (1):
-    - Synthesized lanes sample correctly
-  sampleAll (3):
-    - 2-lane: 6 boundaries, 3 centerlines
-    - 4-lane: 10 boundaries
-  SamplePoint metadata (3):
-    - s values monotonic
-    - heading correct on straight road
-    - laneOffset constant for constant width
+    - Synthesized lane network works correctly
+  Queries (4):
+    - findBoundaries, roadEdges, centerLines, maxDrivableLanes
+  Arc road (1):
+    - Network generates correctly with curvature
+  Edge cases (1):
+    - Empty road produces empty network
   Performance (1):
-    - 1000-segment road, 8 lanes, 18 polylines
-  Variable width (1):
-    - Tapering lane centerline moves toward reference
-  Edge cases (2):
-    - Empty road returns empty polyline
-    - Single point road
+    - 1000-segment, 8 lanes, full network generation
 
-No mesh generation, no markings, no rendering. Those are 2.6+.
+No rendering, no markings decoration, no mesh. Those are 2.6+.
 All 130 vitest tests pass (no regression).

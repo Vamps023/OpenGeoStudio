@@ -6718,3 +6718,484 @@ TEST_CASE("2.4 Edge case: single point road") {
     LanePolyline pl = sampleLaneCenter(road, 1);
     CHECK(pl.numPoints() >= 2);  // at least start and end
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.5 — Lane Network Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for LaneNetwork, LaneCenterline, LaneBoundary, and
+// generateLaneNetwork(). This is the persistent lane representation
+// that all downstream subsystems consume.
+// ═══════════════════════════════════════════════════════════
+
+#include "lane_network.hpp"
+
+using geo::LaneNetwork;
+using geo::LaneCenterline;
+using geo::LaneBoundary;
+using geo::generateLaneNetwork;
+
+// ═══════════════════════════════════════════════════════════
+// Basic Generation Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 generateLaneNetwork: 2-lane road produces 3 centerlines") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numCenterlines() == 3);  // center + left + right
+    CHECK(net.numBoundaries() > 0);
+    CHECK(net.totalLength == doctest::Approx(100.0));
+    CHECK(net.numLaneSections == 1);
+}
+
+TEST_CASE("2.5 generateLaneNetwork: centerlines have correct lane IDs") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.findCenterline(0) != nullptr);
+    CHECK(net.findCenterline(1) != nullptr);
+    CHECK(net.findCenterline(-1) != nullptr);
+    CHECK(net.findCenterline(99) == nullptr);
+}
+
+TEST_CASE("2.5 generateLaneNetwork: centerline metadata is correct") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    const LaneCenterline* right = net.findCenterline(1);
+    REQUIRE(right != nullptr);
+    CHECK(right->laneId == 1);
+    CHECK(right->type == LaneType::Driving);
+    CHECK(right->isDrivable() == true);
+    CHECK(right->isRight() == true);
+    CHECK(right->startS == doctest::Approx(0.0));
+    CHECK(right->endS == doctest::Approx(100.0));
+    CHECK(right->numSamples() >= 2);
+    CHECK(right->length == doctest::Approx(100.0).epsilon(0.01));
+}
+
+TEST_CASE("2.5 generateLaneNetwork: centerline positions are correct") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    const LaneCenterline* right = net.findCenterline(1);
+    REQUIRE(right != nullptr);
+
+    // Right lane center at y=-1.75
+    for (const auto& s : right->samples) {
+        CHECK(s.position.y == doctest::Approx(-1.75));
+    }
+
+    const LaneCenterline* left = net.findCenterline(-1);
+    REQUIRE(left != nullptr);
+    for (const auto& s : left->samples) {
+        CHECK(s.position.y == doctest::Approx(1.75));
+    }
+
+    const LaneCenterline* center = net.findCenterline(0);
+    REQUIRE(center != nullptr);
+    for (const auto& s : center->samples) {
+        CHECK(s.position.y == doctest::Approx(0.0));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Boundary Generation Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 generateLaneNetwork: 2-lane road produces correct boundaries") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // 2-lane road: lanes -1, 0, +1
+    // Right boundaries: (0,1), (1, road edge)
+    // Left boundaries: (0,-1), (-1, road edge)
+    // Total: 4 boundaries
+    CHECK(net.numBoundaries() == 4);
+
+    // Should have 2 road edges
+    auto edges = net.roadEdges();
+    CHECK(edges.size() == 2);
+
+    // Should have 2 center lines (adjacent to lane 0)
+    auto centerLines = net.centerLines();
+    CHECK(centerLines.size() == 2);  // (0,1) and (0,-1)
+}
+
+TEST_CASE("2.5 generateLaneNetwork: boundary positions are correct") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Find boundary between center (0) and lane 1
+    auto bounds = net.findBoundaries(0, 1);
+    REQUIRE(bounds.size() >= 1);
+
+    for (const auto& b : bounds) {
+        for (const auto& s : b->samples) {
+            CHECK(s.position.y == doctest::Approx(0.0));  // center line
+        }
+    }
+
+    // Find road edge on right side (boundary after lane 1)
+    auto rightEdges = net.findBoundaries(1, 0);
+    REQUIRE(rightEdges.size() >= 1);
+    for (const auto& b : rightEdges) {
+        CHECK(b->isRoadEdge == true);
+        for (const auto& s : b->samples) {
+            CHECK(s.position.y == doctest::Approx(-3.5));  // outer edge
+        }
+    }
+}
+
+TEST_CASE("2.5 generateLaneNetwork: boundary markings are assigned") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Center line (boundary 0→1): dashed yellow
+    auto centerBounds = net.findBoundaries(0, 1);
+    REQUIRE(centerBounds.size() >= 1);
+    CHECK(centerBounds[0]->markType == LaneRoadMarkType::Dashed);
+    CHECK(centerBounds[0]->markColor == "yellow");
+
+    // Road edge: solid white
+    auto edges = net.roadEdges();
+    for (const auto& e : edges) {
+        CHECK(e->markType == LaneRoadMarkType::Solid);
+        CHECK(e->markColor == "white");
+    }
+}
+
+TEST_CASE("2.5 LaneBoundary: id() string is correct") {
+    LaneBoundary b;
+    b.innerLaneId = 1;
+    b.outerLaneId = 2;
+    CHECK(b.id() == "boundary(1,2)");
+}
+
+// ═══════════════════════════════════════════════════════════
+// 4-Lane Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 4-lane road: correct centerline count") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numCenterlines() == 5);  // 2 left + center + 2 right
+
+    // Boundaries:
+    // Right: (0,1), (1,2), (2,edge) = 3
+    // Left: (0,-1), (-1,-2), (-2,edge) = 3
+    // Total: 6
+    CHECK(net.numBoundaries() == 6);
+
+    // 2 road edges
+    CHECK(net.roadEdges().size() == 2);
+}
+
+TEST_CASE("2.5 4-lane road: all centerline positions") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Right lanes: y = -1.75, -5.25
+    const LaneCenterline* r1 = net.findCenterline(1);
+    REQUIRE(r1 != nullptr);
+    CHECK(r1->samples[0].position.y == doctest::Approx(-1.75));
+
+    const LaneCenterline* r2 = net.findCenterline(2);
+    REQUIRE(r2 != nullptr);
+    CHECK(r2->samples[0].position.y == doctest::Approx(-5.25));
+
+    // Left lanes: y = +1.75, +5.25
+    const LaneCenterline* l1 = net.findCenterline(-1);
+    REQUIRE(l1 != nullptr);
+    CHECK(l1->samples[0].position.y == doctest::Approx(1.75));
+
+    const LaneCenterline* l2 = net.findCenterline(-2);
+    REQUIRE(l2 != nullptr);
+    CHECK(l2->samples[0].position.y == doctest::Approx(5.25));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Section Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 Multi-section: 2→4 lane transition") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    // Section 1: 2 lanes (s=0 to 100)
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    // Section 2: 4 lanes (s=100 to 200)
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numLaneSections == 2);
+
+    // Section 1: 3 centerlines (lanes -1, 0, 1)
+    // Section 2: 5 centerlines (lanes -2, -1, 0, 1, 2)
+    // Total: 8 centerlines
+    CHECK(net.numCenterlines() == 8);
+
+    // Lane 1 appears in both sections → 2 centerlines
+    auto lane1Cls = net.findCenterlines(1);
+    CHECK(lane1Cls.size() == 2);
+
+    // Lane 2 only in section 2 → 1 centerline
+    auto lane2Cls = net.findCenterlines(2);
+    CHECK(lane2Cls.size() == 1);
+
+    // Check s-ranges
+    CHECK(lane1Cls[0]->startS == doctest::Approx(0.0));
+    CHECK(lane1Cls[0]->endS == doctest::Approx(100.0));
+    CHECK(lane1Cls[1]->startS == doctest::Approx(100.0));
+    CHECK(lane1Cls[1]->endS == doctest::Approx(200.0));
+}
+
+TEST_CASE("2.5 Multi-section: lane 1 centerline is continuous across boundary") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    auto lane1Cls = net.findCenterlines(1);
+    REQUIRE(lane1Cls.size() == 2);
+
+    // End of section 1 centerline should match start of section 2
+    Point2D endSec1 = lane1Cls[0]->samples.back().position;
+    Point2D startSec2 = lane1Cls[1]->samples.front().position;
+
+    CHECK(endSec1.x == doctest::Approx(startSec2.x));
+    CHECK(endSec1.y == doctest::Approx(startSec2.y));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Legacy Synthesis Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 Legacy: synthesized lane network works") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+    // No explicit LaneSection
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numCenterlines() == 3);  // synthesized: -1, 0, +1
+    CHECK(net.numBoundaries() == 4);
+    CHECK(net.numLaneSections == 1);
+
+    // Right lane at y=-1.75
+    const LaneCenterline* right = net.findCenterline(1);
+    REQUIRE(right != nullptr);
+    CHECK(right->samples[0].position.y == doctest::Approx(-1.75));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Query Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 LaneNetwork: findBoundaries returns correct results") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Boundary between center (0) and lane 1
+    auto bounds01 = net.findBoundaries(0, 1);
+    CHECK(bounds01.size() == 1);
+
+    // Boundary between lane 1 and road edge
+    auto bounds1edge = net.findBoundaries(1, 0);
+    CHECK(bounds1edge.size() == 1);
+    CHECK(bounds1edge[0]->isRoadEdge == true);
+
+    // Non-existent boundary
+    auto bounds99 = net.findBoundaries(99, 100);
+    CHECK(bounds99.size() == 0);
+}
+
+TEST_CASE("2.5 LaneNetwork: roadEdges returns only edges") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    auto edges = net.roadEdges();
+    CHECK(edges.size() == 2);
+
+    for (const auto& e : edges) {
+        CHECK(e->isRoadEdge == true);
+        CHECK(e->markType == LaneRoadMarkType::Solid);
+    }
+}
+
+TEST_CASE("2.5 LaneNetwork: centerLines returns boundaries adjacent to center") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    auto centerLines = net.centerLines();
+    CHECK(centerLines.size() == 2);  // (0,1) and (0,-1)
+
+    for (const auto& cl : centerLines) {
+        CHECK(cl->markColor == "yellow");
+    }
+}
+
+TEST_CASE("2.5 LaneNetwork: maxDrivableLanes counts drivable only") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Shoulder, Polynomial3(2.0)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // 3 driving lanes (-1, 1, 2), shoulder and border not drivable
+    CHECK(net.maxDrivableLanes() == 3);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Arc Road Test
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 Arc road: lane network generates correctly") {
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numCenterlines() == 3);
+    CHECK(net.numBoundaries() == 4);
+
+    // Centerlines should have more samples than straight road (curvature)
+    const LaneCenterline* right = net.findCenterline(1);
+    REQUIRE(right != nullptr);
+    CHECK(right->numSamples() >= 2);
+    CHECK(right->length == doctest::Approx(100.0).epsilon(0.1));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Edge Cases
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 Edge case: empty road produces empty network") {
+    RoadV2 road;  // no segments
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    CHECK(net.numCenterlines() == 0);
+    CHECK(net.numBoundaries() == 0);
+    CHECK(net.totalLength == doctest::Approx(0.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Performance Benchmark
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.5 Performance: 1000-segment road, 8 lanes, full network") {
+    RoadV2 road;
+    road.reserveSegments(1000);
+    for (int i = 0; i < 1000; i++) {
+        double x1 = i * 10.0;
+        double y1 = (i % 2 == 0) ? 0.0 : 1.0;
+        double x2 = (i + 1) * 10.0;
+        double y2 = (i % 2 == 0) ? 1.0 : 0.0;
+        road.addSegment<LineSegment>(Point2D(x1, y1), Point2D(x2, y2));
+    }
+    road.width = 28.0;
+    road.laneCount = 8;
+
+    LaneSection ls(0.0);
+    for (int i = 4; i >= 1; i--) {
+        ls.addLane(Lane(-i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    for (int i = 1; i <= 4; i++) {
+        ls.addLane(Lane(i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    road.addLaneSection(std::move(ls));
+
+    auto start = std::chrono::high_resolution_clock::now();
+    LaneNetwork net = generateLaneNetwork(road);
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    INFO("9 lanes network generated in " << ms << " ms");
+    CHECK(net.numCenterlines() == 9);
+    // 4 right boundaries + 1 right edge + 4 left boundaries + 1 left edge = 10
+    CHECK(net.numBoundaries() == 10);
+
+    // Should be well under interactive budget
+    CHECK(ms < 1000.0);
+}
