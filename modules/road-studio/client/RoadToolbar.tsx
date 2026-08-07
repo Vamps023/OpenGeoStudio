@@ -76,7 +76,7 @@ export const RoadToolbar: React.FC = () => {
   const selectedRoadIds = useRoadStudioStore((s) => s.selectedRoadIds);
   const toggleRoadSelection = useRoadStudioStore((s) => s.toggleRoadSelection);
   const clearRoadSelection = useRoadStudioStore((s) => s.clearRoadSelection);
-  const createIntersectionAtClosestPoint = useRoadStudioStore((s) => s.createIntersectionAtClosestPoint);
+  const detectIntersection = useRoadStudioStore((s) => s.detectIntersection);
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -250,12 +250,17 @@ export const RoadToolbar: React.FC = () => {
         )}
         {selectedRoadIds.length === 2 && (
           <button
-            onClick={() => createIntersectionAtClosestPoint(selectedRoadIds[0], selectedRoadIds[1])}
+            onClick={() => {
+              const success = detectIntersection(selectedRoadIds[0], selectedRoadIds[1]);
+              if (!success) {
+                alert('No intersection found between the selected roads. Make sure their centerlines cross or come close together.');
+              }
+            }}
             className="flex items-center gap-1.5 px-3 h-8 rounded-md bg-accent/20 text-accent border border-accent/40 text-xs font-medium hover:bg-accent/30 transition-colors"
-            title="Create intersection at closest point between the 2 selected roads"
+            title="Detect intersection: splits roads, trims ends, generates junction with lane connectivity"
           >
             <GitMerge size={14} />
-            Create Intersection
+            Detect Intersection
           </button>
         )}
         {selectedRoadIds.length > 0 && (

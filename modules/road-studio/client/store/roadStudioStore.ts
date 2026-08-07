@@ -6,8 +6,8 @@
  */
 
 import { create } from 'zustand';
-import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection } from '../../shared/types';
-import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo } from '../../shared/types';
+import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection } from '../../shared/types';
+import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal } from '../../shared/types';
 
 interface RoadStudioState {
   /** All roads in the project */
@@ -43,6 +43,8 @@ interface RoadStudioState {
   showMapOverlay: boolean;
   /** Detected intersections (auto-computed from road endpoints) */
   intersections: Intersection[];
+  /** Generated intersections (from Detect Intersection tool) */
+  generatedIntersections: GeneratedIntersection[];
 
   // ─── Actions ────────────────────────────────────
 
@@ -115,6 +117,9 @@ interface RoadStudioState {
   /** Manually create an intersection between 2 roads at their closest point */
   createIntersectionAtClosestPoint: (roadId1: string, roadId2: string) => void;
 
+  /** Detect intersection between 2 roads (full algorithm: split, trim, generate) */
+  detectIntersection: (roadId1: string, roadId2: string) => boolean;
+
   /** Get the currently drawing road */
   getDrawingRoad: () => Road | null;
 }
@@ -145,6 +150,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   viewMode: 'top',
   showMapOverlay: false,
   intersections: [],
+  generatedIntersections: [],
 
   setTool: (tool) => {
     const state = get();
@@ -566,6 +572,141 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       selectedRoadIds: [],
       selection: { roadId: null, pointIndices: [], handle: null },
     });
+  },
+
+  detectIntersection: (roadId1, roadId2) => {
+    const state = get();
+    const road1 = state.roads.find((r) => r.id === roadId1);
+    const road2 = state.roads.find((r) => r.id === roadId2);
+    if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return false;
+
+    // Run the full intersection generation algorithm
+    const generated = generateIntersection(road1, road2, state.refLat, state.refLon);
+    if (!generated) return false;
+
+    // Step 3 (split): Trim the original roads at the intersection boundary
+    // For each road, find the closest sample to the intersection center,
+    // then trim the road to end at the trim distance from center.
+    const trimRoad = (road: Road): Road => {
+      const samples = sampleRoad(road, state.refLat, state.refLon, 24);
+      if (samples.length < 2) return road;
+
+      // Find closest sample to intersection center
+      let closestIdx = 0;
+      let closestDist = Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const d = Math.sqrt((samples[i].x - generated.center.x) ** 2 + (samples[i].y - generated.center.y) ** 2);
+        if (d < closestDist) { closestDist = d; closestIdx = i; }
+      }
+
+      // Find which approaches belong to this road
+      const roadApproaches = generated.approaches.filter((a) => a.roadId === road.id);
+      if (roadApproaches.length === 0) return road;
+
+      // Determine trim indices: the road should be cut at the intersection
+      // Keep the part before the first approach's start, and the part after the last approach's end
+      const maxHalfWidth = Math.max(road1.width, road2.width) / 2;
+      const trimDist = maxHalfWidth + 2;
+
+      // Find the sample indices at trim distance from center (before and after closest)
+      let trimBefore = -1;
+      let trimAfter = -1;
+      for (let i = 0; i < samples.length; i++) {
+        const d = Math.sqrt((samples[i].x - generated.center.x) ** 2 + (samples[i].y - generated.center.y) ** 2);
+        if (i <= closestIdx && d >= trimDist) trimBefore = i;
+        if (i >= closestIdx && d >= trimDist && trimAfter === -1) trimAfter = i;
+      }
+
+      // Build new control points: keep points before trimBefore and after trimAfter
+      // Convert sample points back to lat/lon
+      const newPoints: ControlPoint[] = [];
+
+      // Keep original control points that are before the trim region
+      // Simple approach: find which original control points are outside the trim zone
+      for (const cp of road.points) {
+        const local = geoToLocal(cp.lat, cp.lon, state.refLat, state.refLon);
+        const d = Math.sqrt((local.x - generated.center.x) ** 2 + (local.y - generated.center.y) ** 2);
+        if (d >= trimDist) {
+          newPoints.push(cp);
+        }
+      }
+
+      // If we removed all points, keep the road as-is (shouldn't happen)
+      if (newPoints.length < 2) return road;
+
+      // Add trimmed endpoints at the trim boundary
+      // Find the direction from center toward the first remaining point
+      if (newPoints.length > 0) {
+        const firstLocal = geoToLocal(newPoints[0].lat, newPoints[0].lon, state.refLat, state.refLon);
+        const dx1 = firstLocal.x - generated.center.x;
+        const dy1 = firstLocal.y - generated.center.y;
+        const d1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+        if (d1 > trimDist) {
+          // Add a trimmed point at trimDist from center (toward first point)
+          const trimPt = localToGeo(
+            generated.center.x + (dx1 / d1) * trimDist,
+            generated.center.y + (dy1 / d1) * trimDist,
+            state.refLat, state.refLon
+          );
+          newPoints.unshift({
+            id: generateId(),
+            lat: trimPt.lat, lon: trimPt.lon, z: generated.approaches[0]?.z ?? 0,
+            handleIn: null, handleOut: null, type: 'corner',
+          });
+        }
+
+        const lastLocal = geoToLocal(newPoints[newPoints.length - 1].lat, newPoints[newPoints.length - 1].lon, state.refLat, state.refLon);
+        const dx2 = lastLocal.x - generated.center.x;
+        const dy2 = lastLocal.y - generated.center.y;
+        const d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        if (d2 > trimDist) {
+          const trimPt = localToGeo(
+            generated.center.x + (dx2 / d2) * trimDist,
+            generated.center.y + (dy2 / d2) * trimDist,
+            state.refLat, state.refLon
+          );
+          newPoints.push({
+            id: generateId(),
+            lat: trimPt.lat, lon: trimPt.lon, z: generated.approaches[0]?.z ?? 0,
+            handleIn: null, handleOut: null, type: 'corner',
+          });
+        }
+      }
+
+      return { ...road, points: newPoints };
+    };
+
+    const updatedRoads = state.roads.map((r) =>
+      r.id === roadId1 || r.id === roadId2 ? trimRoad(r) : r
+    );
+
+    // Also create an Intersection object for compatibility with existing rendering
+    const ixLocal = generated.center;
+    const ixGeo = localToGeo(ixLocal.x, ixLocal.y, state.refLat, state.refLon);
+    const newIntersection: Intersection = {
+      id: `ix_${generateId()}`,
+      name: `Intersection ${state.intersections.length + state.generatedIntersections.length + 1}`,
+      lat: ixGeo.lat,
+      lon: ixGeo.lon,
+      z: generated.approaches[0]?.z ?? 0,
+      connections: generated.approaches.map((a) => ({
+        roadId: a.roadId,
+        end: 'end' as const, // approaches are always from the end
+      })),
+      bannedLinks: [],
+      autoDetected: false,
+    };
+
+    get().pushHistory('Detect intersection');
+    set({
+      roads: updatedRoads,
+      intersections: [...state.intersections, newIntersection],
+      generatedIntersections: [...state.generatedIntersections, generated],
+      selectedRoadIds: [],
+      selection: { roadId: null, pointIndices: [], handle: null },
+    });
+
+    return true;
   },
 
   getDrawingRoad: () => {

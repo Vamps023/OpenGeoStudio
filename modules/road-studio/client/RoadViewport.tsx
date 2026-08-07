@@ -26,6 +26,7 @@ import {
   type Road,
   type ControlPoint,
   type Intersection,
+  type GeneratedIntersection,
   geoToLocal,
   localToGeo,
   sampleRoad,
@@ -65,6 +66,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   });
   const roadsRef = useRef<Road[]>([]);
   const intersectionsRef = useRef<Intersection[]>([]);
+  const generatedIntersectionsRef = useRef<GeneratedIntersection[]>([]);
   const selectedRoadIdsRef = useRef<string[]>([]);
   const refLatRef = useRef(18.52);
   const refLonRef = useRef(73.85);
@@ -85,6 +87,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { toolRef.current = store.tool; }, [store.tool]);
   useEffect(() => { selectionRef.current = store.selection; }, [store.selection]);
   useEffect(() => { selectedRoadIdsRef.current = store.selectedRoadIds; updateAllViews(); }, [store.selectedRoadIds]);
+  useEffect(() => { generatedIntersectionsRef.current = store.generatedIntersections; updateAllViews(); }, [store.generatedIntersections]);
   useEffect(() => {
     roadsRef.current = store.roads;
     // Recompute intersections whenever roads change
@@ -223,14 +226,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     const style = map.getStyle();
     if (style?.layers) {
       for (const layer of style.layers) {
-        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-')) {
+        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-') || layer.id.startsWith('gi-')) {
           map.removeLayer(layer.id);
         }
       }
     }
     if (style?.sources) {
       for (const src of Object.keys(style.sources)) {
-        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-')) {
+        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-') || src.startsWith('gi-')) {
           map.removeSource(src);
         }
       }
@@ -652,6 +655,163 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           'circle-color': '#ff6b6b',
           'circle-stroke-color': '#ffffff',
           'circle-stroke-width': 1.5,
+        },
+      });
+    }
+
+    // ─── Generated intersections (full algorithm: polygon + stop lines + crosswalks + lane paths) ───
+    const genIntersections = generatedIntersectionsRef.current;
+    for (let gi = 0; gi < genIntersections.length; gi++) {
+      const gen = genIntersections[gi];
+
+      // 1. Intersection surface polygon
+      if (gen.polygon.length >= 3) {
+        const polyCoords: [number, number][] = gen.polygon.map((p) => {
+          const geo = localToGeo(p.x, p.y, refLat, refLon);
+          return [geo.lon, geo.lat];
+        });
+        polyCoords.push(polyCoords[0]); // close ring
+
+        const giSrcId = `gi-src-${gi}`;
+        map.addSource(giSrcId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: { genIdx: gi },
+            geometry: { type: 'Polygon', coordinates: [polyCoords] },
+          },
+        });
+
+        // Intersection surface (asphalt)
+        map.addLayer({
+          id: `gi-surface-${gi}`,
+          type: 'fill',
+          source: giSrcId,
+          paint: { 'fill-color': '#383838', 'fill-opacity': 0.95 },
+        });
+
+        // Intersection outline (white)
+        map.addLayer({
+          id: `gi-outline-${gi}`,
+          type: 'line',
+          source: giSrcId,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-opacity': 0.5 },
+        });
+      }
+
+      // 2. Stop lines (white, thick, perpendicular to each approach)
+      for (const sl of gen.stopLines) {
+        const p1Geo = localToGeo(sl.p1.x, sl.p1.y, refLat, refLon);
+        const p2Geo = localToGeo(sl.p2.x, sl.p2.y, refLat, refLon);
+        const slSrcId = `gi-sl-src-${gi}-${sl.approach}`;
+        map.addSource(slSrcId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: { type: 'LineString', coordinates: [[p1Geo.lon, p1Geo.lat], [p2Geo.lon, p2Geo.lat]] },
+          },
+        });
+        map.addLayer({
+          id: `gi-sl-${gi}-${sl.approach}`,
+          type: 'line',
+          source: slSrcId,
+          layout: { 'line-cap': 'round' },
+          paint: { 'line-color': '#ffffff', 'line-width': 3, 'line-opacity': 0.9 },
+        });
+      }
+
+      // 3. Crosswalks (white striped rectangles)
+      for (const cw of gen.crosswalks) {
+        const cwCoords: [number, number][] = cw.corners.map((c) => {
+          const geo = localToGeo(c.x, c.y, refLat, refLon);
+          return [geo.lon, geo.lat];
+        });
+        cwCoords.push(cwCoords[0]); // close ring
+
+        const cwSrcId = `gi-cw-src-${gi}-${cw.approach}`;
+        map.addSource(cwSrcId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: { type: 'Polygon', coordinates: [cwCoords] },
+          },
+        });
+        // Crosswalk outline
+        map.addLayer({
+          id: `gi-cw-${gi}-${cw.approach}`,
+          type: 'line',
+          source: cwSrcId,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-opacity': 0.7 },
+        });
+        // Crosswalk fill (semi-transparent white)
+        map.addLayer({
+          id: `gi-cw-fill-${gi}-${cw.approach}`,
+          type: 'fill',
+          source: cwSrcId,
+          paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.15 },
+        });
+      }
+
+      // 4. Lane connection paths (colored by turn type)
+      const turnColors: Record<string, string> = {
+        straight: '#4ecca3', // green
+        left: '#ffaa00',     // orange
+        right: '#ff6b6b',    // red
+      };
+      for (let li = 0; li < gen.laneConnections.length; li++) {
+        const lc = gen.laneConnections[li];
+        if (lc.path.length < 2) continue;
+        const pathCoords: [number, number][] = lc.path.map((p) => {
+          const geo = localToGeo(p.x, p.y, refLat, refLon);
+          return [geo.lon, geo.lat];
+        });
+        const lcSrcId = `gi-lc-src-${gi}-${li}`;
+        map.addSource(lcSrcId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: { type: lc.type },
+            geometry: { type: 'LineString', coordinates: pathCoords },
+          },
+        });
+        map.addLayer({
+          id: `gi-lc-${gi}-${li}`,
+          type: 'line',
+          source: lcSrcId,
+          layout: { 'line-cap': 'round' },
+          paint: {
+            'line-color': turnColors[lc.type] || '#ffffff',
+            'line-width': 1.5,
+            'line-opacity': 0.4,
+            'line-dasharray': [2, 1],
+          },
+        });
+      }
+
+      // 5. Intersection center marker
+      const centerGeo = localToGeo(gen.center.x, gen.center.y, refLat, refLon);
+      const giCenterSrc = `gi-center-src-${gi}`;
+      map.addSource(giCenterSrc, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'Point', coordinates: [centerGeo.lon, centerGeo.lat] },
+        },
+      });
+      map.addLayer({
+        id: `gi-center-${gi}`,
+        type: 'circle',
+        source: giCenterSrc,
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#ff6b6b',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
         },
       });
     }
@@ -1343,6 +1503,144 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       ixMarker.material = ixMarkerMat;
       ixMarker.isPickable = false;
       roadMeshesRef.current.set(`ix_marker_${ix.id}`, ixMarker);
+    }
+
+    // ─── Generated intersections in 3D (full algorithm) ────────
+    const genIntersections = generatedIntersectionsRef.current;
+    for (let gi = 0; gi < genIntersections.length; gi++) {
+      const gen = genIntersections[gi];
+      const zHeight = (gen.approaches[0]?.z ?? 0) + 0.03;
+
+      // 1. Intersection surface mesh (filled polygon)
+      if (gen.polygon.length >= 3) {
+        const positions: number[] = [];
+        const indices: number[] = [];
+        const uvs: number[] = [];
+
+        // Center vertex
+        positions.push(gen.center.x, zHeight, gen.center.y);
+        uvs.push(0.5, 0.5);
+
+        // Boundary vertices
+        for (let i = 0; i < gen.polygon.length; i++) {
+          positions.push(gen.polygon[i].x, zHeight, gen.polygon[i].y);
+          const dx = gen.polygon[i].x - gen.center.x;
+          const dy = gen.polygon[i].y - gen.center.y;
+          uvs.push(0.5 + dx / 20, 0.5 + dy / 20);
+        }
+
+        // Fan triangulation
+        for (let i = 0; i < gen.polygon.length; i++) {
+          const next = (i + 1) % gen.polygon.length;
+          indices.push(0, i + 1, next + 1);
+        }
+
+        const giMesh = new Mesh(`gi_surface_${gi}`, scene);
+        const giVd = new VertexData();
+        giVd.positions = positions;
+        giVd.indices = indices;
+        giVd.uvs = uvs;
+        const giNormals: number[] = [];
+        VertexData.ComputeNormals(positions, indices, giNormals);
+        giVd.normals = giNormals;
+        giVd.applyToMesh(giMesh, true);
+
+        const giMat = new StandardMaterial(`gi_mat_${gi}`, scene);
+        giMat.backFaceCulling = false;
+        const giTex = getTexture('asphalt', scene);
+        if (giTex) {
+          giMat.diffuseTexture = giTex;
+          giMat.diffuseColor = new Color3(0.9, 0.9, 0.9);
+        } else {
+          giMat.diffuseColor = new Color3(0.22, 0.22, 0.22);
+        }
+        giMat.emissiveColor = new Color3(0.12, 0.12, 0.12);
+        giMat.specularColor = new Color3(0.05, 0.05, 0.05);
+        giMesh.material = giMat;
+        giMesh.isPickable = false;
+        roadMeshesRef.current.set(`gi_surface_${gi}`, giMesh);
+      }
+
+      // 2. Stop lines (thin white strips)
+      for (const sl of gen.stopLines) {
+        const slMesh = MeshBuilder.CreateLines(
+          `gi_sl_${gi}_${sl.approach}`,
+          {
+            points: [
+              new Vector3(sl.p1.x, zHeight + 0.02, sl.p1.y),
+              new Vector3(sl.p2.x, zHeight + 0.02, sl.p2.y),
+            ],
+          },
+          scene
+        );
+        const slMat = new StandardMaterial(`gi_sl_mat_${gi}_${sl.approach}`, scene);
+        slMat.emissiveColor = new Color3(1, 1, 1);
+        slMat.disableLighting = true;
+        slMat.lineWidth = 4;
+        slMesh.material = slMat;
+        slMesh.isPickable = false;
+        roadMeshesRef.current.set(`gi_sl_${gi}_${sl.approach}`, slMesh);
+      }
+
+      // 3. Crosswalks (white striped rectangles)
+      for (const cw of gen.crosswalks) {
+        if (cw.corners.length < 4) continue;
+        const cwPositions: number[] = [];
+        const cwIndices: number[] = [];
+        for (const c of cw.corners) {
+          cwPositions.push(c.x, zHeight + 0.04, c.y);
+        }
+        // Two triangles for the rectangle
+        cwIndices.push(0, 1, 2, 0, 2, 3);
+
+        const cwMesh = new Mesh(`gi_cw_${gi}_${cw.approach}`, scene);
+        const cwVd = new VertexData();
+        cwVd.positions = cwPositions;
+        cwVd.indices = cwIndices;
+        const cwNormals: number[] = [];
+        VertexData.ComputeNormals(cwPositions, cwIndices, cwNormals);
+        cwVd.normals = cwNormals;
+        cwVd.applyToMesh(cwMesh, true);
+
+        const cwMat = new StandardMaterial(`gi_cw_mat_${gi}_${cw.approach}`, scene);
+        cwMat.backFaceCulling = false;
+        cwMat.diffuseColor = new Color3(0.95, 0.95, 0.95);
+        cwMat.emissiveColor = new Color3(0.25, 0.25, 0.25);
+        cwMat.specularColor = new Color3(0, 0, 0);
+        cwMesh.material = cwMat;
+        cwMesh.isPickable = false;
+        roadMeshesRef.current.set(`gi_cw_${gi}_${cw.approach}`, cwMesh);
+      }
+
+      // 4. Lane connection paths (colored lines)
+      const turnColors3D: Record<string, Color3> = {
+        straight: new Color3(0.3, 0.8, 0.64),
+        left: new Color3(1, 0.67, 0),
+        right: new Color3(1, 0.42, 0.42),
+      };
+      for (let li = 0; li < gen.laneConnections.length; li++) {
+        const lc = gen.laneConnections[li];
+        if (lc.path.length < 2) continue;
+        const lcPoints = lc.path.map((p) => new Vector3(p.x, zHeight + 0.06, p.y));
+        const lcMesh = MeshBuilder.CreateLines(`gi_lc_${gi}_${li}`, { points: lcPoints }, scene);
+        const lcMat = new StandardMaterial(`gi_lc_mat_${gi}_${li}`, scene);
+        lcMat.emissiveColor = turnColors3D[lc.type] || new Color3(1, 1, 1);
+        lcMat.disableLighting = true;
+        lcMesh.material = lcMat;
+        lcMesh.isPickable = false;
+        roadMeshesRef.current.set(`gi_lc_${gi}_${li}`, lcMesh);
+      }
+
+      // 5. Intersection center marker (red sphere)
+      const giMarker = MeshBuilder.CreateSphere(`gi_marker_${gi}`, { diameter: 1.5, segments: 8 }, scene);
+      giMarker.position = new Vector3(gen.center.x, zHeight + 1, gen.center.y);
+      const giMarkerMat = new StandardMaterial(`gi_marker_mat_${gi}`, scene);
+      giMarkerMat.diffuseColor = new Color3(1, 0.3, 0.3);
+      giMarkerMat.emissiveColor = new Color3(0.4, 0.1, 0.1);
+      giMarkerMat.specularColor = new Color3(0, 0, 0);
+      giMarker.material = giMarkerMat;
+      giMarker.isPickable = false;
+      roadMeshesRef.current.set(`gi_marker_${gi}`, giMarker);
     }
   }
 
