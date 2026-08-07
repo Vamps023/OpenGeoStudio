@@ -742,7 +742,7 @@ function generateIntersectionFromPoint(
 
   // Step 3: Trim distance = max road width / 2 + margin
   const maxHalfWidth = Math.max(road1.width, road2.width) / 2;
-  const trimDist = maxHalfWidth + 2; // 2m margin beyond road edge
+  const trimDist = maxHalfWidth + Math.min(maxHalfWidth, 5) + 3; // half-width + corner radius + margin
 
   // Step 4: Build 4 approaches (each road split into 2 halves at the intersection)
   const approaches: ApproachRoad[] = [];
@@ -929,13 +929,36 @@ function generateIntersectionFromPoint(
 /**
  * Generate the intersection polygon from approach road edges + rounded corners.
  */
+/**
+ * Generate the intersection polygon from approach road edges + rounded corner fillets.
+ *
+ * Instead of a convex hull, this builds a proper polygon by:
+ * 1. Computing left/right edge points for each approach at the intersection boundary
+ * 2. Sorting approaches by angle around the center
+ * 3. Connecting adjacent approach edges with fillet arcs (bezier curves)
+ *
+ * The result is a polygon that follows road edges and has rounded corners,
+ * adapting to the angle between roads.
+ */
 function generateIntersectionPolygon(
   approaches: ApproachRoad[],
   center: Point2D,
   trimDist: number
 ): Point2D[] {
-  // Collect edge points for each approach (left and right edges at the intersection boundary)
-  const edgePoints: Point2D[] = [];
+  if (approaches.length < 2) return [];
+
+  // Step 1: Compute edge points for each approach
+  // Each approach has a left edge and right edge at the intersection boundary
+  interface ApproachEdges {
+    approach: ApproachRoad;
+    leftEdge: Point2D;   // left edge point (when looking from center outward)
+    rightEdge: Point2D;  // right edge point
+    leftInner: Point2D;  // edge point closer to center (at trimDist)
+    rightInner: Point2D;
+    angle: number;       // angle of approach direction from center
+  }
+
+  const approachEdges: ApproachEdges[] = [];
 
   for (const approach of approaches) {
     if (approach.centerline.length < 2) continue;
@@ -946,21 +969,141 @@ function generateIntersectionPolygon(
       y: approach.centerline[1].y - approach.centerline[0].y,
     };
     const tLen = Math.sqrt(tangent.x * tangent.x + tangent.y * tangent.y) || 1;
-    const nx = -tangent.y / tLen;
-    const ny = tangent.x / tLen;
+    const tx = tangent.x / tLen;
+    const ty = tangent.y / tLen;
+    // Normal (perpendicular, pointing left when looking outward)
+    const nx = -ty;
+    const ny = tx;
     const halfW = approach.width / 2;
 
-    // Left and right edge points
-    edgePoints.push(
-      { x: edge.x + nx * halfW, y: edge.y + ny * halfW },
-      { x: edge.x - nx * halfW, y: edge.y - ny * halfW }
-    );
+    // Edge points at the boundary (trimDist from center)
+    const leftEdge: Point2D = { x: edge.x + nx * halfW, y: edge.y + ny * halfW };
+    const rightEdge: Point2D = { x: edge.x - nx * halfW, y: edge.y - ny * halfW };
+
+    // Angle of this approach from center
+    const dx = edge.x - center.x;
+    const dy = edge.y - center.y;
+    const angle = Math.atan2(dy, dx);
+
+    approachEdges.push({
+      approach,
+      leftEdge,
+      rightEdge,
+      leftInner: leftEdge,
+      rightInner: rightEdge,
+      angle,
+    });
   }
 
-  if (edgePoints.length < 3) return edgePoints;
+  if (approachEdges.length < 2) return [];
 
-  // Compute convex hull of all edge points → intersection polygon
-  return convexHull(edgePoints);
+  // Step 2: Sort approaches by angle around center
+  approachEdges.sort((a, b) => a.angle - b.angle);
+
+  // Step 3: Build polygon by connecting edges with fillet arcs
+  // For each pair of adjacent approaches, connect the right edge of one
+  // to the left edge of the next with a rounded corner
+  const polygon: Point2D[] = [];
+  const filletRadius = Math.min(
+    ...approachEdges.map((ae) => ae.approach.width / 2),
+    5 // max 5m radius
+  );
+  const filletSegments = 6;
+
+  for (let i = 0; i < approachEdges.length; i++) {
+    const current = approachEdges[i];
+    const next = approachEdges[(i + 1) % approachEdges.length];
+
+    // Add the right edge of current approach
+    polygon.push(current.rightEdge);
+
+    // Add fillet arc from current.rightEdge to next.leftEdge
+    // The corner is approximately at the intersection of the two road edge lines
+    const corner = computeCornerPoint(current.rightEdge, current.approach, next.leftEdge, next.approach, center);
+    if (corner) {
+      // Compute directions from corner to each edge point
+      const dirA = {
+        x: current.rightEdge.x - corner.x,
+        y: current.rightEdge.y - corner.y,
+      };
+      const dirB = {
+        x: next.leftEdge.x - corner.x,
+        y: next.leftEdge.y - corner.y,
+      };
+      // Normalize
+      const lenA = Math.sqrt(dirA.x ** 2 + dirA.y ** 2) || 1;
+      const lenB = Math.sqrt(dirB.x ** 2 + dirB.y ** 2) || 1;
+      const arc = filletArc(
+        corner,
+        { x: dirA.x / lenA, y: dirA.y / lenA },
+        { x: dirB.x / lenB, y: dirB.y / lenB },
+        Math.min(filletRadius, lenA * 0.8, lenB * 0.8),
+        filletSegments
+      );
+      // arc goes from near current.rightEdge to near next.leftEdge
+      for (let j = 1; j < arc.length - 1; j++) {
+        polygon.push(arc[j]);
+      }
+    }
+
+    // Add the left edge of next approach
+    polygon.push(next.leftEdge);
+  }
+
+  return polygon;
+}
+
+/**
+ * Compute the corner point where two road edge lines meet.
+ * This is the intersection of the right edge of approach A and left edge of approach B.
+ */
+function computeCornerPoint(
+  edgeA: Point2D,
+  approachA: ApproachRoad,
+  edgeB: Point2D,
+  approachB: ApproachRoad,
+  center: Point2D
+): Point2D | null {
+  // Direction from center toward edgeA (along road A edge, pointing outward)
+  const dirA = {
+    x: edgeA.x - center.x,
+    y: edgeA.y - center.y,
+  };
+  const dirB = {
+    x: edgeB.x - center.x,
+    y: edgeB.y - center.y,
+  };
+
+  // The corner is roughly at the midpoint, projected outward
+  // For a simple approximation, use the intersection of lines from edgeA and edgeB
+  // along their road tangents
+  if (approachA.centerline.length < 2 || approachB.centerline.length < 2) {
+    return { x: (edgeA.x + edgeB.x) / 2, y: (edgeA.y + edgeB.y) / 2 };
+  }
+
+  // Tangent of approach A (outward direction)
+  const tA = {
+    x: approachA.centerline[1].x - approachA.centerline[0].x,
+    y: approachA.centerline[1].y - approachA.centerline[0].y,
+  };
+  // Tangent of approach B (outward direction)
+  const tB = {
+    x: approachB.centerline[1].x - approachB.centerline[0].x,
+    y: approachB.centerline[1].y - approachB.centerline[0].y,
+  };
+
+  // Line A: from edgeA, direction = tangent of A (the edge runs along the road)
+  // Line B: from edgeB, direction = tangent of B
+  // Find intersection of these two lines
+  const result = segmentIntersection(
+    { p1: edgeA, p2: { x: edgeA.x + tA.x * 100, y: edgeA.y + tA.y * 100 } },
+    { p1: edgeB, p2: { x: edgeB.x + tB.x * 100, y: edgeB.y + tB.y * 100 } }
+  );
+
+  if (result) return result;
+
+  // Fallback: midpoint
+  return { x: (edgeA.x + edgeB.x) / 2, y: (edgeA.y + edgeB.y) / 2 };
 }
 
 /**

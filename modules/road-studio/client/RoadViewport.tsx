@@ -312,6 +312,25 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     const selection = selectionRef.current;
     const refLat = refLatRef.current;
     const refLon = refLonRef.current;
+    const genIntersections = generatedIntersectionsRef.current;
+
+    // Helper: check if a local point is inside any generated intersection zone
+    function isInsideIntersection(x: number, y: number): boolean {
+      for (const gen of genIntersections) {
+        const d = Math.sqrt((x - gen.center.x) ** 2 + (y - gen.center.y) ** 2);
+        const maxHalfW = Math.max(...gen.approaches.map((a) => a.width / 2));
+        if (d < maxHalfW + 8) return true; // generous zone for markings removal
+      }
+      return false;
+    }
+
+    // Helper: filter samples to remove those inside intersection zones
+    function filterSamplesOutsideIntersections(
+      samples: Array<{ x: number; y: number; z: number }>
+    ): Array<{ x: number; y: number; z: number }> {
+      if (genIntersections.length === 0) return samples;
+      return samples.filter((s) => !isInsideIntersection(s.x, s.y));
+    }
 
     // ─── Helper: build a road polygon (left edge + reversed right edge) ───
     // Offsets the centerline by ±halfWidth in meters, converts to lat/lon
@@ -466,11 +485,13 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       });
 
       // ─── Layer 5: Lane divider lines (dashed white) ────────────
-      if (road.laneCount > 1) {
+      // Filter out samples inside intersection zones
+      const filteredSamples = filterSamplesOutsideIntersections(samples);
+      if (road.laneCount > 1 && filteredSamples.length >= 2) {
         const laneSpacing = road.width / road.laneCount;
         for (let lane = 1; lane < road.laneCount; lane++) {
           const offset = -halfWidth + laneSpacing * lane;
-          const dividerCoords = buildOffsetLine(samples, offset);
+          const dividerCoords = buildOffsetLine(filteredSamples, offset);
           const divSrcId = `rd-div-src-${road.id}-${lane}`;
           map.addSource(divSrcId, {
             type: 'geojson',
@@ -492,10 +513,12 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
 
       // ─── Layer 6: Center line (dashed yellow) ──────────────────
-      const centerCoords = samples.map((s) => {
+      // Use filtered samples (no markings inside intersection)
+      const centerCoords = filteredSamples.map((s) => {
         const geo = localToGeo(s.x, s.y, refLat, refLon);
         return [geo.lon, geo.lat];
       });
+      if (centerCoords.length < 2) continue; // skip if all samples were inside intersection
       const centerSrcId = `rd-center-src-${road.id}`;
       map.addSource(centerSrcId, {
         type: 'geojson',
@@ -729,7 +752,6 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     }
 
     // ─── Generated intersections (full algorithm: polygon + stop lines + crosswalks + lane paths) ───
-    const genIntersections = generatedIntersectionsRef.current;
     for (let gi = 0; gi < genIntersections.length; gi++) {
       const gen = genIntersections[gi];
 
