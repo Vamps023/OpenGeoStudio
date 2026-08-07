@@ -69,6 +69,7 @@ inline Road createSegment(
     road.width = params.width;
     road.laneCount = params.laneCount;
     road.profileName = params.profileName;
+    road.formatVersion = 2;
 
     ControlPoint cpStart;
     cpStart.position = start;
@@ -120,6 +121,7 @@ inline Road createCircleArc(
     road.width = params.width;
     road.laneCount = params.laneCount;
     road.profileName = params.profileName;
+    road.formatVersion = 2;
 
     // Compute the arc using the existing arc computation
     CircleArc arcResult = computeCircleArc(start, startDirection, end, numControlPoints * 4);
@@ -128,6 +130,15 @@ inline Road createCircleArc(
         // Fallback: straight line
         return createSegment(start, end, params);
     }
+
+    // Compute exact arc parameters for SegmentMetadata
+    double startHeading = std::atan2(startDirection.y, startDirection.x);
+    // Signed curvature: positive = left/CCW, negative = right/CW
+    // sweep > 0 = left turn (CCW), sweep < 0 = right turn (CW)
+    double signedCurvature = (arcResult.radius > EPSILON)
+        ? arcResult.sweep / std::abs(arcResult.sweep) / arcResult.radius
+        : 0.0;
+    double arcLength = arcResult.radius * std::abs(arcResult.sweep);
 
     // Sample control points along the arc (fewer than render samples)
     for (int i = 0; i < numControlPoints; i++) {
@@ -139,6 +150,17 @@ inline Road createCircleArc(
         cp.z = params.z;
         cp.type = "smooth";  // arc points are smooth
         cp.id = "cp_arc_" + std::to_string(i);
+
+        // First control point gets the exact arc metadata
+        if (i == 0) {
+            SegmentMetadata meta;
+            meta.kind = SegmentKind::Arc;
+            meta.startHeading = startHeading;
+            meta.curvature = signedCurvature;
+            meta.arcLength = arcLength;
+            cp.segmentMeta = meta;
+        }
+
         road.points.push_back(cp);
     }
 
@@ -181,6 +203,7 @@ inline Road createClothoidArc(
     road.width = params.width;
     road.laneCount = params.laneCount;
     road.profileName = params.profileName;
+    road.formatVersion = 2;
 
     // Use the existing clothoid fitting
     double initialA = 50.0;  // initial guess for clothoid parameter
@@ -195,6 +218,17 @@ inline Road createClothoidArc(
         return createSegment(start, end, params);
     }
 
+    // Compute exact spiral parameters for SegmentMetadata
+    double startHeading = std::atan2(startDirection.y, startDirection.x);
+    double k0 = clothoid.params.kappa0;
+    double k1 = clothoid.params.kappa1;
+    // Sign the curvatures based on turn direction
+    if (!clothoid.params.isLeftTurn) {
+        k0 = -k0;
+        k1 = -k1;
+    }
+    double spiralLength = clothoid.params.L;
+
     // Sample control points along the clothoid
     for (int i = 0; i < numControlPoints; i++) {
         double t = static_cast<double>(i) / (numControlPoints - 1);
@@ -205,6 +239,18 @@ inline Road createClothoidArc(
         cp.z = params.z;
         cp.type = "smooth";  // clothoid points are smooth
         cp.id = "cp_clothoid_" + std::to_string(i);
+
+        // First control point gets the exact spiral metadata
+        if (i == 0) {
+            SegmentMetadata meta;
+            meta.kind = SegmentKind::Spiral;
+            meta.startHeading = startHeading;
+            meta.curvatureStart = k0;
+            meta.curvatureEnd = k1;
+            meta.segmentLength = spiralLength;
+            cp.segmentMeta = meta;
+        }
+
         road.points.push_back(cp);
     }
 

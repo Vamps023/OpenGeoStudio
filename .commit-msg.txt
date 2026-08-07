@@ -1,35 +1,40 @@
-Phase 1.8.3c: roadToV2Legacy() — legacy compatibility reconstruction
+Phase 1.8.3d: Tool metadata generation + serialization + round-trip
 
-Adds a separate legacy compatibility adapter path that preserves
-the rendered geometry without attempting to recover the original
-authoring primitive. No geometry fitting, no heuristics.
+Completes the authoring pipeline: tool → metadata → serialization →
+exact reconstruction. Newly created arcs and spirals never enter the
+legacy compatibility path.
 
 Changes:
-- ReconstructionMode enum (Exact, LegacyGeometry, Unsupported)
-- AdapterReport strengthened:
-  - exactSegments / legacySegments / unsupportedSegments (renamed)
-  - exact flag (true only if all segments were exact)
-  - legacySegmentIndices (which segments used compatibility mode)
-  - unsupportedSegmentIndices (which segments had problems)
-- roadToV2() (exact path): renamed fields, populates new indices
-- roadToV2Legacy() (new): preserves geometry as Line/Bezier
-  - Corner points → LineSegment (preserves sampled polyline)
-  - Handle points → BezierSegment (preserves exact curve)
-  - No warnings (compatibility mode is expected behavior)
-  - All segments marked as LegacyGeometry in report
+- SegmentKind enum replaces free-form string type (Line, Bezier, Arc, Spiral)
+- SegmentMetadata: version field added (schema evolution)
+- Road: formatVersion field added (1=legacy, 2=with segmentMeta)
+- createCircleArc(): emits SegmentMetadata(kind=Arc) on first CP
+  with exact curvature, arcLength, startHeading
+- createClothoidArc(): emits SegmentMetadata(kind=Spiral) on first CP
+  with exact curvatureStart, curvatureEnd, segmentLength, startHeading
+- createSegment(): sets formatVersion=2
+- road_adapter.hpp: whole-curve metadata path (Arc/Spiral on CP[0]
+  creates a single segment, skipping sampled CPs)
+- road_adapter.hpp: exhaustive switch with default case for corrupted data
+- road_bridge.cpp: full segmentMeta serialization (parse + output)
+  - segmentMetaToJs: serializes metadata to JS object
+  - parseSegmentMeta: parses metadata from JS object
+  - Old files without segmentMeta → nullopt (legacy adapter path)
+  - New files with segmentMeta → exact adapter path
 
-Tests (19 new, 208 total, 1117 assertions):
-- Basic: empty, single point, corner→Line, handles→Bezier, metadata,
-  purity
-- Centerline parity: straight_2pt, straight_5pt, arc_quarter (17 CPs),
-  s_clothoid (17 CPs), tiny_segments (31 CPs) — all verify positions
-  at control points match
-- Total length parity: matches sum of CP distances, matches
-  legacy Road::length()
-- Comparison: roadToV2 vs roadToV2Legacy for line, bezier, and
-  arc-metadata roads (exact uses ArcSegment, legacy uses Line)
-- AdapterReport: exact=true for all-line, exact=false for unknown
-  metadata, legacySegmentIndices populated correctly
+Tests (16 new, 224 total, 1185 assertions):
+- Tool metadata emission: arc/clothoid emit metadata on first CP,
+  correct parameters, formatVersion=2
+- roadToV2 produces ArcSegment/SpiralSegment from tool metadata
+  (not LineSegment), exact=true, no warnings
+- Round-trip: arc → roadToV2 → centerline matches at endpoints,
+  curvature is constant, length matches metadata
+- Round-trip: clothoid → roadToV2 → length matches, curvature
+  transitions from k0 to k1
+- Backward compat: old file (metadata stripped, formatVersion=1)
+  uses LineSegments, both adapter paths work
+- SegmentKind enum: distinct values, default is Line, all fields
+  constructible
 
 All 113 vitest tests remain green (no regression).
 Legacy Road path is completely untouched.

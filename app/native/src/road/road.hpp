@@ -11,6 +11,17 @@
 
 namespace geo {
 
+// ─── Segment Kind ──────────────────────────────────────────
+// Strongly-typed enum for segment classification.
+// Replaces free-form string types to avoid typos and enable
+// exhaustive switch matching.
+enum class SegmentKind {
+    Line,
+    Bezier,
+    Arc,
+    Spiral
+};
+
 // ─── Segment Metadata ──────────────────────────────────────
 // Optional metadata stored in a ControlPoint to enable exact
 // reconstruction of non-Bezier geometry segments (Arc, Spiral).
@@ -23,19 +34,23 @@ namespace geo {
 // (i.e., the segment from this CP to the next CP).
 //
 // Field semantics (OpenDRIVE-style):
-//   type = "arc":     curvature + length describe a constant-radius arc
-//   type = "spiral":  curvatureStart + curvatureEnd + length describe a clothoid
-//   type = "line":    (no metadata needed — straight line is implicit)
-//   type = "bezier":  (no metadata needed — handles are the metadata)
+//   kind = Arc:    curvature + arcLength describe a constant-radius arc
+//   kind = Spiral: curvatureStart + curvatureEnd + segmentLength describe a clothoid
+//   kind = Line:   (no metadata needed — straight line is implicit)
+//   kind = Bezier: (no metadata needed — handles are the metadata)
+//
+// Future: migrate to std::variant<LineMeta, BezierMeta, ArcMeta, SpiralMeta>
+// For now, shared fields keep the struct simple and serializable.
 struct SegmentMetadata {
-    std::string type;              // "arc", "spiral", "line", "bezier"
+    SegmentKind kind = SegmentKind::Line;
+    int version = 1;               // schema version for future evolution
 
-    // Arc parameters (type = "arc")
+    // Arc parameters (kind = Arc)
     double curvature = 0.0;        // signed curvature (1/radius), positive = left/CCW
     double arcLength = 0.0;        // arc length in meters
     double startHeading = 0.0;     // heading at segment start (radians)
 
-    // Spiral parameters (type = "spiral")
+    // Spiral parameters (kind = Spiral)
     double curvatureStart = 0.0;   // κ₀ at segment start
     double curvatureEnd = 0.0;     // κ₁ at segment end
     double segmentLength = 0.0;    // total segment length in meters
@@ -69,6 +84,7 @@ struct Road {
     std::string profileName = "city_2x1";
     std::string startIntersectionId;
     std::string endIntersectionId;
+    int formatVersion = 2;       // schema version (1=legacy, 2=with segmentMeta)
 
     // Sample the road centerline at N points
     // Uses cubic bezier for smooth points, linear for corner points

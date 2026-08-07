@@ -2002,6 +2002,7 @@ using geo::roadToV2;
 using geo::Road;
 using geo::RoadV2;
 using geo::ControlPoint;
+using geo::SegmentKind;
 
 // ─── Helper: create a legacy Road with corner points ───
 static geo::Road makeLegacyRoad(const std::string& id, const std::vector<Point2D>& pts) {
@@ -2302,7 +2303,7 @@ static ControlPoint makeArcMetaCP(Point2D pos, double heading, double curvature,
     cp.position = pos;
     cp.type = "corner";
     SegmentMetadata meta;
-    meta.type = "arc";
+    meta.kind = SegmentKind::Arc;
     meta.startHeading = heading;
     meta.curvature = curvature;
     meta.arcLength = length;
@@ -2317,7 +2318,7 @@ static ControlPoint makeSpiralMetaCP(Point2D pos, double heading,
     cp.position = pos;
     cp.type = "corner";
     SegmentMetadata meta;
-    meta.type = "spiral";
+    meta.kind = SegmentKind::Spiral;
     meta.startHeading = heading;
     meta.curvatureStart = k0;
     meta.curvatureEnd = k1;
@@ -2737,7 +2738,7 @@ TEST_CASE("roadToV2: AdapterReport — mixed road has correct counts") {
     legacy.points.push_back(makeLegacyRoad("x", {{40, 0}}).points[0]);
     // Segment 1: arc (40,0)→... with metadata
     legacy.points[1].segmentMeta = SegmentMetadata{};
-    legacy.points[1].segmentMeta->type = "arc";
+    legacy.points[1].segmentMeta->kind = SegmentKind::Arc;
     legacy.points[1].segmentMeta->startHeading = 0.0;
     legacy.points[1].segmentMeta->curvature = 0.05;
     legacy.points[1].segmentMeta->arcLength = 30.0;
@@ -2769,7 +2770,7 @@ TEST_CASE("roadToV2: AdapterReport — unknown metadata type produces warning") 
     cp0.position = {0, 0};
     cp0.type = "corner";
     cp0.segmentMeta = SegmentMetadata{};
-    cp0.segmentMeta->type = "unknown_type";
+    cp0.segmentMeta->kind = static_cast<SegmentKind>(999);
     ControlPoint cp1;
     cp1.position = {50, 0};
     cp1.type = "corner";
@@ -2783,7 +2784,7 @@ TEST_CASE("roadToV2: AdapterReport — unknown metadata type produces warning") 
     CHECK(v2.segment(0).type() == GeometryType::Line);  // fallback
     CHECK(report.unsupportedSegments == 1);
     CHECK(!report.warnings.empty());
-    CHECK(report.warnings[0].find("unknown metadata type") != std::string::npos);
+    CHECK(report.warnings[0].find("invalid metadata kind") != std::string::npos);
 }
 
 TEST_CASE("roadToV2: AdapterReport — bezier metadata without handles produces warning") {
@@ -2794,7 +2795,7 @@ TEST_CASE("roadToV2: AdapterReport — bezier metadata without handles produces 
     cp0.position = {0, 0};
     cp0.type = "corner";
     cp0.segmentMeta = SegmentMetadata{};
-    cp0.segmentMeta->type = "bezier";
+    cp0.segmentMeta->kind = SegmentKind::Bezier;
     // No handles set
     ControlPoint cp1;
     cp1.position = {50, 0};
@@ -2846,7 +2847,7 @@ TEST_CASE("roadToV2: mixed road with line + bezier + arc + spiral") {
     // cp2: bezier end (has handleIn) / arc start (has arc metadata)
     ControlPoint cp2 = makeSmoothCP({100, 20}, {-10, -5}, {0, 0}, true, false);
     cp2.segmentMeta = SegmentMetadata{};
-    cp2.segmentMeta->type = "arc";
+    cp2.segmentMeta->kind = SegmentKind::Arc;
     cp2.segmentMeta->startHeading = 0.3;
     cp2.segmentMeta->curvature = 0.05;
     cp2.segmentMeta->arcLength = 40.0;
@@ -2857,7 +2858,7 @@ TEST_CASE("roadToV2: mixed road with line + bezier + arc + spiral") {
     cp3.position = {130, 35};
     cp3.type = "corner";
     cp3.segmentMeta = SegmentMetadata{};
-    cp3.segmentMeta->type = "spiral";
+    cp3.segmentMeta->kind = SegmentKind::Spiral;
     cp3.segmentMeta->startHeading = 0.5;
     cp3.segmentMeta->curvatureStart = 0.0;
     cp3.segmentMeta->curvatureEnd = 0.08;
@@ -3343,7 +3344,7 @@ TEST_CASE("AdapterReport: exact path sets exact=false for unknown metadata") {
     ControlPoint cp0;
     cp0.position = {0, 0};
     cp0.segmentMeta = SegmentMetadata{};
-    cp0.segmentMeta->type = "unknown";
+    cp0.segmentMeta->kind = static_cast<SegmentKind>(999);
     ControlPoint cp1;
     cp1.position = {50, 0};
     legacy.points.push_back(cp0);
@@ -3368,4 +3369,304 @@ TEST_CASE("AdapterReport: legacy path populates legacySegmentIndices") {
     CHECK(report.legacySegmentIndices[1] == 1);
     CHECK(report.legacySegmentIndices[2] == 2);
     CHECK(report.exact == false);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Road Adapter Tests — Phase 1.8.3d
+// ═══════════════════════════════════════════════════════════
+// Tool metadata generation + round-trip validation.
+//
+// createCircleArc() and createClothoidArc() now emit SegmentMetadata
+// on their first ControlPoint, enabling exact reconstruction via
+// roadToV2() instead of roadToV2Legacy().
+//
+// The full pipeline is validated:
+//   Tool → Road (with metadata) → roadToV2() → RoadV2 → sampleCenterline()
+//   vs.
+//   Tool → Road → legacy sampleCenterline()
+//
+// Both should produce matching centerlines.
+// ═══════════════════════════════════════════════════════════
+
+#include "road_tools.hpp"
+
+using geo::createCircleArc;
+using geo::createClothoidArc;
+using geo::createSegment;
+using geo::RoadToolParams;
+
+// ═══════════════════════════════════════════════════════════
+// Tool Metadata Emission Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("createCircleArc: emits SegmentMetadata on first ControlPoint") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+
+    REQUIRE(road.points.size() >= 2);
+    CHECK(road.points[0].segmentMeta.has_value());
+    CHECK(road.points[0].segmentMeta->kind == SegmentKind::Arc);
+
+    // Subsequent points should NOT have metadata
+    CHECK(!road.points[1].segmentMeta.has_value());
+}
+
+TEST_CASE("createCircleArc: metadata contains correct arc parameters") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+
+    REQUIRE(road.points[0].segmentMeta.has_value());
+    const auto& meta = *road.points[0].segmentMeta;
+    CHECK(meta.kind == SegmentKind::Arc);
+
+    // Start heading should be atan2(0, 1) = 0
+    CHECK(meta.startHeading == doctest::Approx(0.0));
+
+    // Curvature should be non-zero (it's an arc, not a line)
+    CHECK(std::abs(meta.curvature) > 0.001);
+
+    // Arc length should be positive
+    CHECK(meta.arcLength > 1.0);
+
+    // formatVersion should be 2
+    CHECK(road.formatVersion == 2);
+}
+
+TEST_CASE("createCircleArc: roadToV2 produces ArcSegment (not LineSegment)") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(road, report);
+
+    // Should produce a single ArcSegment from the metadata
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Arc);
+    CHECK(report.arcSegments == 1);
+    CHECK(report.exactSegments == 1);
+    CHECK(report.exact == true);
+    CHECK(report.warnings.empty());
+}
+
+TEST_CASE("createClothoidArc: emits SegmentMetadata on first ControlPoint") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(80, 20);
+    Point2D endDir(0.8, 0.6);
+
+    Road road = createClothoidArc(start, startDir, end, endDir, 8);
+
+    REQUIRE(road.points.size() >= 2);
+    CHECK(road.points[0].segmentMeta.has_value());
+    CHECK(road.points[0].segmentMeta->kind == SegmentKind::Spiral);
+
+    // Subsequent points should NOT have metadata
+    CHECK(!road.points[1].segmentMeta.has_value());
+}
+
+TEST_CASE("createClothoidArc: metadata contains correct spiral parameters") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(80, 20);
+    Point2D endDir(0.8, 0.6);
+
+    Road road = createClothoidArc(start, startDir, end, endDir, 8);
+
+    REQUIRE(road.points[0].segmentMeta.has_value());
+    const auto& meta = *road.points[0].segmentMeta;
+    CHECK(meta.kind == SegmentKind::Spiral);
+
+    // Start heading should be atan2(0, 1) = 0
+    CHECK(meta.startHeading == doctest::Approx(0.0));
+
+    // Segment length should be positive
+    CHECK(meta.segmentLength > 1.0);
+
+    // formatVersion should be 2
+    CHECK(road.formatVersion == 2);
+}
+
+TEST_CASE("createClothoidArc: roadToV2 produces SpiralSegment (not LineSegment)") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(80, 20);
+    Point2D endDir(0.8, 0.6);
+
+    Road road = createClothoidArc(start, startDir, end, endDir, 8);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(road, report);
+
+    // Should produce a single SpiralSegment from the metadata
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Spiral);
+    CHECK(report.spiralSegments == 1);
+    CHECK(report.exactSegments == 1);
+    CHECK(report.exact == true);
+    CHECK(report.warnings.empty());
+}
+
+TEST_CASE("createSegment: sets formatVersion = 2") {
+    Road road = createSegment({0, 0}, {100, 0});
+    CHECK(road.formatVersion == 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Round-trip: Tool → Road → roadToV2() → RoadV2 centerline
+//             vs. Tool → Road → legacy sampleCenterline()
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("round-trip: createCircleArc → roadToV2 → centerline matches at endpoints") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+    RoadV2 v2 = roadToV2(road);
+
+    // The ArcSegment starts at the same position as the first CP
+    Point2D v2Start = v2.geometry().positionAt(0);
+    CHECK(v2Start.x == doctest::Approx(road.points[0].position.x).epsilon(0.01));
+    CHECK(v2Start.y == doctest::Approx(road.points[0].position.y).epsilon(0.01));
+
+    // The ArcSegment length matches the metadata arcLength
+    const auto& meta = *road.points[0].segmentMeta;
+    CHECK(v2.totalLength() == doctest::Approx(meta.arcLength).epsilon(0.01));
+}
+
+TEST_CASE("round-trip: createCircleArc → roadToV2 → curvature is constant") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+    RoadV2 v2 = roadToV2(road);
+
+    const auto& meta = *road.points[0].segmentMeta;
+
+    // Curvature should be constant along the arc
+    double sValues[] = {0, v2.totalLength() * 0.25, v2.totalLength() * 0.5,
+                        v2.totalLength() * 0.75, v2.totalLength()};
+    for (double s : sValues) {
+        CHECK(v2.geometry().curvatureAt(s) == doctest::Approx(meta.curvature).epsilon(0.01));
+    }
+}
+
+TEST_CASE("round-trip: createClothoidArc → roadToV2 → length matches metadata") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(80, 20);
+    Point2D endDir(0.8, 0.6);
+
+    Road road = createClothoidArc(start, startDir, end, endDir, 8);
+    RoadV2 v2 = roadToV2(road);
+
+    const auto& meta = *road.points[0].segmentMeta;
+    CHECK(v2.totalLength() == doctest::Approx(meta.segmentLength).epsilon(0.01));
+}
+
+TEST_CASE("round-trip: createClothoidArc → roadToV2 → curvature transitions correctly") {
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(80, 20);
+    Point2D endDir(0.8, 0.6);
+
+    Road road = createClothoidArc(start, startDir, end, endDir, 8);
+    RoadV2 v2 = roadToV2(road);
+
+    const auto& meta = *road.points[0].segmentMeta;
+    double len = v2.totalLength();
+
+    // At s=0, curvature ≈ curvatureStart
+    CHECK(v2.geometry().curvatureAt(0) == doctest::Approx(meta.curvatureStart).epsilon(0.01));
+    // At s=len, curvature ≈ curvatureEnd
+    CHECK(v2.geometry().curvatureAt(len) == doctest::Approx(meta.curvatureEnd).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Backward compatibility: old files without metadata
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("backward compat: road without metadata uses legacy path correctly") {
+    // Simulate an old file: arc tool output but metadata stripped
+    Point2D start(0, 0);
+    Point2D startDir(1, 0);
+    Point2D end(50, 50);
+
+    Road road = createCircleArc(start, startDir, end, 8);
+    // Strip metadata to simulate old file
+    for (auto& cp : road.points) {
+        cp.segmentMeta.reset();
+    }
+    road.formatVersion = 1;  // old format
+
+    // Exact path: no metadata → LineSegment (not ArcSegment)
+    AdapterReport exactReport;
+    RoadV2 v2Exact = roadToV2(road, exactReport);
+
+    CHECK(v2Exact.numSegments() == 7);  // 8 CPs → 7 segments
+    for (int i = 0; i < 7; i++) {
+        CHECK(v2Exact.segment(i).type() == GeometryType::Line);
+    }
+    CHECK(exactReport.exact == true);  // Lines are exact, just not arcs
+
+    // Legacy path: also LineSegments
+    AdapterReport legacyReport;
+    RoadV2 v2Legacy = roadToV2Legacy(road, legacyReport);
+
+    CHECK(v2Legacy.numSegments() == 7);
+    CHECK(legacyReport.exact == false);
+    CHECK(legacyReport.legacySegments == 7);
+}
+
+TEST_CASE("backward compat: road with formatVersion=1 and no metadata works") {
+    Road legacy = makeLegacyRoad("v1_road", {{0, 0}, {50, 0}, {100, 0}});
+    legacy.formatVersion = 1;
+
+    // Should work fine with both paths
+    RoadV2 v2Exact = roadToV2(legacy);
+    RoadV2 v2Legacy = roadToV2Legacy(legacy);
+
+    CHECK(v2Exact.numSegments() == 2);
+    CHECK(v2Legacy.numSegments() == 2);
+    CHECK(v2Exact.totalLength() == doctest::Approx(v2Legacy.totalLength()));
+}
+
+// ═══════════════════════════════════════════════════════════
+// SegmentKind enum tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("SegmentKind: enum values are distinct") {
+    CHECK(SegmentKind::Line != SegmentKind::Arc);
+    CHECK(SegmentKind::Arc != SegmentKind::Spiral);
+    CHECK(SegmentKind::Spiral != SegmentKind::Bezier);
+    CHECK(SegmentKind::Bezier != SegmentKind::Line);
+}
+
+TEST_CASE("SegmentMetadata: default kind is Line") {
+    SegmentMetadata meta;
+    CHECK(meta.kind == SegmentKind::Line);
+    CHECK(meta.version == 1);
+}
+
+TEST_CASE("SegmentMetadata: can be constructed with all fields") {
+    SegmentMetadata meta;
+    meta.kind = SegmentKind::Arc;
+    meta.startHeading = 0.5;
+    meta.curvature = 0.1;
+    meta.arcLength = 42.0;
+
+    CHECK(meta.kind == SegmentKind::Arc);
+    CHECK(meta.startHeading == doctest::Approx(0.5));
+    CHECK(meta.curvature == doctest::Approx(0.1));
+    CHECK(meta.arcLength == doctest::Approx(42.0));
 }

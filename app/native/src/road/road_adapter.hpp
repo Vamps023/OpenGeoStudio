@@ -103,14 +103,13 @@ struct AdapterReport {
 // missing metadata or unknown types. No geometry fitting.
 //
 // Conversion rules:
-//   1. SegmentMetadata type="arc"    → ArcSegment (exact)
-//   2. SegmentMetadata type="spiral" → SpiralSegment (exact)
-//   3. SegmentMetadata type="line"   → LineSegment (exact)
-//   4. SegmentMetadata type="bezier" + handles → BezierSegment (exact)
+//   1. SegmentMetadata kind=Arc    → ArcSegment (exact)
+//   2. SegmentMetadata kind=Spiral → SpiralSegment (exact)
+//   3. SegmentMetadata kind=Line   → LineSegment (exact)
+//   4. SegmentMetadata kind=Bezier + handles → BezierSegment (exact)
 //   5. Handles present (no metadata) → BezierSegment (exact)
 //   6. No handles, no metadata       → LineSegment (exact)
-//   7. Unknown metadata type         → warning + LineSegment (unsupported)
-//   8. Bezier metadata without handles → warning + LineSegment (unsupported)
+//   7. Bezier metadata without handles → warning + LineSegment (unsupported)
 //
 inline RoadV2 roadToV2(const Road& legacy, AdapterReport& report) {
     RoadV2 v2;
@@ -136,6 +135,37 @@ inline RoadV2 roadToV2(const Road& legacy, AdapterReport& report) {
         return v2;
     }
 
+    // ─── Whole-curve metadata (Arc/Spiral) ────────────────
+    // When the first CP has Arc or Spiral metadata, it describes the
+    // ENTIRE curve. The remaining CPs are sampled points for editing
+    // and are not converted to individual segments.
+    if (legacy.points[0].segmentMeta.has_value()) {
+        const auto& meta = *legacy.points[0].segmentMeta;
+        const auto& p0 = legacy.points[0];
+
+        if (meta.kind == SegmentKind::Arc) {
+            v2.addSegment<ArcSegment>(
+                p0.position, meta.startHeading,
+                meta.curvature, meta.arcLength
+            );
+            report.arcSegments++;
+            report.exactSegments++;
+            return v2;
+        }
+
+        if (meta.kind == SegmentKind::Spiral) {
+            v2.addSegment<SpiralSegment>(
+                p0.position, meta.startHeading,
+                meta.curvatureStart, meta.curvatureEnd,
+                meta.segmentLength
+            );
+            report.spiralSegments++;
+            report.exactSegments++;
+            return v2;
+        }
+        // Line and Bezier metadata fall through to per-segment loop
+    }
+
     // ─── Convert each pair of consecutive control points ───
     v2.reserveSegments(legacy.points.size() - 1);
 
@@ -149,15 +179,17 @@ inline RoadV2 roadToV2(const Road& legacy, AdapterReport& report) {
         if (hasMeta) {
             const auto& meta = *p0.segmentMeta;
 
-            if (meta.type == "arc") {
+            switch (meta.kind) {
+            case SegmentKind::Arc:
                 v2.addSegment<ArcSegment>(
                     p0.position, meta.startHeading,
                     meta.curvature, meta.arcLength
                 );
                 report.arcSegments++;
                 report.exactSegments++;
+                break;
 
-            } else if (meta.type == "spiral") {
+            case SegmentKind::Spiral:
                 v2.addSegment<SpiralSegment>(
                     p0.position, meta.startHeading,
                     meta.curvatureStart, meta.curvatureEnd,
@@ -165,13 +197,15 @@ inline RoadV2 roadToV2(const Road& legacy, AdapterReport& report) {
                 );
                 report.spiralSegments++;
                 report.exactSegments++;
+                break;
 
-            } else if (meta.type == "line") {
+            case SegmentKind::Line:
                 v2.addSegment<LineSegment>(p0.position, p1.position);
                 report.lineSegments++;
                 report.exactSegments++;
+                break;
 
-            } else if (meta.type == "bezier") {
+            case SegmentKind::Bezier:
                 if (isBezier) {
                     Point2D cp0 = p0.position;
                     Point2D cp1 = p0.position + p0.handleOut;
@@ -183,23 +217,26 @@ inline RoadV2 roadToV2(const Road& legacy, AdapterReport& report) {
                 } else {
                     report.warnings.push_back(
                         "Segment " + std::to_string(i) +
-                        ": metadata type='bezier' but no handles present — falling back to LineSegment");
+                        ": metadata kind=Bezier but no handles present — falling back to LineSegment");
                     v2.addSegment<LineSegment>(p0.position, p1.position);
                     report.lineSegments++;
                     report.unsupportedSegments++;
                     report.unsupportedSegmentIndices.push_back(segIdx);
                     report.exact = false;
                 }
+                break;
 
-            } else {
+            default:
+                // Corrupted metadata (invalid enum value)
                 report.warnings.push_back(
                     "Segment " + std::to_string(i) +
-                    ": unknown metadata type '" + meta.type + "' — falling back to LineSegment");
+                    ": invalid metadata kind — falling back to LineSegment");
                 v2.addSegment<LineSegment>(p0.position, p1.position);
                 report.lineSegments++;
                 report.unsupportedSegments++;
                 report.unsupportedSegmentIndices.push_back(segIdx);
                 report.exact = false;
+                break;
             }
 
         } else if (isBezier) {

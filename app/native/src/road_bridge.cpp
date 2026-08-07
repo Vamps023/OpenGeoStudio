@@ -29,6 +29,71 @@ namespace geo {
 
 // ─── Helpers: JS ↔ C++ conversion ──────────────────────────
 
+// ─── SegmentMetadata serialization ─────────────────────────
+// segmentMeta is serialized as a nested object on each control point:
+//   { kind: "arc"|"spiral"|"line"|"bezier", version: 1,
+//     startHeading, curvature, arcLength,
+//     curvatureStart, curvatureEnd, segmentLength }
+//
+// Old files without segmentMeta → std::nullopt (legacy adapter path)
+// New files with segmentMeta   → exact adapter path
+
+static const char* segmentKindToString(geo::SegmentKind kind) {
+    switch (kind) {
+    case geo::SegmentKind::Line:   return "line";
+    case geo::SegmentKind::Bezier: return "bezier";
+    case geo::SegmentKind::Arc:    return "arc";
+    case geo::SegmentKind::Spiral: return "spiral";
+    }
+    return "line";
+}
+
+static std::optional<geo::SegmentKind> stringToSegmentKind(const std::string& s) {
+    if (s == "line")   return geo::SegmentKind::Line;
+    if (s == "bezier") return geo::SegmentKind::Bezier;
+    if (s == "arc")    return geo::SegmentKind::Arc;
+    if (s == "spiral") return geo::SegmentKind::Spiral;
+    return std::nullopt;
+}
+
+// Serialize SegmentMetadata to a JS object
+static Napi::Object segmentMetaToJs(Napi::Env env, const geo::SegmentMetadata& meta) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("kind", Napi::String::New(env, segmentKindToString(meta.kind)));
+    obj.Set("version", Napi::Number::New(env, meta.version));
+    obj.Set("startHeading", Napi::Number::New(env, meta.startHeading));
+    obj.Set("curvature", Napi::Number::New(env, meta.curvature));
+    obj.Set("arcLength", Napi::Number::New(env, meta.arcLength));
+    obj.Set("curvatureStart", Napi::Number::New(env, meta.curvatureStart));
+    obj.Set("curvatureEnd", Napi::Number::New(env, meta.curvatureEnd));
+    obj.Set("segmentLength", Napi::Number::New(env, meta.segmentLength));
+    return obj;
+}
+
+// Parse SegmentMetadata from a JS object (returns nullopt if invalid)
+static std::optional<geo::SegmentMetadata> parseSegmentMeta(const Napi::Value& val) {
+    if (val.IsNull() || val.IsUndefined() || !val.IsObject()) {
+        return std::nullopt;
+    }
+    auto obj = val.As<Napi::Object>();
+    if (!obj.Has("kind")) return std::nullopt;
+
+    auto kindStr = obj.Get("kind").As<Napi::String>().Utf8Value();
+    auto kind = stringToSegmentKind(kindStr);
+    if (!kind.has_value()) return std::nullopt;
+
+    geo::SegmentMetadata meta;
+    meta.kind = *kind;
+    meta.version = obj.Has("version") ? obj.Get("version").As<Napi::Number>().Int32Value() : 1;
+    meta.startHeading = obj.Has("startHeading") ? obj.Get("startHeading").As<Napi::Number>().DoubleValue() : 0.0;
+    meta.curvature = obj.Has("curvature") ? obj.Get("curvature").As<Napi::Number>().DoubleValue() : 0.0;
+    meta.arcLength = obj.Has("arcLength") ? obj.Get("arcLength").As<Napi::Number>().DoubleValue() : 0.0;
+    meta.curvatureStart = obj.Has("curvatureStart") ? obj.Get("curvatureStart").As<Napi::Number>().DoubleValue() : 0.0;
+    meta.curvatureEnd = obj.Has("curvatureEnd") ? obj.Get("curvatureEnd").As<Napi::Number>().DoubleValue() : 0.0;
+    meta.segmentLength = obj.Has("segmentLength") ? obj.Get("segmentLength").As<Napi::Number>().DoubleValue() : 0.0;
+    return meta;
+}
+
 // Parse a JS road object { id, name, width, laneCount, points: [...] }
 static Road parseRoad(const Napi::Object& obj) {
     Road road;
@@ -56,6 +121,10 @@ static Road parseRoad(const Napi::Object& obj) {
             cp.handleOut = {h.Get("x").As<Napi::Number>().DoubleValue(),
                             h.Get("y").As<Napi::Number>().DoubleValue()};
             cp.hasHandleOut = true;
+        }
+        // Parse optional segment metadata (Phase 1.8.3d)
+        if (ptObj.Has("segmentMeta") && !ptObj.Get("segmentMeta").IsNull()) {
+            cp.segmentMeta = parseSegmentMeta(ptObj.Get("segmentMeta"));
         }
         road.points.push_back(std::move(cp));
     }
@@ -218,6 +287,12 @@ static Napi::Object roadToJs(Napi::Env env, const Road& road) {
             ptObj.Set("handleOut", h);
         } else {
             ptObj.Set("handleOut", env.Null());
+        }
+        // Serialize segment metadata if present (Phase 1.8.3d)
+        if (road.points[i].segmentMeta.has_value()) {
+            ptObj.Set("segmentMeta", segmentMetaToJs(env, *road.points[i].segmentMeta));
+        } else {
+            ptObj.Set("segmentMeta", env.Null());
         }
         ptsArr.Set(i, ptObj);
     }
