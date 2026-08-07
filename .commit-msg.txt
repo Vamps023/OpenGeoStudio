@@ -1,53 +1,59 @@
-Phase 1 Exit: API freeze, benchmarks, architecture docs
+Phase 2.1: Lane Engine data model
 
-Final PR before Phase 2 (Lane Engine). Freezes the Phase 1 public
-API, records performance baselines, and documents the architecture
-for future contributors.
+Implements the lane data model (no geometry generation yet).
+This is the foundation for the Lane Engine — all subsequent
+milestones (2.2-2.8) build on these structures.
 
-Changes:
-- Doxygen @file/@brief/@section API_Freeze markers added to:
-  - geometry_segment.hpp (GeometrySegment, Line/Arc/Spiral/Bezier, SegmentSequence)
-  - road_v2.hpp (RoadV2, LaneSection placeholder)
-  - road_adapter.hpp (SegmentKind, SegmentMetadata, AdapterReport,
-    ReverseAdapterReport, roadToV2/roadToV2Legacy/roadToV2Auto/roadFromV2)
-- benchmark.cpp: standalone performance benchmark
-  - Measures roadToV2Auto(), sampling, roadFromV2()
-  - 100/500/1000 segments × {line, bezier, legacy}
-  - Key result: 1000-segment bezier road converts in 75ms, samples in 0.5ms
-- docs/ROAD_ENGINE_PHASE1.md: comprehensive architecture reference
-  - Layer architecture diagram
-  - Ownership model
-  - Geometry segment contract
-  - Adapter system (exact, legacy, auto-dispatch, inverse)
-  - formatVersion migration strategy
-  - Bridge & IPC
-  - TypeScript types
-  - Public API freeze list (frozen vs not-frozen)
-  - Performance baseline tables
-  - Testing coverage
-  - Technical debt & future work (Phases 2-5)
-- AGENTS.md: updated to reflect Phase 1 completion
-  - Test counts updated (261 doctest, 130 vitest)
-  - FROZEN markers on public API headers
-  - Link to ROAD_ENGINE_PHASE1.md
+New file: lane_engine.hpp
+  - Polynomial3: cubic polynomial for lane width (a + b*ds + c*ds^2 + d*ds^3)
+    - evaluate(ds), derivative(ds)
+    - constant/linear/cubic constructors
+  - LaneType enum: Driving, Shoulder, Sidewalk, Border, Parking, etc.
+  - LaneRoadMarkType enum: Solid, Dashed, SolidSolid, Curb, etc.
+  - LaneRoadMark: sOffset, type, color, width, laneChange
+  - Lane: id, type, width polynomial, road marks
+    - widthAt(ds), isCenter/isLeft/isRight, isDrivable
+  - LaneSection: startS + encapsulated lane vector
+    - addLane/removeLane/findLane/findLaneMut
+    - center(), leftLanes(), rightLanes() (sorted by |id|)
+    - maxLeftLaneId(), maxRightLaneId()
+    - totalWidthAt(ds), drivingLaneCount()
+    - validate() → LaneValidation (unique IDs, contiguous, non-negative
+      widths, zero-width center, no duplicate center)
+  - LaneValidation: valid flag + errors vector
+  - synthesizeFromLegacy(width, laneCount): creates LaneSection from
+    flat width/laneCount (left=ceil(n/2), right=floor(n/2))
+  - laneTypeToString(), roadMarkTypeToString(): OpenDRIVE string mapping
 
-API Freeze:
-  FROZEN (breaking changes require major version bump):
-    - GeometryType, GeometrySegment, LineSegment, ArcSegment,
-      SpiralSegment, BezierSegment, SegmentSequence
-    - RoadV2
-    - SegmentKind, SegmentMetadata
-    - AdapterReport, ReverseAdapterReport
-    - roadToV2(), roadToV2Legacy(), roadToV2Auto(), roadFromV2()
+RoadV2 changes (minimal):
+  - Includes lane_engine.hpp (LaneSection now fully defined)
+  - laneSection(idx): access by index
+  - laneSectionAt(s): find active section at s-position
+  - clearLaneSections(): clear + invalidate cache
+  - legacyLaneSection(): cached synthesis from width/laneCount
+    (uses mutable optional<LaneSection> for lazy caching)
+  - invalidateLegacyCache(): call when width/laneCount changes
 
-  NOT FROZEN (will change in Phase 2):
-    - LaneSection (empty placeholder)
-    - Road::width, Road::laneCount
-    - RoadV2::width, RoadV2::laneCount
+Legacy compatibility:
+  - Renamed road.hpp struct Lane → LegacyLane (was unused in code)
+    to avoid name collision with new lane_engine.hpp Lane
+  - Existing Phase 1 tests using LaneSection{} (empty) still work
+  - roadFromV2() still triggers lossless=false for LaneSections
 
-Performance Baseline (Windows, MSVC release):
-  Line 1000:  19.75ms convert, 0.20ms sample, 0.94ms reverse
-  Bezier 1000: 75.54ms convert, 0.50ms sample, 2.01ms reverse
-  Legacy 1000: 20.21ms convert, 0.32ms sample, 1.29ms reverse
+Tests (45 new doctest, 306 total, 2367 assertions):
+  Polynomial3 (6): default, constant, linear, cubic, derivative, fields
+  Lane (5): default, width eval, custom poly, type queries, road marks
+  LaneSection (10): empty, center, left/right ordering, findLane,
+    removeLane, totalWidthAt, variable width, drivingLaneCount,
+    maxLeft/Right, no-left
+  Validation (7): valid, duplicate IDs, non-contiguous, negative width,
+    center zero-width, multiple center, empty valid
+  synthesizeFromLegacy (6): 2/4/6-lane, odd (3), width preservation,
+    zero lanes
+  RoadV2 integration (7): laneSectionAt (none/single/multiple),
+    cached synthesis, invalidate cache, clear, default
+  Enum strings (2): laneTypeToString, roadMarkTypeToString
+  Regression (2): existing LaneSection{} tests still work
 
-All 261 doctest + 130 vitest pass (no regression).
+No geometry generation, no boundary/centerline/mesh — those are 2.3+.
+All 130 vitest tests pass (no regression).

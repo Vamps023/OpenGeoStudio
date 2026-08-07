@@ -34,17 +34,16 @@
 //   Every mutation that changes segments calls rebuildGeometryView()
 
 #include "geometry_segment.hpp"
+#include "lane_engine.hpp"
 #include "st_coords.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace geo {
 
-// ─── LaneSection placeholder (Phase 2 will define this properly) ───
-struct LaneSection {
-    // Empty for now — Phase 2 will add lane width polynomials, etc.
-};
+// LaneSection is now defined in lane_engine.hpp (Phase 2.1)
 
 // ─── RoadV2 ────────────────────────────────────────────────
 class RoadV2 {
@@ -188,13 +187,66 @@ public:
     // Total geometry length (convenience — delegates to SegmentSequence)
     double totalLength() const { return geometry_.totalLength(); }
 
-    // ─── Lane section access (Phase 2 will populate these) ───
+    // ─── Lane section access (Phase 2.1) ───
 
     int numLaneSections() const { return static_cast<int>(laneSections_.size()); }
 
+    // Access a lane section by index (read-only)
+    const LaneSection& laneSection(int idx) const {
+        return laneSections_[idx];
+    }
+
+    // Find the lane section active at s-position s.
+    // Returns nullptr if no lane sections exist.
+    // Lane sections are sorted by startS; the active section is the
+    // last one whose startS <= s.
+    const LaneSection* laneSectionAt(double s) const {
+        if (laneSections_.empty()) return nullptr;
+        const LaneSection* result = nullptr;
+        for (const auto& ls : laneSections_) {
+            if (ls.startS <= s) {
+                result = &ls;
+            } else {
+                break;
+            }
+        }
+        return result;
+    }
+
+    // Add a lane section. Lane sections should be added in order of
+    // increasing startS.
     void addLaneSection(LaneSection section) {
         laneSections_.push_back(std::move(section));
     }
+
+    // Clear all lane sections
+    void clearLaneSections() {
+        laneSections_.clear();
+        synthesizedLegacy_.reset();
+    }
+
+    // ─── Legacy lane synthesis (cached) ───
+    //
+    // If no explicit LaneSections exist, synthesize one from
+    // width/laneCount. The result is cached to avoid rebuilding.
+    // The cache is invalidated when lane sections are added/cleared
+    // or when width/laneCount changes.
+    //
+    const LaneSection& legacyLaneSection() const {
+        if (!synthesizedLegacy_.has_value()) {
+            synthesizedLegacy_ = synthesizeFromLegacy(width, laneCount);
+        }
+        return synthesizedLegacy_.value();
+    }
+
+    // Invalidate the legacy synthesis cache.
+    // Call this when width or laneCount changes.
+    void invalidateLegacyCache() const {
+        synthesizedLegacy_.reset();
+    }
+
+private:
+    mutable std::optional<LaneSection> synthesizedLegacy_;
 };
 
 } // namespace geo

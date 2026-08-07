@@ -104,8 +104,8 @@ struct Road {
     BoundingBox2D bounds() const;
 };
 
-// ─── Lane ──────────────────────────────────────────────────
-struct Lane {
+// ─── Legacy Lane (deprecated — use geo::Lane in lane_engine.hpp) ───
+struct LegacyLane {
     int id;
     std::string roadId;
     int index;              // lane index within road

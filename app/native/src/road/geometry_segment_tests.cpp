@@ -4682,3 +4682,558 @@ TEST_CASE("1.8.5: round-trip stress — 100 line segments, lossless") {
         CHECK(p1.y == doctest::Approx(p2.y).epsilon(0.001));
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.1 — Lane Engine Data Model Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for the lane data model (no geometry generation):
+//   - Polynomial3 (evaluate, derivative, constant, linear, cubic)
+//   - Lane (width evaluation, type queries, road marks)
+//   - LaneSection (lane lookup, left/right, total width, validation)
+//   - synthesizeFromLegacy (width/laneCount → LaneSection)
+//   - RoadV2 lane section integration (laneSectionAt, cached synthesis)
+// ═══════════════════════════════════════════════════════════
+
+#include "lane_engine.hpp"
+#include "road_v2.hpp"
+
+using geo::Polynomial3;
+using geo::LaneType;
+using geo::LaneRoadMarkType;
+using geo::LaneRoadMark;
+using geo::Lane;
+using geo::LaneSection;
+using geo::LaneValidation;
+using geo::synthesizeFromLegacy;
+using geo::laneTypeToString;
+using geo::roadMarkTypeToString;
+
+// ═══════════════════════════════════════════════════════════
+// Polynomial3 Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 Polynomial3: default constructor is zero") {
+    Polynomial3 p;
+    CHECK(p.evaluate(0.0) == doctest::Approx(0.0));
+    CHECK(p.evaluate(10.0) == doctest::Approx(0.0));
+    CHECK(p.evaluate(-5.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.1 Polynomial3: constant width") {
+    Polynomial3 p(3.5);
+    CHECK(p.evaluate(0.0) == doctest::Approx(3.5));
+    CHECK(p.evaluate(50.0) == doctest::Approx(3.5));
+    CHECK(p.evaluate(100.0) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.1 Polynomial3: linear taper") {
+    Polynomial3 p(3.5, -0.07, 0.0, 0.0);
+    CHECK(p.evaluate(0.0) == doctest::Approx(3.5));
+    CHECK(p.evaluate(25.0) == doctest::Approx(1.75));
+    CHECK(p.evaluate(50.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.1 Polynomial3: cubic polynomial") {
+    Polynomial3 p(1, 2, 3, 4);
+    CHECK(p.evaluate(0.0) == doctest::Approx(1.0));
+    CHECK(p.evaluate(1.0) == doctest::Approx(10.0));
+    CHECK(p.evaluate(2.0) == doctest::Approx(49.0));
+}
+
+TEST_CASE("2.1 Polynomial3: derivative") {
+    Polynomial3 p(3, 2, 3, 4);
+    CHECK(p.derivative(0.0) == doctest::Approx(2.0));
+    CHECK(p.derivative(1.0) == doctest::Approx(20.0));
+    CHECK(p.derivative(2.0) == doctest::Approx(62.0));
+}
+
+TEST_CASE("2.1 Polynomial3: full constructor matches fields") {
+    Polynomial3 p(1.0, 2.0, 3.0, 4.0);
+    CHECK(p.a == doctest::Approx(1.0));
+    CHECK(p.b == doctest::Approx(2.0));
+    CHECK(p.c == doctest::Approx(3.0));
+    CHECK(p.d == doctest::Approx(4.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Lane Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 Lane: default construction") {
+    Lane lane;
+    CHECK(lane.id == 0);
+    CHECK(lane.type == LaneType::Driving);
+    CHECK(lane.widthAt(0.0) == doctest::Approx(0.0));
+    CHECK(lane.roadMarks.empty());
+}
+
+TEST_CASE("2.1 Lane: width evaluation") {
+    Lane lane(1, LaneType::Driving, Polynomial3(3.5));
+    CHECK(lane.widthAt(0.0) == doctest::Approx(3.5));
+    CHECK(lane.widthAt(100.0) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.1 Lane: custom width polynomial") {
+    Lane lane(-1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0));
+    CHECK(lane.widthAt(0.0) == doctest::Approx(3.5));
+    CHECK(lane.widthAt(50.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.1 Lane: type queries") {
+    Lane driving(1, LaneType::Driving, Polynomial3(3.5));
+    Lane center(0, LaneType::Border, Polynomial3(0.0));
+    Lane shoulder(2, LaneType::Shoulder, Polynomial3(2.0));
+
+    CHECK(driving.isRight() == true);
+    CHECK(driving.isDrivable() == true);
+    CHECK(center.isCenter() == true);
+    CHECK(center.isDrivable() == false);
+    CHECK(shoulder.isRight() == true);
+    CHECK(shoulder.isDrivable() == false);
+}
+
+TEST_CASE("2.1 Lane: road mark storage") {
+    Lane lane(1, LaneType::Driving, Polynomial3(3.5));
+    lane.roadMarks.push_back(LaneRoadMark(LaneRoadMarkType::Dashed, "white", 0.15));
+    lane.roadMarks.push_back(LaneRoadMark(LaneRoadMarkType::Solid, "yellow", 0.20));
+
+    CHECK(lane.roadMarks.size() == 2);
+    CHECK(lane.roadMarks[0].type == LaneRoadMarkType::Dashed);
+    CHECK(lane.roadMarks[0].color == "white");
+    CHECK(lane.roadMarks[1].type == LaneRoadMarkType::Solid);
+    CHECK(lane.roadMarks[1].color == "yellow");
+}
+
+// ═══════════════════════════════════════════════════════════
+// LaneSection Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 LaneSection: empty construction") {
+    LaneSection ls;
+    CHECK(ls.startS == doctest::Approx(0.0));
+    CHECK(ls.numLanes() == 0);
+    CHECK(ls.center() == nullptr);
+    CHECK(ls.leftLanes().empty());
+    CHECK(ls.rightLanes().empty());
+}
+
+TEST_CASE("2.1 LaneSection: center lane lookup") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    const Lane* c = ls.center();
+    REQUIRE(c != nullptr);
+    CHECK(c->id == 0);
+    CHECK(c->type == LaneType::Border);
+}
+
+TEST_CASE("2.1 LaneSection: left and right lane ordering") {
+    LaneSection ls;
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    auto left = ls.leftLanes();
+    auto right = ls.rightLanes();
+
+    REQUIRE(left.size() == 2);
+    CHECK(left[0]->id == -1);
+    CHECK(left[1]->id == -2);
+    REQUIRE(right.size() == 2);
+    CHECK(right[0]->id == 1);
+    CHECK(right[1]->id == 2);
+}
+
+TEST_CASE("2.1 LaneSection: findLane by ID") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.findLane(-1) != nullptr);
+    CHECK(ls.findLane(0) != nullptr);
+    CHECK(ls.findLane(1) != nullptr);
+    CHECK(ls.findLane(99) == nullptr);
+}
+
+TEST_CASE("2.1 LaneSection: removeLane") {
+    LaneSection ls;
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    CHECK(ls.numLanes() == 2);
+    CHECK(ls.removeLane(1) == true);
+    CHECK(ls.numLanes() == 1);
+    CHECK(ls.findLane(1) == nullptr);
+    CHECK(ls.removeLane(99) == false);
+}
+
+TEST_CASE("2.1 LaneSection: totalWidthAt") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(7.0));
+    CHECK(ls.totalWidthAt(50.0) == doctest::Approx(7.0));
+}
+
+TEST_CASE("2.1 LaneSection: totalWidthAt with variable width") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(7.0));
+    CHECK(ls.totalWidthAt(50.0) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.1 LaneSection: drivingLaneCount") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-2, LaneType::Shoulder, Polynomial3(2.0)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.drivingLaneCount() == 3);
+}
+
+TEST_CASE("2.1 LaneSection: maxLeftLaneId and maxRightLaneId") {
+    LaneSection ls;
+    ls.addLane(Lane(-3, LaneType::Shoulder, Polynomial3(2.0)));
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.maxLeftLaneId() == -3);
+    CHECK(ls.maxRightLaneId() == 2);
+}
+
+TEST_CASE("2.1 LaneSection: no left lanes returns 0") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.maxLeftLaneId() == 0);
+    CHECK(ls.maxRightLaneId() == 1);
+    CHECK(ls.leftLanes().empty());
+}
+
+// ═══════════════════════════════════════════════════════════
+// LaneSection Validation Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 Validation: valid lane section passes") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+    CHECK(v.errors.empty());
+}
+
+TEST_CASE("2.1 Validation: duplicate lane IDs rejected") {
+    LaneSection ls;
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    CHECK(v.errors.size() >= 1);
+}
+
+TEST_CASE("2.1 Validation: non-contiguous lane IDs detected") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(3, LaneType::Driving, Polynomial3(3.5)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool foundGap = false;
+    for (const auto& e : v.errors) {
+        if (e.find("2") != std::string::npos) foundGap = true;
+    }
+    CHECK(foundGap == true);
+}
+
+TEST_CASE("2.1 Validation: negative width detected") {
+    LaneSection ls;
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(-3.5)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool found = false;
+    for (const auto& e : v.errors) {
+        if (e.find("negative width") != std::string::npos) found = true;
+    }
+    CHECK(found == true);
+}
+
+TEST_CASE("2.1 Validation: center lane must have zero width") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(2.0)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool found = false;
+    for (const auto& e : v.errors) {
+        if (e.find("zero width") != std::string::npos) found = true;
+    }
+    CHECK(found == true);
+}
+
+TEST_CASE("2.1 Validation: multiple center lanes detected") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool found = false;
+    for (const auto& e : v.errors) {
+        if (e.find("center") != std::string::npos) found = true;
+    }
+    CHECK(found == true);
+}
+
+TEST_CASE("2.1 Validation: empty section is valid") {
+    LaneSection ls;
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+    CHECK(v.errors.empty());
+}
+
+// ═══════════════════════════════════════════════════════════
+// synthesizeFromLegacy Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 synthesizeFromLegacy: 2-lane road") {
+    LaneSection ls = synthesizeFromLegacy(7.0, 2);
+
+    CHECK(ls.startS == doctest::Approx(0.0));
+    CHECK(ls.numLanes() == 3);
+    CHECK(ls.drivingLaneCount() == 2);
+    CHECK(ls.center() != nullptr);
+    CHECK(ls.findLane(1) != nullptr);
+    CHECK(ls.findLane(-1) != nullptr);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(7.0));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+TEST_CASE("2.1 synthesizeFromLegacy: 4-lane road") {
+    LaneSection ls = synthesizeFromLegacy(14.0, 4);
+
+    CHECK(ls.numLanes() == 5);
+    CHECK(ls.drivingLaneCount() == 4);
+    CHECK(ls.maxLeftLaneId() == -2);
+    CHECK(ls.maxRightLaneId() == 2);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(14.0));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+TEST_CASE("2.1 synthesizeFromLegacy: 6-lane road") {
+    LaneSection ls = synthesizeFromLegacy(21.0, 6);
+
+    CHECK(ls.numLanes() == 7);
+    CHECK(ls.drivingLaneCount() == 6);
+    CHECK(ls.maxLeftLaneId() == -3);
+    CHECK(ls.maxRightLaneId() == 3);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(21.0));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+TEST_CASE("2.1 synthesizeFromLegacy: odd lane count (3)") {
+    LaneSection ls = synthesizeFromLegacy(10.5, 3);
+
+    CHECK(ls.numLanes() == 4);
+    CHECK(ls.drivingLaneCount() == 3);
+    CHECK(ls.maxLeftLaneId() == -2);
+    CHECK(ls.maxRightLaneId() == 1);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(10.5));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+TEST_CASE("2.1 synthesizeFromLegacy: width preservation") {
+    LaneSection ls = synthesizeFromLegacy(12.0, 4);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(12.0));
+    CHECK(ls.totalWidthAt(100.0) == doctest::Approx(12.0));
+}
+
+TEST_CASE("2.1 synthesizeFromLegacy: zero lanes (degenerate)") {
+    LaneSection ls = synthesizeFromLegacy(8.0, 0);
+    CHECK(ls.numLanes() == 1);
+    CHECK(ls.drivingLaneCount() == 0);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(0.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// RoadV2 Lane Section Integration Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 RoadV2: laneSectionAt with no sections returns nullptr") {
+    RoadV2 road;
+    CHECK(road.numLaneSections() == 0);
+    CHECK(road.laneSectionAt(0.0) == nullptr);
+    CHECK(road.laneSectionAt(50.0) == nullptr);
+}
+
+TEST_CASE("2.1 RoadV2: laneSectionAt with single section") {
+    RoadV2 road;
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    CHECK(road.numLaneSections() == 1);
+    const LaneSection* active = road.laneSectionAt(0.0);
+    REQUIRE(active != nullptr);
+    CHECK(active->drivingLaneCount() == 2);
+}
+
+TEST_CASE("2.1 RoadV2: laneSectionAt with multiple sections") {
+    RoadV2 road;
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    const LaneSection* active = road.laneSectionAt(0.0);
+    REQUIRE(active != nullptr);
+    CHECK(active->drivingLaneCount() == 2);
+
+    active = road.laneSectionAt(100.0);
+    REQUIRE(active != nullptr);
+    CHECK(active->drivingLaneCount() == 4);
+
+    active = road.laneSectionAt(200.0);
+    REQUIRE(active != nullptr);
+    CHECK(active->drivingLaneCount() == 4);
+}
+
+TEST_CASE("2.1 RoadV2: legacyLaneSection cached synthesis") {
+    RoadV2 road;
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    CHECK(road.numLaneSections() == 0);
+
+    const LaneSection& ls = road.legacyLaneSection();
+    CHECK(ls.drivingLaneCount() == 2);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(7.0));
+
+    // Cached: same reference
+    const LaneSection& ls2 = road.legacyLaneSection();
+    CHECK(&ls == &ls2);
+}
+
+TEST_CASE("2.1 RoadV2: invalidateLegacyCache") {
+    RoadV2 road;
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    const LaneSection& ls1 = road.legacyLaneSection();
+    CHECK(ls1.totalWidthAt(0.0) == doctest::Approx(7.0));
+
+    road.width = 14.0;
+    road.laneCount = 4;
+    road.invalidateLegacyCache();
+
+    const LaneSection& ls2 = road.legacyLaneSection();
+    CHECK(ls2.totalWidthAt(0.0) == doctest::Approx(14.0));
+    CHECK(ls2.drivingLaneCount() == 4);
+}
+
+TEST_CASE("2.1 RoadV2: clearLaneSections") {
+    RoadV2 road;
+    road.addLaneSection(LaneSection(0.0));
+
+    CHECK(road.numLaneSections() == 1);
+    road.clearLaneSections();
+    CHECK(road.numLaneSections() == 0);
+}
+
+TEST_CASE("2.1 RoadV2: legacy synthesis with default width/laneCount") {
+    RoadV2 road;
+
+    const LaneSection& ls = road.legacyLaneSection();
+    CHECK(ls.drivingLaneCount() == 2);
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(8.0));
+    CHECK(ls.numLanes() == 3);
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Enum String Conversion Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 laneTypeToString: common types") {
+    CHECK(laneTypeToString(LaneType::Driving) == "driving");
+    CHECK(laneTypeToString(LaneType::Shoulder) == "shoulder");
+    CHECK(laneTypeToString(LaneType::Sidewalk) == "sidewalk");
+    CHECK(laneTypeToString(LaneType::Border) == "border");
+    CHECK(laneTypeToString(LaneType::Parking) == "parking");
+    CHECK(laneTypeToString(LaneType::None) == "none");
+}
+
+TEST_CASE("2.1 roadMarkTypeToString: common types") {
+    CHECK(roadMarkTypeToString(LaneRoadMarkType::Solid) == "solid");
+    CHECK(roadMarkTypeToString(LaneRoadMarkType::Dashed) == "broken");
+    CHECK(roadMarkTypeToString(LaneRoadMarkType::SolidSolid) == "solid solid");
+    CHECK(roadMarkTypeToString(LaneRoadMarkType::Curb) == "curb");
+    CHECK(roadMarkTypeToString(LaneRoadMarkType::None) == "none");
+}
+
+// ═══════════════════════════════════════════════════════════
+// Phase 1 Regression Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.1 Regression: RoadV2 lane section access still works") {
+    RoadV2 road;
+    CHECK(road.numLaneSections() == 0);
+    road.addLaneSection(LaneSection{});
+    CHECK(road.numLaneSections() == 1);
+}
+
+TEST_CASE("2.1 Regression: empty LaneSection in roadFromV2 still triggers warning") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    v2.addLaneSection(LaneSection{});
+
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lossless == false);
+    CHECK(!report.warnings.empty());
+    CHECK(report.warnings[0].find("LaneSection") != std::string::npos);
+}
