@@ -1,15 +1,26 @@
-Phase 6: Implement OpenDRIVE I/O in C++
+Add comprehensive logging to verify C++ engine is actually used
 
-- opendrive.hpp: OpenDRIVE 1.6 XML format export
-  - roadToOpenDrive(): converts Road to OdRoad with geometry, lanes, elevation
-  - serializeOpenDrive(): serializes OpenDriveDocument to XML string
-  - exportOpenDrive(): full pipeline from Road[] to .xodr XML
-  - Supports: roads, lanes, lane sections, elevation profiles, junctions
-  - Geometry types: line, arc, clothoid, paramPoly3
-- road_bridge.cpp: Added roadExportOpenDrive N-API binding
-- IPC channel: road:exportOpenDrive
-- roadEngineClient.ts: Added exportOpenDrive API
-- 11 tests pass (including OpenDRIVE XML export test)
+Problem: The C++ road engine was built but there was no way to verify
+it was actually being called at runtime. The store had a silent
+try/catch fallback to TypeScript that could mask failures.
+
+Changes:
+- C++ road_bridge.cpp: Added roadLog() function with OutputDebugStringA
+  on Windows + stderr. Logs every call to roadGenerateIntersection()
+  with road IDs, point counts, and result details.
+- roadEngineHandler.ts: Logs addon search paths, load success/failure,
+  and every IPC call with [RoadEngine:C++] or [RoadEngine:TS-Fallback] tag.
+- roadEngineClient.ts: Logs whether native or fallback engine is selected.
+- roadStudioStore.ts: detectIntersection() now logs which engine is called
+  and only falls back to TS with an explicit error message.
+- RoadToolbar.tsx: Added engine status indicator (green=C++ active,
+  orange=TS fallback) so user can see which engine is running.
+- Added getEngineInfo() to store for UI queries.
+
+Test output confirms C++ engine runs:
+  [C++ RoadEngine] roadGenerateIntersection() CALLED
+  [C++ RoadEngine] road1: r1 pts: 2 road2: r2 pts: 2
+  [C++ RoadEngine] result center: (0,0) polygon pts: 36 approaches: 4
 
 Generated with Devin (https://devin.ai)
 

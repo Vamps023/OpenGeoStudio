@@ -79,6 +79,8 @@ export const RoadToolbar: React.FC = () => {
   const detectIntersection = useRoadStudioStore((s) => s.detectIntersection);
   const roadPickMode = useRoadStudioStore((s) => s.roadPickMode);
   const setRoadPickMode = useRoadStudioStore((s) => s.setRoadPickMode);
+  const getEngineInfo = useRoadStudioStore((s) => s.getEngineInfo);
+  const engineInfo = getEngineInfo();
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -299,6 +301,19 @@ export const RoadToolbar: React.FC = () => {
             label="Delete selected"
           />
         )}
+      </div>
+
+      {/* ─── Engine Status Indicator ──────────── */}
+      <div
+        className={`flex items-center gap-1.5 px-2 h-6 rounded text-[10px] font-mono ${
+          engineInfo.isNative
+            ? 'bg-green-500/10 text-green-400 border border-green-500/30'
+            : 'bg-orange-500/10 text-orange-400 border border-orange-500/30'
+        }`}
+        title={engineInfo.isNative ? 'C++ native road geometry engine is active' : 'TypeScript fallback is being used — C++ native addon not loaded'}
+      >
+        <div className={`w-1.5 h-1.5 rounded-full ${engineInfo.isNative ? 'bg-green-400' : 'bg-orange-400'}`} />
+        {engineInfo.version}
       </div>
     </div>
   );

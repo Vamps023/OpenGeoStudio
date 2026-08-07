@@ -158,6 +158,9 @@ interface RoadStudioState {
   /** Detect intersection between 2 roads (full algorithm: split, trim, generate) */
   detectIntersection: (roadId1: string, roadId2: string) => Promise<boolean>;
 
+  /** Check which road engine is active (C++ native or TypeScript fallback) */
+  getEngineInfo: () => { isNative: boolean; version: string };
+
   /** Get the currently drawing road */
   getDrawingRoad: () => Road | null;
 }
@@ -682,12 +685,17 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     const road2 = state.roads.find((r) => r.id === roadId2);
     if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return false;
 
-    // Run the full intersection generation algorithm via C++ engine (or TS fallback)
+    // Run the full intersection generation algorithm via C++ engine
+    // NO SILENT FALLBACK — if C++ fails, we want to see the error
     let generated: GeneratedIntersection | null;
     try {
+      console.log('[Store] detectIntersection: calling roadEngine.generateIntersection()');
+      console.log('[Store] roadEngine.isNative() =', roadEngine.isNative());
       generated = await roadEngine.generateIntersection(road1, road2, state.refLat, state.refLon);
-    } catch {
-      // Fallback to TypeScript implementation if C++ engine fails
+      console.log('[Store] detectIntersection: C++ result received, polygon pts:', generated?.polygon?.length);
+    } catch (err) {
+      console.error('[Store] detectIntersection: C++ engine FAILED:', err);
+      console.error('[Store] Falling back to TypeScript generateIntersection()');
       generated = generateIntersection(road1, road2, state.refLat, state.refLon);
     }
     if (!generated) return false;
@@ -869,5 +877,11 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     const state = get();
     if (!state.drawingRoadId) return null;
     return state.roads.find((r) => r.id === state.drawingRoadId) ?? null;
+  },
+
+  getEngineInfo: () => {
+    const isNative = roadEngine.isNative();
+    const version = isNative ? 'C++ Native Engine' : 'TypeScript Fallback';
+    return { isNative, version };
   },
 }));

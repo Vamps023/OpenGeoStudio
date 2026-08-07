@@ -223,9 +223,11 @@ export function getRoadEngine(): RoadEngineAPI {
 
   // Check if native C++ engine is available via Electron preload
   if (window.electronAPI?.roadEngine) {
+    console.log('[RoadEngine] Using C++ native engine (window.electronAPI.roadEngine available)');
     _engine = new NativeRoadEngine();
   } else {
-    // Fallback: use TypeScript implementations
+    console.warn('[RoadEngine] ⚠️ Using TypeScript fallback engine (window.electronAPI.roadEngine NOT available)');
+    console.warn('[RoadEngine] This means the C++ native addon is not loaded. Road geometry will be slower and may produce different results.');
     _engine = new TypeScriptRoadEngineFallback();
   }
 

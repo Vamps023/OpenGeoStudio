@@ -66,30 +66,34 @@ async function getRoadEngine(): Promise<RoadEngineAddon | null> {
 
   // Try multiple possible locations for the native addon
   const candidates = [
-    // When running from dist-electron/app/ (compiled)
+    // When running from dist-electron/app/ (compiled) — __dirname = dist-electron/app/
     path.join(__dirname, '..', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
-    // When running from dist-electron/app/ (flat copy)
+    // When running from dist-electron/app/ (flat copy inside app/)
     path.join(__dirname, 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
-    // Development: from app/handlers/ to app/native/road_engine/
-    path.join(__dirname, '..', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
     // Packaged app resources
     path.join(process.resourcesPath || __dirname, 'native', 'road_engine_native.node'),
-    // Fallback: direct from source
+    // Fallback: direct from source (development)
     path.join(__dirname, '..', '..', 'app', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
   ];
+
+  console.log('[RoadEngine] Searching for native addon...');
+  console.log('[RoadEngine] __dirname =', __dirname);
 
   for (const candidate of candidates) {
     try {
       await fs.access(candidate);
       roadEngineAddon = require(candidate) as RoadEngineAddon;
-      console.log('[RoadEngine] Loaded native addon from:', candidate);
+      console.log('[RoadEngine] ✅ Loaded native addon from:', candidate);
+      console.log('[RoadEngine] Addon version:', roadEngineAddon?.roadGetVersion?.() ?? 'unknown');
+      console.log('[RoadEngine] Available functions:', Object.keys(roadEngineAddon ?? {}));
       return roadEngineAddon;
-    } catch {
-      // try next
+    } catch (err) {
+      console.log('[RoadEngine] Not found at:', candidate, '-', (err as Error).message);
     }
   }
 
-  console.warn('[RoadEngine] Native addon not found — road geometry will use TypeScript fallback');
+  console.error('[RoadEngine] ❌ Native addon NOT FOUND! Road geometry will use TypeScript fallback.');
+  console.error('[RoadEngine] Checked paths:', candidates);
   return null;
 }
 
@@ -97,18 +101,25 @@ async function getRoadEngine(): Promise<RoadEngineAddon | null> {
 export async function registerRoadEngineHandlers(): Promise<void> {
   const addon = await getRoadEngine();
 
+  const tag = addon ? '[RoadEngine:C++]' : '[RoadEngine:TS-Fallback]';
+
   ipcMain.handle(ROAD_GET_VERSION, () => {
+    console.log(tag, 'getVersion()');
     return addon?.roadGetVersion?.() ?? '0.0.0-ts-fallback';
   });
 
   ipcMain.handle(ROAD_GENERATE_INTERSECTION, async (_event, road1, road2, refLat, refLon) => {
+    console.log(tag, 'generateIntersection() — roads:', road1?.id, road2?.id);
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
-    return addon.roadGenerateIntersection(road1, road2, refLat, refLon);
+    const result = addon.roadGenerateIntersection(road1, road2, refLat, refLon);
+    console.log(tag, 'generateIntersection() → polygon pts:', (result as any)?.polygon?.length, 'approaches:', (result as any)?.approaches?.length);
+    return result;
   });
 
   ipcMain.handle(ROAD_COMPUTE_CIRCLE_ARC, async (_event, startPoint, startDirection, endPoint, segments) => {
+    console.log(tag, 'computeCircleArc()');
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
@@ -116,6 +127,7 @@ export async function registerRoadEngineHandlers(): Promise<void> {
   });
 
   ipcMain.handle(ROAD_COMPUTE_CLOTHOID, async (_event, startPoint, startDirection, endPoint, endDirection, initialA, segments) => {
+    console.log(tag, 'computeClothoid()');
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
@@ -123,6 +135,7 @@ export async function registerRoadEngineHandlers(): Promise<void> {
   });
 
   ipcMain.handle(ROAD_GENERATE_ROAD_MESH, async (_event, road, numSamples) => {
+    console.log(tag, 'generateRoadMesh()');
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
@@ -130,6 +143,7 @@ export async function registerRoadEngineHandlers(): Promise<void> {
   });
 
   ipcMain.handle(ROAD_GENERATE_INTERSECTION_MESH, async (_event, intersection, z) => {
+    console.log(tag, 'generateIntersectionMesh()');
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
@@ -137,6 +151,7 @@ export async function registerRoadEngineHandlers(): Promise<void> {
   });
 
   ipcMain.handle(ROAD_EXPORT_OPENDRIVE, async (_event, roads, refLat, refLon) => {
+    console.log(tag, 'exportOpenDrive() — roads:', roads?.length);
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }
@@ -144,6 +159,7 @@ export async function registerRoadEngineHandlers(): Promise<void> {
   });
 
   ipcMain.handle(ROAD_SAMPLE_CENTERLINE, async (_event, road, numSamples) => {
+    console.log(tag, 'sampleCenterline()');
     if (!addon) {
       throw new Error('Road engine native addon not available');
     }

@@ -7,6 +7,22 @@
 #include "road/mesh.hpp"
 #include "road/opendrive.hpp"
 #include <sstream>
+#include <iostream>
+
+// ─── Logging ───────────────────────────────────────────────
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+static void roadLog(const std::string& msg) {
+    std::cerr << "[C++ RoadEngine] " << msg << std::endl;
+#ifdef _WIN32
+    std::string full = "[C++ RoadEngine] " + msg + "\n";
+    OutputDebugStringA(full.c_str());
+#endif
+}
+
+#define ROAD_LOG(msg) roadLog(msg)
 
 namespace geo {
 
@@ -136,11 +152,13 @@ static Napi::Object intersectionToJs(Napi::Env env, const GeneratedIntersection&
 
 // roadGetVersion() → string
 static Napi::Value RoadGetVersion(const Napi::CallbackInfo& info) {
+    ROAD_LOG("roadGetVersion() called");
     return Napi::String::New(info.Env(), "1.0.0-road-engine");
 }
 
 // roadGenerateIntersection(road1, road2, refLat, refLon) → GeneratedIntersection
 static Napi::Value RoadGenerateIntersection(const Napi::CallbackInfo& info) {
+    ROAD_LOG("roadGenerateIntersection() CALLED — C++ engine is running");
     Napi::Env env = info.Env();
     if (info.Length() < 4 || !info[0].IsObject() || !info[1].IsObject()) {
         Napi::TypeError::New(env, "Expected (road1, road2, refLat, refLon)").ThrowAsJavaScriptException();
@@ -152,7 +170,24 @@ static Napi::Value RoadGenerateIntersection(const Napi::CallbackInfo& info) {
     double refLat = info[2].As<Napi::Number>().DoubleValue();
     double refLon = info[3].As<Napi::Number>().DoubleValue();
 
+    {
+        std::ostringstream oss;
+        oss << "road1: " << road1.id << " pts: " << road1.points.size()
+            << " road2: " << road2.id << " pts: " << road2.points.size();
+        ROAD_LOG(oss.str());
+    }
+
     GeneratedIntersection ix = generateIntersection(road1, road2, refLat, refLon);
+
+    {
+        std::ostringstream oss;
+        oss << "result center: (" << ix.center.x << "," << ix.center.y << ")"
+            << " polygon pts: " << ix.polygon.size()
+            << " approaches: " << ix.approaches.size()
+            << " lane connections: " << ix.laneConnections.size();
+        ROAD_LOG(oss.str());
+    }
+
     return intersectionToJs(env, ix);
 }
 
