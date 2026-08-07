@@ -464,3 +464,271 @@ TEST_CASE("ArcSegment: half circle (sweep = π)") {
     // Normalized: 3π/2 = -π/2 (south)
     CHECK(h == doctest::Approx(3.0 * geo::PI / 2.0).epsilon(0.01));
 }
+
+// ═══════════════════════════════════════════════════════════
+// SpiralSegment Tests
+// ═══════════════════════════════════════════════════════════
+
+using geo::SpiralSegment;
+
+TEST_CASE("SpiralSegment: basic construction and type") {
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);  // straight → arc transition
+    CHECK(seg.type() == GeometryType::Spiral);
+    CHECK(seg.length() == doctest::Approx(50.0));
+}
+
+TEST_CASE("SpiralSegment: curvatureDS varies linearly") {
+    // κ₀=0, κ₁=0.1, L=50
+    // κ(s) = 0 + (0.1-0)·s/50 = 0.002·s
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    CHECK(seg.curvatureDS(0) == doctest::Approx(0.0));
+    CHECK(seg.curvatureDS(25) == doctest::Approx(0.05));   // midpoint
+    CHECK(seg.curvatureDS(50) == doctest::Approx(0.1));    // end
+}
+
+TEST_CASE("SpiralSegment: curvatureDS with negative curvature (right turn)") {
+    // κ₀=0.1, κ₁=-0.1, L=40 — left to right transition
+    SpiralSegment seg({0, 0}, 0.0, 0.1, -0.1, 40.0);
+    CHECK(seg.curvatureDS(0) == doctest::Approx(0.1));
+    CHECK(seg.curvatureDS(20) == doctest::Approx(0.0));    // midpoint = 0
+    CHECK(seg.curvatureDS(40) == doctest::Approx(-0.1));
+}
+
+TEST_CASE("SpiralSegment: totalAngleChange = L·(κ₀+κ₁)/2") {
+    // κ₀=0, κ₁=0.1, L=50 → totalAngle = 50·(0+0.1)/2 = 2.5
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    CHECK(seg.totalAngleChange() == doctest::Approx(2.5));
+}
+
+TEST_CASE("SpiralSegment: heading at end = startHeading + totalAngleChange") {
+    SpiralSegment seg({0, 0}, 0.3, 0.0, 0.1, 50.0);
+    double x, y, h;
+    seg.evaluateDS(50, x, y, h);
+    // h = 0.3 + 50·(0+0.1)/2 = 0.3 + 2.5 = 2.8
+    CHECK(h == doctest::Approx(2.8).epsilon(0.001));
+}
+
+TEST_CASE("SpiralSegment: heading at midpoint") {
+    // κ₀=0, κ₁=0.1, L=50
+    // h(s) = 0 + 0·s + (0.1-0)·s²/(2·50) = 0.001·s²
+    // h(25) = 0.001·625 = 0.625
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    double x, y, h;
+    seg.evaluateDS(25, x, y, h);
+    CHECK(h == doctest::Approx(0.625).epsilon(0.001));
+}
+
+TEST_CASE("SpiralSegment: evaluateDS at s=0 returns start point and heading") {
+    SpiralSegment seg({5, 3}, 0.7, 0.0, 0.1, 50.0);
+    double x, y, h;
+    seg.evaluateDS(0, x, y, h);
+    CHECK(x == doctest::Approx(5.0));
+    CHECK(y == doctest::Approx(3.0));
+    CHECK(h == doctest::Approx(0.7));
+}
+
+TEST_CASE("SpiralSegment: evaluateDS clamps out-of-range s") {
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    double x, y, h;
+    seg.evaluateDS(-10, x, y, h);
+    CHECK(x == doctest::Approx(0.0));
+    CHECK(y == doctest::Approx(0.0));
+    CHECK(h == doctest::Approx(0.0));
+    // s > length clamps to end
+    seg.evaluateDS(60, x, y, h);
+    CHECK(h == doctest::Approx(2.5).epsilon(0.001));  // totalAngleChange
+}
+
+TEST_CASE("SpiralSegment: clone produces equal and independent segment") {
+    SpiralSegment seg({1, 2}, 0.5, 0.0, 0.1, 50.0);
+    auto cloned = seg.clone();
+    CHECK(cloned->type() == GeometryType::Spiral);
+    CHECK(cloned->length() == doctest::Approx(50.0));
+    CHECK(cloned->curvatureDS(0) == doctest::Approx(0.0));
+    CHECK(cloned->curvatureDS(50) == doctest::Approx(0.1));
+
+    // Modify original — clone unchanged
+    seg.curvatureEnd_ = 0.2;
+    CHECK(cloned->curvatureDS(50) == doctest::Approx(0.1));
+    CHECK(seg.curvatureDS(50) == doctest::Approx(0.2));
+}
+
+TEST_CASE("SpiralSegment: clothoidA derived from κ₀,κ₁,L") {
+    // A² = L / (κ₁ - κ₀) = 50 / 0.1 = 500, A = √500 ≈ 22.36
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    CHECK(seg.clothoidA() == doctest::Approx(std::sqrt(500.0)).epsilon(0.01));
+}
+
+TEST_CASE("SpiralSegment: curvatureRate = (κ₁-κ₀)/L") {
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    CHECK(seg.curvatureRate() == doctest::Approx(0.002));  // 0.1/50
+}
+
+TEST_CASE("SpiralSegment: position moves forward (no backward motion)") {
+    // Start heading east, κ₀=0, κ₁=0.02, L=50
+    // Total angle change = 50·(0+0.02)/2 = 0.5 rad ≈ 28.6°
+    // Heading stays within (-π/2, π/2), so x should always increase
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.02, 50.0);
+    double prevX = 0.0;
+    for (int i = 1; i <= 10; i++) {
+        double s = i * 5.0;
+        Point2D p = seg.positionAt(s);
+        CHECK(p.x > prevX);  // x strictly increasing
+        prevX = p.x;
+    }
+}
+
+TEST_CASE("SpiralSegment: tangentAt is unit vector") {
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    for (int i = 0; i <= 5; i++) {
+        double s = i * 10.0;
+        Vec2 t = seg.tangentAt(s);
+        CHECK(t.norm() == doctest::Approx(1.0).epsilon(0.001));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Cross-Type Consistency Tests
+// ═══════════════════════════════════════════════════════════
+// These verify that SpiralSegment degenerates correctly to
+// ArcSegment (when κ₀=κ₁) and LineSegment (when κ₀=κ₁=0).
+// This catches sign/normalization mismatches between classes
+// that isolated tests can't see.
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("Cross-type: Spiral(κ₀=κ₁=κ) matches Arc(κ) at multiple s values") {
+    // Same start point, heading, curvature, length
+    Point2D start(5, 3);
+    double heading = 0.4;
+    double kappa = 0.08;
+    double L = 30.0;
+
+    ArcSegment arc(start, heading, kappa, L);
+    SpiralSegment spiral(start, heading, kappa, kappa, L);  // κ₀ = κ₁ = κ
+
+    // Check at several s values
+    double sValues[] = {0, 5, 10, 15, 20, 25, 30};
+    for (double s : sValues) {
+        double ax, ay, ah, sx, sy, sh;
+        arc.evaluateDS(s, ax, ay, ah);
+        spiral.evaluateDS(s, sx, sy, sh);
+
+        // Heading should match very closely (both use same formula)
+        CHECK(sh == doctest::Approx(ah).epsilon(0.001));
+
+        // Position should match within numerical integration tolerance
+        CHECK(sx == doctest::Approx(ax).epsilon(0.01));
+        CHECK(sy == doctest::Approx(ay).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Cross-type: Spiral(κ₀=κ₁=κ) matches Arc(κ) with negative curvature") {
+    Point2D start(0, 0);
+    double heading = 0.0;
+    double kappa = -0.05;  // right turn
+    double L = 40.0;
+
+    ArcSegment arc(start, heading, kappa, L);
+    SpiralSegment spiral(start, heading, kappa, kappa, L);
+
+    double sValues[] = {0, 10, 20, 30, 40};
+    for (double s : sValues) {
+        double ax, ay, ah, sx, sy, sh;
+        arc.evaluateDS(s, ax, ay, ah);
+        spiral.evaluateDS(s, sx, sy, sh);
+
+        CHECK(sh == doctest::Approx(ah).epsilon(0.001));
+        CHECK(sx == doctest::Approx(ax).epsilon(0.01));
+        CHECK(sy == doctest::Approx(ay).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Cross-type: Spiral(κ₀=κ₁=0) matches Line at multiple s values") {
+    // Spiral with zero curvature should match a line segment
+    Point2D start(2, 7);
+    double heading = 0.6;
+    double L = 25.0;
+
+    // LineSegment: need to compute end point from heading and length
+    Point2D end(start.x + L * std::cos(heading), start.y + L * std::sin(heading));
+    LineSegment line(start, end);
+    SpiralSegment spiral(start, heading, 0.0, 0.0, L);
+
+    double sValues[] = {0, 5, 10, 15, 20, 25};
+    for (double s : sValues) {
+        double lx, ly, lh, sx, sy, sh;
+        line.evaluateDS(s, lx, ly, lh);
+        spiral.evaluateDS(s, sx, sy, sh);
+
+        // Heading should be constant and equal
+        CHECK(sh == doctest::Approx(lh).epsilon(0.001));
+        CHECK(sh == doctest::Approx(heading).epsilon(0.001));
+
+        // Position should match
+        CHECK(sx == doctest::Approx(lx).epsilon(0.01));
+        CHECK(sy == doctest::Approx(ly).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Cross-type: Spiral(κ₀=κ₁=0) matches Line with different heading") {
+    Point2D start(10, -5);
+    double heading = -0.8;  // pointing down-right
+    double L = 15.0;
+
+    Point2D end(start.x + L * std::cos(heading), start.y + L * std::sin(heading));
+    LineSegment line(start, end);
+    SpiralSegment spiral(start, heading, 0.0, 0.0, L);
+
+    for (int i = 0; i <= 5; i++) {
+        double s = i * 3.0;
+        double lx, ly, lh, sx, sy, sh;
+        line.evaluateDS(s, lx, ly, lh);
+        spiral.evaluateDS(s, sx, sy, sh);
+
+        CHECK(sh == doctest::Approx(lh).epsilon(0.001));
+        CHECK(sx == doctest::Approx(lx).epsilon(0.01));
+        CHECK(sy == doctest::Approx(ly).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Cross-type: curvatureDS consistency — Spiral(κ₀=κ₁) = Arc(κ)") {
+    double kappa = 0.07;
+    SpiralSegment spiral({0, 0}, 0.0, kappa, kappa, 30.0);
+    ArcSegment arc({0, 0}, 0.0, kappa, 30.0);
+
+    for (int i = 0; i <= 6; i++) {
+        double s = i * 5.0;
+        CHECK(spiral.curvatureDS(s) == doctest::Approx(arc.curvatureDS(s)));
+    }
+}
+
+TEST_CASE("Cross-type: curvatureDS consistency — Spiral(0,0) = Line(0)") {
+    SpiralSegment spiral({0, 0}, 0.0, 0.0, 0.0, 30.0);
+    LineSegment line({0, 0}, {30, 0});
+
+    for (int i = 0; i <= 6; i++) {
+        double s = i * 5.0;
+        CHECK(spiral.curvatureDS(s) == doctest::Approx(line.curvatureDS(s)));
+        CHECK(spiral.curvatureDS(s) == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("Cross-type: clone preserves type across all segment kinds") {
+    LineSegment line({0, 0}, {10, 0});
+    ArcSegment arc({0, 0}, 0.0, 0.1, 10.0);
+    SpiralSegment spiral({0, 0}, 0.0, 0.0, 0.1, 50.0);
+
+    auto lc = line.clone();
+    auto ac = arc.clone();
+    auto sc = spiral.clone();
+
+    CHECK(lc->type() == GeometryType::Line);
+    CHECK(ac->type() == GeometryType::Arc);
+    CHECK(sc->type() == GeometryType::Spiral);
+
+    // All clones should produce same positions as originals
+    double s = 5.0;
+    CHECK(lc->positionAt(s).x == doctest::Approx(line.positionAt(s).x));
+    CHECK(ac->positionAt(s).x == doctest::Approx(arc.positionAt(s).x).epsilon(0.001));
+    CHECK(sc->positionAt(s).x == doctest::Approx(spiral.positionAt(s).x).epsilon(0.01));
+}

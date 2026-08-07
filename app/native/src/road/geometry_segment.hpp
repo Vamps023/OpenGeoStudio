@@ -286,4 +286,125 @@ public:
     }
 };
 
+// ─── Spiral Segment (Clothoid / Euler Spiral) ──────────────
+//
+// Curvature varies linearly from κ₀ to κ₁ over the segment length.
+//
+// Storage (OpenDRIVE-style): startPoint, startHeading, curvatureStart,
+// curvatureEnd, segmentLength.
+//   - Positive curvature = left turn (CCW)
+//   - Negative curvature = right turn (CW)
+//
+// curvatureDS(s) = κ₀ + (κ₁ - κ₀) · s / L
+// heading(s)     = startHeading + κ₀·s + (κ₁-κ₀)·s²/(2L)
+// position(s)    = startPoint + R(θ₀) · ∫₀ˢ [cos(φ(t)), sin(φ(t))] dt
+//   where φ(t) = κ₀·t + (κ₁-κ₀)·t²/(2L)  (local heading, before startHeading rotation)
+//   and R(θ₀) is rotation by startHeading
+//
+// Degenerate cases (κ₀ == κ₁, or both zero) are handled at the factory/
+// adapter boundary, NOT inside evaluateDS. SpiralSegment always does the
+// general Fresnel math. The adapter constructs ArcSegment when κ₀ == κ₁
+// (nonzero) or LineSegment when both are zero.
+//
+class SpiralSegment : public GeometrySegment {
+public:
+    Point2D startPoint_;
+    double startHeading_;
+    double curvatureStart_;  // κ₀
+    double curvatureEnd_;    // κ₁
+    double segmentLength_;   // L
+
+    SpiralSegment() = default;
+    SpiralSegment(const Point2D& start, double heading,
+                  double kappa0, double kappa1, double length)
+        : startPoint_(start), startHeading_(heading),
+          curvatureStart_(kappa0), curvatureEnd_(kappa1), segmentLength_(length) {}
+
+    // ─── Derived accessors ───
+
+    // Clothoid parameter A (A² = L / (κ₁ - κ₀) when κ₁ ≠ κ₀)
+    double clothoidA() const {
+        double dk = curvatureEnd_ - curvatureStart_;
+        if (std::abs(dk) < EPSILON) return std::numeric_limits<double>::infinity();
+        return std::sqrt(segmentLength_ / dk);
+    }
+
+    // Curvature rate of change (c_dot = (κ₁ - κ₀) / L)
+    double curvatureRate() const {
+        if (segmentLength_ < EPSILON) return 0.0;
+        return (curvatureEnd_ - curvatureStart_) / segmentLength_;
+    }
+
+    // Total heading change = κ₀·L + (κ₁-κ₀)·L/2 = L·(κ₀ + κ₁)/2
+    double totalAngleChange() const {
+        return segmentLength_ * (curvatureStart_ + curvatureEnd_) / 2.0;
+    }
+
+    // ─── Core interface ───
+
+    double curvatureDS(double s) const override {
+        if (segmentLength_ < EPSILON) return curvatureStart_;
+        return curvatureStart_ + (curvatureEnd_ - curvatureStart_) * s / segmentLength_;
+    }
+
+    double length() const override { return segmentLength_; }
+
+    GeometryType type() const override { return GeometryType::Spiral; }
+
+    void evaluateDS(double s, double& x, double& y, double& heading) const override {
+        // Clamp s
+        if (s < 0.0) s = 0.0;
+        if (s > segmentLength_) s = segmentLength_;
+
+        // Heading: startHeading + κ₀·s + (κ₁-κ₀)·s²/(2L)
+        double L = segmentLength_;
+        double k0 = curvatureStart_;
+        double k1 = curvatureEnd_;
+        double dk = k1 - k0;
+
+        heading = startHeading_;
+        if (L > EPSILON) {
+            heading += k0 * s + dk * s * s / (2.0 * L);
+        }
+
+        // Position via numerical integration of:
+        //   φ(t) = k0·t + dk·t²/(2L)   (local heading, before startHeading rotation)
+        //   localX = ∫₀ˢ cos(φ(t)) dt
+        //   localY = ∫₀ˢ sin(φ(t)) dt
+        // Then rotate by startHeading and translate by startPoint.
+        //
+        // Simpson's rule with adaptive subdivisions.
+        const int N = 100;  // subdivisions (enough for typical road segments)
+        double dt = s / N;
+        double localX = 0, localY = 0;
+
+        for (int i = 0; i <= N; i++) {
+            double t = i * dt;
+            double phi = (L > EPSILON) ? (k0 * t + dk * t * t / (2.0 * L)) : 0.0;
+            double cosVal = std::cos(phi);
+            double sinVal = std::sin(phi);
+
+            // Simpson's rule weight: 1, 4, 2, 4, ..., 4, 1
+            double weight = 1.0;
+            if (i > 0 && i < N) {
+                weight = (i % 2 == 0) ? 2.0 : 4.0;
+            }
+            localX += weight * cosVal * dt;
+            localY += weight * sinVal * dt;
+        }
+        localX /= 3.0;
+        localY /= 3.0;
+
+        // Rotate local position by startHeading, translate to startPoint
+        double c = std::cos(startHeading_);
+        double sn = std::sin(startHeading_);
+        x = startPoint_.x + localX * c - localY * sn;
+        y = startPoint_.y + localX * sn + localY * c;
+    }
+
+    std::unique_ptr<GeometrySegment> clone() const override {
+        return std::make_unique<SpiralSegment>(*this);
+    }
+};
+
 } // namespace geo

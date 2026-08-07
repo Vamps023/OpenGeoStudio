@@ -1,43 +1,54 @@
-Phase 1.1-1.2: GeometrySegment base + LineSegment + doctest
+Phase 1.3: ArcSegment + curvature sign convention
 
-First step of the road engine rewrite (Phase 1 of
-docs/ROAD_ENGINE_NEW_ARCHITECTURE.md). This is purely additive —
-no existing files are modified, the legacy ControlPoint[] model
-is untouched.
+Implements ArcSegment (task 1.3 of Phase 1 — Geometry Kernel Refactor).
+Purely additive — no existing files modified, legacy model untouched.
 
-New files:
-- geometry_segment.hpp: GeometrySegment abstract base class with
-  evaluateDS/curvatureDS/length/type/clone interface, plus
-  LineSegment implementation. Includes convenience methods
-  (positionAt, tangentAt, normalAt, headingAt, startPoint,
-  endPoint, sampleUniform, sampleAdaptive).
-- geometry_segment_tests.cpp: 22 doctest unit tests for
-  LineSegment (59 assertions) covering construction, evaluateDS
-  at s=0/midpoint/end, heading constancy, curvature=0, length,
-  clamping, zero-length segments, tangent/normal vectors,
-  uniform sampling, clone independence.
-- doctest.h: doctest v2.4.12 header-only test framework (Q5
-  decision: C++ tests for pure geometry math, vitest for
-  integration/IPC tests).
+Design decisions (per user direction):
+- Storage: startPoint + startHeading + curvature + arcLength (OpenDRIVE-style)
+- NOT center+radius+angles (option b) — that's a view, not storage
+- Derived accessors: radius() = 1/|κ|, center() computed from start+heading+κ
+  These give geometric intuition without a second source of truth to sync
+- Curvature sign: positive = left turn (CCW), matching OpenDRIVE
+- Documented curvature convention on GeometrySegment base class header
+  so all subclasses (Arc, Spiral, Bezier) follow the same convention
 
-Key design decisions (from docs/ROAD_ENGINE_MIGRATION_PLAN.md):
-- unique_ptr<GeometrySegment> with virtual clone() for deep-copy
-  (undo/redo compatibility — Q1)
-- Absolute coordinates in segments (Q2)
-- s is arc-length in meters [0, length()]
-- clone() required from day 1 (avoid undo/redo breakage later)
+Curvature convention comment added to GeometrySegment:
+  Positive curvature = left turn (CCW), matching OpenDRIVE.
+  Negative curvature = right turn (CW).
+  Also documents the parameterization pattern:
+    heading(s) = startHeading + ∫₀ˢ κ(u) du
+    position(s) = startPoint + ∫₀˵ [cos(heading(u)), sin(heading(u))] du
+  And notes Bezier as the legitimate exception (stores P0-P3, Q2).
 
-Build system:
-- binding.gyp: added geometry_tests executable target alongside
-  the existing road_engine_native addon target
+ArcSegment implementation:
+- evaluateDS: integrates heading linearly, position via circle parametrization
+- center(): left normal of startHeading × signed radius
+- radius(): 1/|curvature|
+- sweepAngle(): curvature × arcLength (signed)
+- curvatureDS: constant (returns curvature_ for all s)
+- clone(): deep copy via make_unique
+
+Tests (18 new, 40 total):
+- Basic construction, type, length, constant curvature
+- radius = 1/|κ| for both signs
+- sweepAngle = κ × L (signed)
+- Center position: left for κ>0, right for κ<0
+- evaluateDS at s=0: returns start point + heading
+- Heading changes linearly: h(s) = h₀ + κ×s
+- Quarter circle: end point, end heading, midpoint position
+- Right turn (negative curvature): center, end point, end heading
+- Curvature constant for all s
+- Clamping out-of-range s
+- Clone equality and independence
+- tangentAt consistent with heading
+- normalAt is left of tangent
+- sampleUniform: all points on circle
+- Full circle (sweep = 2π): returns to start
+- Half circle (sweep = π): end at opposite side
 
 Test results:
-- C++ doctest: 22/22 passed (59 assertions)
+- C++ doctest: 40/40 passed (131 assertions)
 - vitest: 41/41 passed (no regression)
-- TypeScript: clean compile (tsc + vite)
-
-Also updates docs/ROAD_ENGINE_MIGRATION_PLAN.md with finalized
-Q1-Q5 decisions and the doctest test split.
 
 Generated with Devin (https://devin.ai)
 
