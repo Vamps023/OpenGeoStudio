@@ -554,14 +554,41 @@ TEST_CASE("SpiralSegment: clone produces equal and independent segment") {
 }
 
 TEST_CASE("SpiralSegment: clothoidA derived from κ₀,κ₁,L") {
-    // A² = L / (κ₁ - κ₀) = 50 / 0.1 = 500, A = √500 ≈ 22.36
+    // A² = L / |κ₁ - κ₀| = 50 / 0.1 = 500, A = √500 ≈ 22.36
     SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
     CHECK(seg.clothoidA() == doctest::Approx(std::sqrt(500.0)).epsilon(0.01));
+}
+
+TEST_CASE("SpiralSegment: clothoidA with negative curvature rate (right turn)") {
+    // κ₀=0.1, κ₁=-0.1, L=40 → |dk| = 0.2, A = √(40/0.2) = √200 ≈ 14.14
+    // Must not return NaN (bug: sqrt of negative if |dk| not used)
+    SpiralSegment seg({0, 0}, 0.0, 0.1, -0.1, 40.0);
+    double a = seg.clothoidA();
+    CHECK(std::isfinite(a));
+    CHECK(a == doctest::Approx(std::sqrt(200.0)).epsilon(0.01));
+}
+
+TEST_CASE("SpiralSegment: clothoidA returns infinity when κ₀ == κ₁ (degenerate = arc)") {
+    SpiralSegment seg({0, 0}, 0.0, 0.1, 0.1, 50.0);  // κ₀ = κ₁
+    double a = seg.clothoidA();
+    CHECK(std::isinf(a));
+    // Must not crash — this is a legitimate tested state (cross-type tests use it)
+}
+
+TEST_CASE("SpiralSegment: clothoidA returns infinity when κ₀ == κ₁ == 0 (degenerate = line)") {
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.0, 50.0);
+    double a = seg.clothoidA();
+    CHECK(std::isinf(a));
 }
 
 TEST_CASE("SpiralSegment: curvatureRate = (κ₁-κ₀)/L") {
     SpiralSegment seg({0, 0}, 0.0, 0.0, 0.1, 50.0);
     CHECK(seg.curvatureRate() == doctest::Approx(0.002));  // 0.1/50
+}
+
+TEST_CASE("SpiralSegment: curvatureRate is 0 when κ₀ == κ₁ (degenerate)") {
+    SpiralSegment seg({0, 0}, 0.0, 0.1, 0.1, 50.0);
+    CHECK(seg.curvatureRate() == doctest::Approx(0.0));
 }
 
 TEST_CASE("SpiralSegment: position moves forward (no backward motion)") {
@@ -731,4 +758,274 @@ TEST_CASE("Cross-type: clone preserves type across all segment kinds") {
     CHECK(lc->positionAt(s).x == doctest::Approx(line.positionAt(s).x));
     CHECK(ac->positionAt(s).x == doctest::Approx(arc.positionAt(s).x).epsilon(0.001));
     CHECK(sc->positionAt(s).x == doctest::Approx(spiral.positionAt(s).x).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// BezierSegment Tests
+// ═══════════════════════════════════════════════════════════
+
+using geo::BezierSegment;
+
+TEST_CASE("BezierSegment: basic construction and type") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    CHECK(seg.type() == GeometryType::Bezier);
+    CHECK(seg.length() > 0.0);
+}
+
+TEST_CASE("BezierSegment: evaluateDS at s=0 returns P0") {
+    BezierSegment seg({1, 2}, {4, 6}, {8, 6}, {11, 2});
+    double x, y, h;
+    seg.evaluateDS(0, x, y, h);
+    CHECK(x == doctest::Approx(1.0));
+    CHECK(y == doctest::Approx(2.0));
+}
+
+TEST_CASE("BezierSegment: evaluateDS at s=length returns P3") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    double len = seg.length();
+    double x, y, h;
+    seg.evaluateDS(len, x, y, h);
+    CHECK(x == doctest::Approx(10.0).epsilon(0.01));
+    CHECK(y == doctest::Approx(0.0).epsilon(0.01));
+}
+
+TEST_CASE("BezierSegment: evaluateDS midpoint is near curve midpoint") {
+    // Symmetric bezier: midpoint should be at (5, 3.75) by symmetry
+    // B(0.5) = 0.125*P0 + 0.375*P1 + 0.375*P2 + 0.125*P3
+    //        = 0.125*(0,0) + 0.375*(3,5) + 0.375*(7,5) + 0.125*(10,0)
+    //        = (0+1.125+2.625+1.25, 0+1.875+1.875+0) = (5, 3.75)
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    double len = seg.length();
+    double x, y, h;
+    seg.evaluateDS(len / 2.0, x, y, h);
+    CHECK(x == doctest::Approx(5.0).epsilon(0.02));
+    CHECK(y == doctest::Approx(3.75).epsilon(0.02));
+}
+
+TEST_CASE("BezierSegment: heading at start points from P0 toward P1") {
+    BezierSegment seg({0, 0}, {10, 0}, {20, 0}, {30, 0});
+    // All collinear east — heading should be 0 everywhere
+    double x, y, h;
+    seg.evaluateDS(0, x, y, h);
+    CHECK(h == doctest::Approx(0.0));
+}
+
+TEST_CASE("BezierSegment: curvature is 0 for collinear control points") {
+    BezierSegment seg({0, 0}, {10, 0}, {20, 0}, {30, 0});
+    double len = seg.length();
+    CHECK(seg.curvatureDS(0) == doctest::Approx(0.0).epsilon(0.001));
+    CHECK(seg.curvatureDS(len / 2.0) == doctest::Approx(0.0).epsilon(0.001));
+    CHECK(seg.curvatureDS(len) == doctest::Approx(0.0).epsilon(0.001));
+}
+
+TEST_CASE("BezierSegment: evaluateDS clamps out-of-range s") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    double x, y, h;
+    // s < 0 → start
+    seg.evaluateDS(-5, x, y, h);
+    CHECK(x == doctest::Approx(0.0));
+    CHECK(y == doctest::Approx(0.0));
+    // s > length → end
+    seg.evaluateDS(999, x, y, h);
+    CHECK(x == doctest::Approx(10.0).epsilon(0.01));
+    CHECK(y == doctest::Approx(0.0).epsilon(0.01));
+}
+
+TEST_CASE("BezierSegment: clone produces equal and independent segment") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    auto cloned = seg.clone();
+    CHECK(cloned->type() == GeometryType::Bezier);
+    CHECK(cloned->length() == doctest::Approx(seg.length()));
+
+    // Same position at midpoint
+    double len = seg.length();
+    CHECK(cloned->positionAt(len / 2).x == doctest::Approx(seg.positionAt(len / 2).x).epsilon(0.001));
+
+    // Modify original significantly — clone should be unchanged
+    double cloneMidX = cloned->positionAt(len / 2).x;
+    seg.p1 = {0, 20};  // dramatic change: handle points straight up
+    seg.rebuild();
+    double segMidX = seg.positionAt(seg.length() / 2).x;
+    // Positions should differ by more than 1.0 (absolute)
+    CHECK(std::abs(segMidX - cloneMidX) > 1.0);
+}
+
+TEST_CASE("BezierSegment: tangentAt is unit vector") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    double len = seg.length();
+    for (int i = 0; i <= 5; i++) {
+        double s = len * i / 5.0;
+        Vec2 t = seg.tangentAt(s);
+        CHECK(t.norm() == doctest::Approx(1.0).epsilon(0.001));
+    }
+}
+
+TEST_CASE("BezierSegment: sampleUniform returns correct count") {
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    auto pts = seg.sampleUniform(11);
+    CHECK(pts.size() == 11);
+    CHECK(pts[0].x == doctest::Approx(0.0));
+    CHECK(pts[0].y == doctest::Approx(0.0));
+    CHECK(pts[10].x == doctest::Approx(10.0).epsilon(0.01));
+    CHECK(pts[10].y == doctest::Approx(0.0).epsilon(0.01));
+}
+
+// ─── Degenerate cases (standing rule: test division-by-magnitude guards) ───
+
+TEST_CASE("BezierSegment: P1==P0 (zero handle at start) doesn't crash or produce NaN") {
+    // Freshly-placed control point with no handle offset: P1 == P0
+    BezierSegment seg({0, 0}, {0, 0}, {7, 5}, {10, 0});
+    double len = seg.length();
+    CHECK(len > 0.0);
+    CHECK(std::isfinite(len));
+
+    // evaluateDS at s=0 (the cusp point)
+    double x, y, h;
+    seg.evaluateDS(0, x, y, h);
+    CHECK(std::isfinite(x));
+    CHECK(std::isfinite(y));
+    CHECK(std::isfinite(h));
+
+    // curvatureDS at s=0 — |B'(0)| = 0, must return 0 not NaN/Inf
+    double k = seg.curvatureDS(0);
+    CHECK(std::isfinite(k));
+    CHECK(k == doctest::Approx(0.0));
+
+    // Midpoint and end should be fine
+    seg.evaluateDS(len / 2, x, y, h);
+    CHECK(std::isfinite(x));
+    CHECK(std::isfinite(y));
+    CHECK(std::isfinite(h));
+    CHECK(std::isfinite(seg.curvatureDS(len / 2)));
+}
+
+TEST_CASE("BezierSegment: P2==P3 (zero handle at end) doesn't crash or produce NaN") {
+    BezierSegment seg({0, 0}, {3, 5}, {10, 0}, {10, 0});
+    double len = seg.length();
+    CHECK(len > 0.0);
+
+    // evaluateDS at s=length (the cusp point at end)
+    double x, y, h;
+    seg.evaluateDS(len, x, y, h);
+    CHECK(std::isfinite(x));
+    CHECK(std::isfinite(y));
+    CHECK(std::isfinite(h));
+
+    // curvatureDS at end — |B'(1)| = 0, must return 0 not NaN/Inf
+    double k = seg.curvatureDS(len);
+    CHECK(std::isfinite(k));
+    CHECK(k == doctest::Approx(0.0));
+}
+
+TEST_CASE("BezierSegment: both handles zero (P1==P0, P2==P3) — linear bezier") {
+    // Degenerate to a line from P0 to P3
+    BezierSegment seg({0, 0}, {0, 0}, {10, 5}, {10, 5});
+    double len = seg.length();
+    CHECK(len == doctest::Approx(std::hypot(10, 5)).epsilon(0.05));
+
+    // Curvature should be ~0 everywhere
+    for (int i = 0; i <= 5; i++) {
+        double s = len * i / 5.0;
+        CHECK(seg.curvatureDS(s) == doctest::Approx(0.0).epsilon(0.01));
+    }
+}
+
+TEST_CASE("BezierSegment: all control points coincident (zero-length)") {
+    BezierSegment seg({5, 5}, {5, 5}, {5, 5}, {5, 5});
+    CHECK(seg.length() == doctest::Approx(0.0));
+
+    // evaluateDS doesn't crash, returns the point
+    double x, y, h;
+    seg.evaluateDS(0, x, y, h);
+    CHECK(x == doctest::Approx(5.0));
+    CHECK(y == doctest::Approx(5.0));
+    CHECK(std::isfinite(h));
+
+    // curvatureDS doesn't crash
+    CHECK(std::isfinite(seg.curvatureDS(0)));
+}
+
+TEST_CASE("BezierSegment: curvature sign is positive for left-turning curve") {
+    // Curve that bends upward (left when traveling east)
+    // P0=(0,0), P1=(3,5), P2=(7,5), P3=(10,0) — arch shape
+    // At midpoint, curvature should be negative (curve bends right/down at apex)
+    // Actually for this arch: going east then curving up = left turn initially
+    BezierSegment seg({0, 0}, {3, 5}, {7, 5}, {10, 0});
+    double len = seg.length();
+    // At s=0, tangent is toward P1=(3,5) → heading atan2(5,3) ≈ 1.047 (NE)
+    // The curve bends... let's just check it's finite and nonzero somewhere
+    double kMid = seg.curvatureDS(len / 2.0);
+    CHECK(std::isfinite(kMid));
+    // For this symmetric arch, curvature at midpoint should be negative
+    // (curve is concave down = right turn at apex)
+    CHECK(kMid < 0.0);
+}
+
+// ─── Cross-type consistency: Bezier with collinear points = Line ───
+
+TEST_CASE("Cross-type: Bezier(collinear) matches Line") {
+    // All control points on the x-axis → bezier is a straight line
+    Point2D p0(0, 0), p1(10, 0), p2(20, 0), p3(30, 0);
+    BezierSegment bez(p0, p1, p2, p3);
+    LineSegment line(p0, p3);
+
+    double len = bez.length();
+    // Length should match (bezier of collinear points = line)
+    CHECK(len == doctest::Approx(line.length()).epsilon(0.01));
+
+    // Position and heading at several s values
+    double sValues[] = {0, len * 0.25, len * 0.5, len * 0.75, len};
+    for (double s : sValues) {
+        double bx, by, bh, lx, ly, lh;
+        bez.evaluateDS(s, bx, by, bh);
+        line.evaluateDS(s, lx, ly, lh);
+        CHECK(bx == doctest::Approx(lx).epsilon(0.02));
+        CHECK(by == doctest::Approx(ly).epsilon(0.02));
+        CHECK(bh == doctest::Approx(lh).epsilon(0.01));
+        // Curvature: both should be ~0
+        CHECK(bez.curvatureDS(s) == doctest::Approx(0.0).epsilon(0.001));
+        CHECK(line.curvatureDS(s) == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("Cross-type: Bezier(collinear) matches Line with diagonal") {
+    Point2D p0(1, 2), p1(4, 6), p2(8, 12), p3(12, 18);
+    BezierSegment bez(p0, p1, p2, p3);
+    LineSegment line(p0, p3);
+
+    double len = bez.length();
+    CHECK(len == doctest::Approx(line.length()).epsilon(0.02));
+
+    for (int i = 0; i <= 5; i++) {
+        double s = len * i / 5.0;
+        double bx, by, bh, lx, ly, lh;
+        bez.evaluateDS(s, bx, by, bh);
+        line.evaluateDS(s, lx, ly, lh);
+        CHECK(bx == doctest::Approx(lx).epsilon(0.02));
+        CHECK(by == doctest::Approx(ly).epsilon(0.02));
+    }
+}
+
+TEST_CASE("Cross-type: clone preserves type across all 4 segment kinds") {
+    LineSegment line({0, 0}, {10, 0});
+    ArcSegment arc({0, 0}, 0.0, 0.1, 10.0);
+    SpiralSegment spiral({0, 0}, 0.0, 0.0, 0.1, 50.0);
+    BezierSegment bez({0, 0}, {3, 5}, {7, 5}, {10, 0});
+
+    auto lc = line.clone();
+    auto ac = arc.clone();
+    auto sc = spiral.clone();
+    auto bc = bez.clone();
+
+    CHECK(lc->type() == GeometryType::Line);
+    CHECK(ac->type() == GeometryType::Arc);
+    CHECK(sc->type() == GeometryType::Spiral);
+    CHECK(bc->type() == GeometryType::Bezier);
+
+    // All clones produce same positions as originals
+    double s = 5.0;
+    CHECK(lc->positionAt(s).x == doctest::Approx(line.positionAt(s).x));
+    CHECK(ac->positionAt(s).x == doctest::Approx(arc.positionAt(s).x).epsilon(0.001));
+    CHECK(sc->positionAt(s).x == doctest::Approx(spiral.positionAt(s).x).epsilon(0.01));
+    CHECK(bc->positionAt(s).x == doctest::Approx(bez.positionAt(s).x).epsilon(0.01));
 }

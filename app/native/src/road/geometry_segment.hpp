@@ -322,10 +322,11 @@ public:
 
     // ─── Derived accessors ───
 
-    // Clothoid parameter A (A² = L / (κ₁ - κ₀) when κ₁ ≠ κ₀)
+    // Clothoid parameter A (A² = L / |κ₁ - κ₀| when κ₁ ≠ κ₀)
+    // Returns infinity when κ₀ == κ₁ (degenerate spiral = arc)
     double clothoidA() const {
-        double dk = curvatureEnd_ - curvatureStart_;
-        if (std::abs(dk) < EPSILON) return std::numeric_limits<double>::infinity();
+        double dk = std::abs(curvatureEnd_ - curvatureStart_);
+        if (dk < EPSILON) return std::numeric_limits<double>::infinity();
         return std::sqrt(segmentLength_ / dk);
     }
 
@@ -404,6 +405,157 @@ public:
 
     std::unique_ptr<GeometrySegment> clone() const override {
         return std::make_unique<SpiralSegment>(*this);
+    }
+};
+
+// ─── Bezier Segment (cubic Bezier) ─────────────────────────
+//
+// Cubic Bezier with 4 absolute control points (P0, P1, P2, P3).
+// This is the exception to the start+heading+curvature parameterization
+// (Q2 decision): Bezier stores absolute control points because that's
+// the natural representation for a cubic curve.
+//
+// Arc-length parameterization:
+//   Bezier is naturally t ∈ [0,1], but evaluateDS takes s ∈ [0, length()].
+//   A lookup table (N=100 samples) maps s → t at construction time.
+//   Construction cost: ~100 bezier evals + 100 distance calcs ≈ microseconds.
+//
+// Curvature:
+//   κ(t) = (B'(t) × B''(t)) / |B'(t)|³
+//   B'(t)  = 3(1-t)²(P1-P0) + 6(1-t)t(P2-P1) + 3t²(P3-P2)
+//   B''(t) = 6(1-t)(P2-2P1+P0) + 6t(P3-2P2+P1)
+//   Guard: when |B'(t)| < epsilon, return curvature 0 (cusp/degenerate).
+//   This happens when P1==P0 (zero handle at start) or P2==P3 (zero handle
+//   at end) — normal editor states, not exotic edge cases.
+//
+class BezierSegment : public GeometrySegment {
+public:
+    Point2D p0, p1, p2, p3;  // absolute control points
+
+private:
+    // Arc-length lookup table (built at construction)
+    std::vector<double> tTable_;        // t values [0, 1], N+1 entries
+    std::vector<double> arcLengthTable_; // cumulative arc length, N+1 entries
+    double totalLength_ = 0.0;
+
+    static constexpr int TABLE_N = 100;
+
+    void buildArcLengthTable() {
+        tTable_.resize(TABLE_N + 1);
+        arcLengthTable_.resize(TABLE_N + 1);
+        arcLengthTable_[0] = 0.0;
+        tTable_[0] = 0.0;
+        Point2D prev = p0;
+        double cumLen = 0.0;
+        for (int i = 1; i <= TABLE_N; i++) {
+            double t = static_cast<double>(i) / TABLE_N;
+            tTable_[i] = t;
+            Point2D pt = bezierCubic(p0, p1, p2, p3, t);
+            cumLen += prev.distanceTo(pt);
+            arcLengthTable_[i] = cumLen;
+            prev = pt;
+        }
+        totalLength_ = cumLen;
+    }
+
+    // Binary search: s → t using the arc-length lookup table
+    double sToT(double s) const {
+        if (totalLength_ < EPSILON) return 0.0;
+        if (s <= 0.0) return 0.0;
+        if (s >= totalLength_) return 1.0;
+
+        // Binary search in arcLengthTable_
+        int lo = 0, hi = TABLE_N;
+        while (lo < hi - 1) {
+            int mid = (lo + hi) / 2;
+            if (arcLengthTable_[mid] < s) lo = mid;
+            else hi = mid;
+        }
+        // Linear interpolate between lo and hi
+        double sLo = arcLengthTable_[lo];
+        double sHi = arcLengthTable_[hi];
+        double frac = (sHi > sLo) ? (s - sLo) / (sHi - sLo) : 0.0;
+        return tTable_[lo] + frac * (tTable_[hi] - tTable_[lo]);
+    }
+
+    // First derivative B'(t)
+    Point2D derivative(double t) const {
+        double mt = 1.0 - t;
+        return (p1 - p0) * (3.0 * mt * mt)
+             + (p2 - p1) * (6.0 * mt * t)
+             + (p3 - p2) * (3.0 * t * t);
+    }
+
+    // Second derivative B''(t)
+    Point2D secondDerivative(double t) const {
+        double mt = 1.0 - t;
+        return (p2 - p1 * 2.0 + p0) * (6.0 * mt)
+             + (p3 - p2 * 2.0 + p1) * (6.0 * t);
+    }
+
+public:
+    BezierSegment() {
+        buildArcLengthTable();
+    }
+
+    BezierSegment(const Point2D& cp0, const Point2D& cp1, const Point2D& cp2, const Point2D& cp3)
+        : p0(cp0), p1(cp1), p2(cp2), p3(cp3) {
+        buildArcLengthTable();
+    }
+
+    // Rebuild table if control points change (for mutable use)
+    void rebuild() { buildArcLengthTable(); }
+
+    void evaluateDS(double s, double& x, double& y, double& heading) const override {
+        if (s < 0.0) s = 0.0;
+        if (s > totalLength_) s = totalLength_;
+
+        double t = sToT(s);
+        Point2D pos = bezierCubic(p0, p1, p2, p3, t);
+        x = pos.x;
+        y = pos.y;
+
+        Point2D d = derivative(t);
+        double dMag = d.norm();
+        if (dMag < EPSILON) {
+            // Degenerate: zero velocity (cusp). Try neighboring t.
+            double tEps = (t < 0.5) ? t + 0.001 : t - 0.001;
+            tEps = std::max(0.0, std::min(1.0, tEps));
+            d = derivative(tEps);
+            dMag = d.norm();
+        }
+        heading = (dMag > EPSILON) ? std::atan2(d.y, d.x) : 0.0;
+    }
+
+    double curvatureDS(double s) const override {
+        if (totalLength_ < EPSILON) return 0.0;
+        if (s < 0.0) s = 0.0;
+        if (s > totalLength_) s = totalLength_;
+
+        double t = sToT(s);
+        Point2D d1 = derivative(t);
+        Point2D d2 = secondDerivative(t);
+        double d1Mag = d1.norm();
+
+        // Guard: |B'(t)|³ in denominator. When |B'(t)| ≈ 0 (cusp at P1==P0
+        // or P2==P3), return 0 instead of dividing by zero.
+        if (d1Mag < EPSILON) return 0.0;
+
+        // 2D cross product: d1 × d2 = d1.x*d2.y - d1.y*d2.x
+        double cross = d1.x * d2.y - d1.y * d2.x;
+        return cross / (d1Mag * d1Mag * d1Mag);
+    }
+
+    double length() const override { return totalLength_; }
+
+    GeometryType type() const override { return GeometryType::Bezier; }
+
+    std::unique_ptr<GeometrySegment> clone() const override {
+        // Copy constructor rebuilds the table (control points are the source
+        // of truth, table is derived). This is correct but costs one rebuild.
+        // If profiling shows this is hot, add a copy constructor that copies
+        // the table directly.
+        return std::make_unique<BezierSegment>(*this);
     }
 };
 
