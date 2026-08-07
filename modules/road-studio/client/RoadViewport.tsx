@@ -190,95 +190,196 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
     const roads = roadsRef.current;
     const selection = selectionRef.current;
+    const refLat = refLatRef.current;
+    const refLon = refLonRef.current;
+
+    // ─── Helper: build a road polygon (left edge + reversed right edge) ───
+    // Offsets the centerline by ±halfWidth in meters, converts to lat/lon
+    function buildRoadPolygon(
+      samples: Array<{ x: number; y: number; z: number }>,
+      halfWidthMeters: number,
+    ): [number, number][][] {
+      if (samples.length < 2) return [];
+      const leftEdge: [number, number][] = [];
+      const rightEdge: [number, number][] = [];
+
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        // Compute tangent direction
+        let tx: number, ty: number;
+        if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+        else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        // Normal = perpendicular to tangent (rotate 90°)
+        const nx = -ty / len;
+        const ny = tx / len;
+
+        // Offset centerline point by ±halfWidth in local meters
+        const lGeo = localToGeo(s.x + nx * halfWidthMeters, s.y + ny * halfWidthMeters, refLat, refLon);
+        const rGeo = localToGeo(s.x - nx * halfWidthMeters, s.y - ny * halfWidthMeters, refLat, refLon);
+        leftEdge.push([lGeo.lon, lGeo.lat]);
+        rightEdge.push([rGeo.lon, rGeo.lat]);
+      }
+
+      // Polygon = left edge forward + right edge backward
+      const ring: [number, number][] = [...leftEdge, ...rightEdge.reverse()];
+      // Close the ring
+      if (ring.length > 0) ring.push(ring[0]);
+      return [ring];
+    }
+
+    // ─── Helper: build offset line for lane markings ──────────────
+    function buildOffsetLine(
+      samples: Array<{ x: number; y: number; z: number }>,
+      offsetMeters: number,
+    ): [number, number][] {
+      const result: [number, number][] = [];
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        let tx: number, ty: number;
+        if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+        else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+        const geo = localToGeo(s.x + nx * offsetMeters, s.y + ny * offsetMeters, refLat, refLon);
+        result.push([geo.lon, geo.lat]);
+      }
+      return result;
+    }
 
     for (const road of roads) {
       if (road.points.length < 2) continue;
 
       // Sample road path with bezier curves
-      const samples = sampleRoad(road, refLatRef.current, refLonRef.current, 16);
-      const coordinates: [number, number][] = samples.map((s) => {
-        const geo = localToGeo(s.x, s.y, refLatRef.current, refLonRef.current);
-        return [geo.lon, geo.lat];
-      });
-
-      const srcId = `rd-src-${road.id}`;
-      map.addSource(srcId, {
-        type: 'geojson',
-        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates } },
-      });
+      const samples = sampleRoad(road, refLat, refLon, 24);
+      if (samples.length < 2) continue;
 
       const profile = road.profile;
       const hasSidewalk = profile?.hasSidewalk ?? false;
       const hasCurb = profile?.hasCurb ?? false;
-      const sidewalkWidth = 2.0; // meters
-      const curbWidth = 0.3;
-      const totalWidth = road.width + (hasSidewalk ? sidewalkWidth * 2 : 0) + (hasCurb ? curbWidth * 2 : 0);
+      const sidewalkWidth = 2.0; // meters per side
+      const curbWidth = 0.3; // meters per side
+      const halfWidth = road.width / 2;
 
-      // Layer 1: Sidewalk outline (widest, light gray) — if profile has sidewalk
+      // ─── Layer 1: Sidewalk polygon (widest) ────────────────────
       if (hasSidewalk) {
+        const swHalf = halfWidth + curbWidth + sidewalkWidth;
+        const swPolygon = buildRoadPolygon(samples, swHalf);
+        const swSrcId = `rd-sw-src-${road.id}`;
+        map.addSource(swSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: swPolygon } },
+        });
         map.addLayer({
           id: `rd-sw-${road.id}`,
-          type: 'line',
-          source: srcId,
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          type: 'fill',
+          source: swSrcId,
           paint: {
-            'line-color': '#9e9e9e',
-            'line-width': totalWidth,
-            'line-opacity': 0.6,
+            'fill-color': '#9e9e9e',
+            'fill-opacity': 0.5,
           },
         });
       }
 
-      // Layer 2: Curb edge (dark) — if profile has curb
+      // ─── Layer 2: Curb polygon (road + curb width) ─────────────
       if (hasCurb) {
-        const curbTotal = road.width + curbWidth * 2;
+        const curbHalf = halfWidth + curbWidth;
+        const curbPolygon = buildRoadPolygon(samples, curbHalf);
+        const curbSrcId = `rd-curb-src-${road.id}`;
+        map.addSource(curbSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: curbPolygon } },
+        });
         map.addLayer({
           id: `rd-curb-${road.id}`,
-          type: 'line',
-          source: srcId,
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          type: 'fill',
+          source: curbSrcId,
           paint: {
-            'line-color': '#616161',
-            'line-width': curbTotal,
-            'line-opacity': 0.7,
+            'fill-color': '#616161',
+            'fill-opacity': 0.7,
           },
         });
       }
 
-      // Layer 3: Road surface (asphalt dark gray)
+      // ─── Layer 3: Road surface polygon (asphalt) ───────────────
+      const roadPolygon = buildRoadPolygon(samples, halfWidth);
+      const surfaceSrcId = `rd-surface-src-${road.id}`;
+      map.addSource(surfaceSrcId, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: roadPolygon } },
+      });
       map.addLayer({
         id: `rd-surface-${road.id}`,
-        type: 'line',
-        source: srcId,
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        type: 'fill',
+        source: surfaceSrcId,
         paint: {
-          'line-color': '#3a3a3a',
-          'line-width': road.width,
-          'line-opacity': 0.9,
+          'fill-color': '#3a3a3a',
+          'fill-opacity': 0.9,
         },
       });
 
-      // Layer 4: Lane dividers (dashed white) — between lanes
+      // ─── Layer 4: Road outline (thin line on edges) ────────────
+      const outlineSrcId = `rd-outline-src-${road.id}`;
+      const outlineCoords = buildRoadPolygon(samples, halfWidth)[0];
+      map.addSource(outlineSrcId, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: outlineCoords } },
+      });
+      map.addLayer({
+        id: `rd-outline-${road.id}`,
+        type: 'line',
+        source: outlineSrcId,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#2a2a2a',
+          'line-width': 1,
+          'line-opacity': 0.8,
+        },
+      });
+
+      // ─── Layer 5: Lane divider lines (dashed white) ────────────
       if (road.laneCount > 1) {
-        map.addLayer({
-          id: `rd-divider-${road.id}`,
-          type: 'line',
-          source: srcId,
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: {
-            'line-color': '#ffffff',
-            'line-width': 1.5,
-            'line-dasharray': [3, 3],
-            'line-opacity': 0.8,
-          },
-        });
+        const laneSpacing = road.width / road.laneCount;
+        for (let lane = 1; lane < road.laneCount; lane++) {
+          const offset = -halfWidth + laneSpacing * lane;
+          const dividerCoords = buildOffsetLine(samples, offset);
+          const divSrcId = `rd-div-src-${road.id}-${lane}`;
+          map.addSource(divSrcId, {
+            type: 'geojson',
+            data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: dividerCoords } },
+          });
+          map.addLayer({
+            id: `rd-div-${road.id}-${lane}`,
+            type: 'line',
+            source: divSrcId,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': '#ffffff',
+              'line-width': 1.5,
+              'line-dasharray': [3, 3],
+              'line-opacity': 0.7,
+            },
+          });
+        }
       }
 
-      // Layer 5: Center line (dashed yellow)
+      // ─── Layer 6: Center line (dashed yellow) ──────────────────
+      const centerCoords = samples.map((s) => {
+        const geo = localToGeo(s.x, s.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+      const centerSrcId = `rd-center-src-${road.id}`;
+      map.addSource(centerSrcId, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: centerCoords } },
+      });
       map.addLayer({
         id: `rd-center-${road.id}`,
         type: 'line',
-        source: srcId,
+        source: centerSrcId,
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
           'line-color': '#ffeb3b',
@@ -288,23 +389,40 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         },
       });
 
-      // Layer 6: Road outline (thin edge line for selected road)
+      // ─── Layer 7: Selected road highlight ──────────────────────
       if (selection.roadId === road.id) {
+        const selHalf = halfWidth + 1.5;
+        const selPolygon = buildRoadPolygon(samples, selHalf);
+        const selSrcId = `rd-sel-src-${road.id}`;
+        map.addSource(selSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: selPolygon } },
+        });
         map.addLayer({
-          id: `rd-selected-${road.id}`,
+          id: `rd-sel-${road.id}`,
+          type: 'fill',
+          source: selSrcId,
+          paint: {
+            'fill-color': '#4ecca3',
+            'fill-opacity': 0.15,
+          },
+        });
+        // Green outline
+        map.addLayer({
+          id: `rd-sel-outline-${road.id}`,
           type: 'line',
-          source: srcId,
+          source: selSrcId,
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
             'line-color': '#4ecca3',
-            'line-width': road.width + 4,
-            'line-opacity': 0.3,
+            'line-width': 2,
+            'line-opacity': 0.8,
           },
         });
       }
     }
 
-    // Control points as circles
+    // ─── Control points as circles ──────────────────────────────
     const cpFeatures: any[] = [];
     for (const road of roads) {
       for (let i = 0; i < road.points.length; i++) {
@@ -324,7 +442,6 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         data: { type: 'FeatureCollection', features: cpFeatures },
       });
 
-      // Control point outer ring
       map.addLayer({
         id: 'cp-ring',
         type: 'circle',
@@ -336,7 +453,6 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         },
       });
 
-      // Control point inner dot
       map.addLayer({
         id: 'cp-dot',
         type: 'circle',
