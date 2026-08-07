@@ -1,36 +1,47 @@
-Fix ABI mismatch + remove all old TypeScript geometry implementations
+Implement SCANeR-style road creation tools in C++ engine
 
-CRITICAL FIX: The C++ addon was compiled for Node.js ABI (137) but Electron
-uses ABI 146. The addon couldn't load in Electron, causing silent fallback
-to TypeScript. Now rebuilt with --target=42.5.1 --dist-url=electronjs.org/headers.
+Add 6 road creation tools matching SCANeR Studio behavior:
 
-Changes:
-- binding.gyp: Rebuilt against Electron 42.5.1 headers (ABI 146)
-- package.json: Updated build:road-engine and added rebuild:road-engine
-  scripts with correct Electron target
-- types.ts: REMOVED all geometry implementations:
-  - bezierPoint, sampleRoad (→ C++ sampleCenterline)
-  - segmentIntersection, lineIntersection, findCenterlineIntersection
-  - closestPointOnRoad, tangentAtSample, normalAtSample, filletArc
-  - computeIntersectionPolygon, convexHull
-  - generateIntersection + all helper functions
-  - computeCircleArc, arcToControlPoints
-  KEPT: type definitions, generateId, geoToLocal, localToGeo,
-  distanceMeters, detectIntersections (lightweight endpoint check)
-- roadEngineClient.ts: Removed TypeScriptRoadEngineFallback class entirely.
-  C++ native engine is the ONLY backend. Throws if not available.
-  Updated sampleCenterline and generateRoadMesh to take refLat/refLon.
-- roadStudioStore.ts: All sampleRoad() calls → roadEngine.sampleCenterline()
-  (async). Removed TS generateIntersection fallback. createIntersectionAtClosestPoint
-  is now async. detectIntersection fails loudly if C++ engine fails.
-- RoadViewport.tsx: Removed sampleRoad, computeIntersectionPolygon, convexHull,
-  computeCircleArc imports. Added sample cache (refreshSampleCache) populated
-  async by C++ engine, used sync for rendering. computeIntersectionPolygonFromCache
-  replaces the old TS function using cached samples.
-- RoadElevationEditor.tsx: Removed unused sampleRoad import.
+1. Segment — straight line with tangent continuity
+2. Circle Arc — constant-radius arc (G1 continuous)
+3. Clothoid Arc — Euler spiral transition (G2 continuous)
+4. Polyline — multi-point with optional fillet corner smoothing
+5. Bezier — cubic Bezier with handle constraints
+6. Clothoid Spline — G2-continuous multi-segment clothoid
 
-Verified: C++ addon loads in Electron (tested with npx electron -e).
-All 11 tests pass with C++ logging output visible.
+C++ Implementation (road_tools.hpp):
+- createSegment(), createCircleArc(), createClothoidArc()
+- createPolyline() with fillet radius for corner smoothing
+- createBezier() with handle in/out as relative offsets
+- createClothoidSpline() using Catmull-Rom tangent estimation
+  plus Walton-Meek style clothoid fitting per span
+- Helper functions: tangentAtEnd(), tangentAtStart(),
+  connectSegment(), connectClothoid()
+
+N-API Bindings (road_bridge.cpp):
+- 6 new functions: roadCreateSegment, roadCreateCircleArc,
+  roadCreateClothoidArc, roadCreatePolyline, roadCreateBezier,
+  roadCreateClothoidSpline
+- roadToJs() serializer for Road objects
+- parsePoint(), parsePoints(), parseToolParams() parsers
+
+IPC Layer:
+- 6 new IPC channels in ipcChannels-electron.ts
+- Handlers in roadEngineHandler.ts
+- Preload bridge in preload.ts
+- Client API in roadEngineClient.ts
+
+UI:
+- Tool type expanded: select|line|pen|arc|clothoid|polyline|spline
+- RoadToolbar updated with all 6 tools (Segment, Arc, Clothoid,
+  Polyline, Bezier, Spline)
+
+Build:
+- package.json: build:road-engine uses Python 3.13 (node-gyp 12
+  requires Python 3.8+; system has 3.6 via VS, 3.13 via msstore)
+- Clean rebuild against Electron 42.5.1 headers (ABI 146)
+
+Tests: 20/20 pass (11 existing + 9 new tool tests)
 
 Generated with Devin (https://devin.ai)
 

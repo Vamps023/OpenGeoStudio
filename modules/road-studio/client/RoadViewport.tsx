@@ -94,6 +94,10 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { selectedRoadIdsRef.current = store.selectedRoadIds; updateAllViews(); }, [store.selectedRoadIds]);
   useEffect(() => { generatedIntersectionsRef.current = store.generatedIntersections; updateAllViews(); }, [store.generatedIntersections]);
   useEffect(() => { updateAllViews(); }, [store.arcPreview]);
+  useEffect(() => { updateAllViews(); }, [store.clothoidPreview]);
+  useEffect(() => { updateAllViews(); }, [store.polylinePoints]);
+  useEffect(() => { updateAllViews(); }, [store.splinePoints]);
+  useEffect(() => { updateAllViews(); }, [store.previewPoint]);
   useEffect(() => {
     roadsRef.current = store.roads;
     // Recompute intersections whenever roads change
@@ -112,6 +116,26 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') shiftDownRef.current = true;
+      // Escape: cancel any in-progress drawing
+      if (e.key === 'Escape') {
+        const st = useRoadStudioStore.getState();
+        st.cancelDrawing();
+        st.finishDrawing();
+      }
+      // Enter: finish current drawing operation
+      if (e.key === 'Enter') {
+        const st = useRoadStudioStore.getState();
+        if (st.arcStartPoint && (st.tool === 'arc' || st.tool === 'clothoid')) {
+          if (st.tool === 'arc') st.finishArc();
+          else st.finishClothoid();
+        } else if (st.polylinePoints) {
+          st.finishPolyline();
+        } else if (st.splinePoints) {
+          st.finishSpline();
+        } else {
+          st.finishDrawing();
+        }
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift') shiftDownRef.current = false;
@@ -243,76 +267,135 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
 
       const tool = toolRef.current;
+      const refLat = refLatRef.current;
+      const refLon = refLonRef.current;
+      const clickLocal = geoToLocal(e.lngLat.lat, e.lngLat.lng, refLat, refLon);
 
-      // ─── Arc tool ───────────────────────────────────────────
-      if (tool === 'arc') {
-        const clickLat = e.lngLat.lat;
-        const clickLon = e.lngLat.lng;
-        const refLat = refLatRef.current;
-        const refLon = refLonRef.current;
-        const clickLocal = geoToLocal(clickLat, clickLon, refLat, refLon);
-
-        // If no arc in progress, start one
-        if (!st.arcStartPoint) {
-          // Determine start direction from the last road segment
-          let startDir: Point2D = { x: 1, y: 0 }; // default: east
-          let startPoint = clickLocal;
-
-          // If there's a drawing road, use its last segment direction
-          const drawingId = drawingRoadIdRef.current;
-          if (drawingId) {
-            const road = roadsRef.current.find((r) => r.id === drawingId);
-            if (road && road.points.length >= 2) {
-              const p0 = road.points[road.points.length - 2];
-              const p1 = road.points[road.points.length - 1];
-              const l0 = geoToLocal(p0.lat, p0.lon, refLat, refLon);
-              const l1 = geoToLocal(p1.lat, p1.lon, refLat, refLon);
-              const dx = l1.x - l0.x;
-              const dy = l1.y - l0.y;
-              const len = Math.sqrt(dx * dx + dy * dy) || 1;
-              startDir = { x: dx / len, y: dy / len };
-              startPoint = l1;
+      // ─── Helper: snap to existing endpoints ────────────────
+      const snapPoint = (lat: number, lon: number): { lat: number; lon: number } => {
+        if (!snapEnabledRef.current) return { lat, lon };
+        const snapDist = 0.00005;
+        for (const road of roadsRef.current) {
+          for (const p of road.points) {
+            if (Math.abs(p.lat - lat) < snapDist && Math.abs(p.lon - lon) < snapDist) {
+              return { lat: p.lat, lon: p.lon };
             }
+          }
+        }
+        return { lat, lon };
+      };
+
+      // ─── Helper: get tangent from last road segment ─────────
+      const getLastTangent = (): { point: Point2D; dir: Point2D } | null => {
+        const drawingId = drawingRoadIdRef.current;
+        if (!drawingId) return null;
+        const road = roadsRef.current.find((r) => r.id === drawingId);
+        if (!road || road.points.length < 2) return null;
+        const p0 = road.points[road.points.length - 2];
+        const p1 = road.points[road.points.length - 1];
+        const l0 = geoToLocal(p0.lat, p0.lon, refLat, refLon);
+        const l1 = geoToLocal(p1.lat, p1.lon, refLat, refLon);
+        const dx = l1.x - l0.x;
+        const dy = l1.y - l0.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        return { point: l1, dir: { x: dx / len, y: dy / len } };
+      };
+
+      // ─── Segment tool (straight line) ──────────────────────
+      if (tool === 'line') {
+        const snapped = snapPoint(e.lngLat.lat, e.lngLat.lng);
+        const drawingId = drawingRoadIdRef.current;
+        if (!drawingId) {
+          st.startNewRoad(snapped.lat, snapped.lon);
+        } else {
+          st.pushHistory('Add segment point');
+          st.addControlPoint(drawingId, snapped.lat, snapped.lon);
+        }
+        return;
+      }
+
+      // ─── Pen (Bézier) tool ──────────────────────────────────
+      if (tool === 'pen') {
+        const snapped = snapPoint(e.lngLat.lat, e.lngLat.lng);
+        const drawingId = drawingRoadIdRef.current;
+        if (!drawingId) {
+          st.startNewRoad(snapped.lat, snapped.lon);
+        } else {
+          st.pushHistory('Add bézier point');
+          st.addControlPoint(drawingId, snapped.lat, snapped.lon);
+        }
+        return;
+      }
+
+      // ─── Circle Arc tool ────────────────────────────────────
+      if (tool === 'arc') {
+        if (!st.arcStartPoint) {
+          // Start: use last road segment direction if available
+          const lastTan = getLastTangent();
+          if (lastTan) {
+            st.startArc(lastTan.point, lastTan.dir);
           } else {
-            // No drawing road — start from click point with default direction
-            // But first, start a new road with this point
-            st.startNewRoad(clickLat, clickLon);
-            // The arc will be added as a second point to this road
+            // No existing road — start from click with default direction
+            st.startNewRoad(e.lngLat.lat, e.lngLat.lng);
             return;
           }
-
-          st.startArc(startPoint, startDir);
         } else {
-          // Arc in progress — finish it
           st.finishArc();
         }
         return;
       }
 
-      if (tool !== 'line' && tool !== 'pen') return;
-
-      let finalLat = e.lngLat.lat;
-      let finalLon = e.lngLat.lng;
-
-      // Snap to existing endpoints
-      if (snapEnabledRef.current) {
-        const snapDist = 0.00005;
-        for (const road of roadsRef.current) {
-          for (const p of road.points) {
-            if (Math.abs(p.lat - finalLat) < snapDist && Math.abs(p.lon - finalLon) < snapDist) {
-              finalLat = p.lat;
-              finalLon = p.lon;
-            }
+      // ─── Clothoid Arc tool ──────────────────────────────────
+      if (tool === 'clothoid') {
+        if (!st.arcStartPoint) {
+          const lastTan = getLastTangent();
+          if (lastTan) {
+            st.startClothoid(lastTan.point, lastTan.dir);
+          } else {
+            st.startNewRoad(e.lngLat.lat, e.lngLat.lng);
+            return;
           }
+        } else {
+          st.finishClothoid();
         }
+        return;
       }
 
-      const drawingId = drawingRoadIdRef.current;
-      if (!drawingId) {
-        st.startNewRoad(finalLat, finalLon);
-      } else {
-        st.pushHistory('Add control point');
-        st.addControlPoint(drawingId, finalLat, finalLon);
+      // ─── Polyline tool ──────────────────────────────────────
+      if (tool === 'polyline') {
+        if (!st.polylinePoints) {
+          st.startPolyline(clickLocal);
+        } else {
+          st.addPolylinePoint(clickLocal);
+        }
+        return;
+      }
+
+      // ─── Clothoid Spline tool ───────────────────────────────
+      if (tool === 'spline') {
+        if (!st.splinePoints) {
+          st.startSpline(clickLocal);
+        } else {
+          st.addSplinePoint(clickLocal);
+        }
+        return;
+      }
+    });
+
+    // Right-click: finish current drawing operation
+    map.on('contextmenu', (e) => {
+      e.preventDefault();
+      const st = useRoadStudioStore.getState();
+      if (st.arcStartPoint && st.tool === 'arc') {
+        st.finishArc();
+      } else if (st.arcStartPoint && st.tool === 'clothoid') {
+        st.finishClothoid();
+      } else if (st.polylinePoints) {
+        st.finishPolyline();
+      } else if (st.splinePoints) {
+        st.finishSpline();
+      } else if (st.drawingRoadId) {
+        st.finishDrawing();
       }
     });
 
@@ -322,11 +405,24 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       const cpLayers = map.getLayer('cp-dot') ? ['cp-dot'] : [];
       const features = map.queryRenderedFeatures(e.point, { layers: [...roadLayers, ...cpLayers] });
       const st = useRoadStudioStore.getState();
+      const tool = toolRef.current;
+      const mouseLocal = geoToLocal(e.lngLat.lat, e.lngLat.lon, refLatRef.current, refLonRef.current);
 
-      // Arc tool: update preview on mouse move
-      if (st.arcStartPoint && toolRef.current === 'arc') {
-        const mouseLocal = geoToLocal(e.lngLat.lat, e.lngLat.lon, refLatRef.current, refLonRef.current);
+      // Update preview point for all tools
+      st.setPreviewPoint(mouseLocal);
+
+      // Tool-specific preview updates
+      if (st.arcStartPoint && tool === 'arc') {
         st.updateArcPreview(mouseLocal);
+        map.getCanvas().style.cursor = 'crosshair';
+      } else if (st.arcStartPoint && tool === 'clothoid') {
+        st.updateClothoidPreview(mouseLocal);
+        map.getCanvas().style.cursor = 'crosshair';
+      } else if (st.polylinePoints && tool === 'polyline') {
+        map.getCanvas().style.cursor = 'crosshair';
+      } else if (st.splinePoints && tool === 'spline') {
+        map.getCanvas().style.cursor = 'crosshair';
+      } else if (st.drawingRoadId && (tool === 'line' || tool === 'pen')) {
         map.getCanvas().style.cursor = 'crosshair';
       } else {
         map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
@@ -1045,6 +1141,142 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1,
           },
+        });
+      }
+    }
+
+    // ─── Clothoid preview ─────────────────────────────────────
+    const clothoidPreview = useRoadStudioStore.getState().clothoidPreview;
+    if (clothoidPreview && clothoidPreview.length >= 2) {
+      const clCoords: [number, number][] = clothoidPreview.map((p) => {
+        const geo = localToGeo(p.x, p.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+      map.addSource('clothoid-preview-src', {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: clCoords } },
+      });
+      map.addLayer({
+        id: 'clothoid-preview-line',
+        type: 'line',
+        source: 'clothoid-preview-src',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ff9800', 'line-width': 4, 'line-opacity': 0.6, 'line-dasharray': [3, 2] },
+      });
+    }
+
+    // ─── Polyline preview ─────────────────────────────────────
+    const polylinePoints = useRoadStudioStore.getState().polylinePoints;
+    const previewPoint = useRoadStudioStore.getState().previewPoint;
+    if (polylinePoints && polylinePoints.length >= 1) {
+      // Show collected points + line to cursor
+      const pts = [...polylinePoints];
+      if (previewPoint) pts.push(previewPoint);
+      const plCoords: [number, number][] = pts.map((p) => {
+        const geo = localToGeo(p.x, p.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+
+      if (plCoords.length >= 2) {
+        map.addSource('polyline-preview-src', {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: plCoords } },
+        });
+        map.addLayer({
+          id: 'polyline-preview-line',
+          type: 'line',
+          source: 'polyline-preview-src',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#2196f3', 'line-width': 3, 'line-opacity': 0.6, 'line-dasharray': [3, 2] },
+        });
+      }
+
+      // Show collected points as markers
+      for (let i = 0; i < polylinePoints.length; i++) {
+        const geo = localToGeo(polylinePoints[i].x, polylinePoints[i].y, refLat, refLon);
+        const ptSrcId = `polyline-pt-${i}-src`;
+        map.addSource(ptSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [geo.lon, geo.lat] } },
+        });
+        map.addLayer({
+          id: `polyline-pt-${i}`,
+          type: 'circle',
+          source: ptSrcId,
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#2196f3',
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+          },
+        });
+      }
+    }
+
+    // ─── Spline preview ───────────────────────────────────────
+    const splinePoints = useRoadStudioStore.getState().splinePoints;
+    if (splinePoints && splinePoints.length >= 1) {
+      const pts = [...splinePoints];
+      if (previewPoint) pts.push(previewPoint);
+      const spCoords: [number, number][] = pts.map((p) => {
+        const geo = localToGeo(p.x, p.y, refLat, refLon);
+        return [geo.lon, geo.lat];
+      });
+
+      if (spCoords.length >= 2) {
+        map.addSource('spline-preview-src', {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: spCoords } },
+        });
+        map.addLayer({
+          id: 'spline-preview-line',
+          type: 'line',
+          source: 'spline-preview-src',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#9c27b0', 'line-width': 3, 'line-opacity': 0.6, 'line-dasharray': [3, 2] },
+        });
+      }
+
+      for (let i = 0; i < splinePoints.length; i++) {
+        const geo = localToGeo(splinePoints[i].x, splinePoints[i].y, refLat, refLon);
+        const ptSrcId = `spline-pt-${i}-src`;
+        map.addSource(ptSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [geo.lon, geo.lat] } },
+        });
+        map.addLayer({
+          id: `spline-pt-${i}`,
+          type: 'circle',
+          source: ptSrcId,
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#9c27b0',
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+          },
+        });
+      }
+    }
+
+    // ─── Line/Pen preview (line from last point to cursor) ───
+    const drawingRoadId = useRoadStudioStore.getState().drawingRoadId;
+    if (drawingRoadId && previewPoint && (tool === 'line' || tool === 'pen')) {
+      const road = roads.find((r) => r.id === drawingRoadId);
+      if (road && road.points.length >= 1) {
+        const lastPt = road.points[road.points.length - 1];
+        const lastLocal = geoToLocal(lastPt.lat, lastPt.lon, refLat, refLon);
+        const startGeo = localToGeo(lastLocal.x, lastLocal.y, refLat, refLon);
+        const endGeo = localToGeo(previewPoint.x, previewPoint.y, refLat, refLon);
+        map.addSource('line-preview-src', {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[startGeo.lon, startGeo.lat], [endGeo.lon, endGeo.lat]] } },
+        });
+        map.addLayer({
+          id: 'line-preview',
+          type: 'line',
+          source: 'line-preview-src',
+          layout: { 'line-cap': 'round' },
+          paint: { 'line-color': '#4ecca3', 'line-width': 3, 'line-opacity': 0.5, 'line-dasharray': [3, 2] },
         });
       }
     }

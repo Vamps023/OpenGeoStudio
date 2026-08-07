@@ -295,14 +295,52 @@ inline double polylineLength(const std::vector<Point2D>& points) {
 }
 
 // Offset a polyline by a given distance (positive = left, negative = right)
+// Uses miter joints at interior vertices to maintain consistent offset width
+// on curves. This is the correct algorithm for road edge generation.
 inline std::vector<Point2D> offsetPolyline(const std::vector<Point2D>& points, double offset) {
     if (points.size() < 2) return points;
     std::vector<Point2D> result;
     result.reserve(points.size());
+
     for (size_t i = 0; i < points.size(); i++) {
-        Vec2 tangent = tangentAt(points, i);
-        Vec2 normal = tangent.perp();  // left normal
-        result.push_back(points[i] + normal * offset);
+        // Compute incoming and outgoing tangents
+        Vec2 tanIn, tanOut;
+        if (i == 0) {
+            tanOut = (points[1] - points[0]).normalized();
+            tanIn = tanOut;
+        } else if (i == points.size() - 1) {
+            tanIn = (points[i] - points[i - 1]).normalized();
+            tanOut = tanIn;
+        } else {
+            tanIn = (points[i] - points[i - 1]).normalized();
+            tanOut = (points[i + 1] - points[i]).normalized();
+        }
+
+        // Miter joint: bisect the angle between incoming and outgoing tangents
+        // The miter direction is the normalized sum of the left normals
+        Vec2 normIn = tanIn.perp();   // left normal of incoming
+        Vec2 normOut = tanOut.perp(); // left normal of outgoing
+
+        // Miter vector = (normIn + normOut) normalized
+        Vec2 miter = normIn + normOut;
+        double miterLen = miter.norm();
+
+        if (miterLen < EPSILON) {
+            // Tangents are opposite (180° turn) — use perpendicular
+            result.push_back(points[i] + normIn * offset);
+        } else {
+            // Scale by 1/sin(halfAngle) = |normIn + normOut| / (2 * cos(halfAngle))
+            // Simplification: miter length = 1 / dot(normIn, miter_normalized)
+            miter = miter / miterLen;
+            double dot = normIn.dot(miter);
+            if (std::abs(dot) < EPSILON) {
+                result.push_back(points[i] + normIn * offset);
+            } else {
+                // Clamp miter to avoid extreme spikes on sharp angles
+                double miterScale = std::min(1.0 / dot, 4.0);
+                result.push_back(points[i] + miter * offset * miterScale);
+            }
+        }
     }
     return result;
 }

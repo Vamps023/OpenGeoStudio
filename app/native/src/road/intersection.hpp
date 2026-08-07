@@ -46,6 +46,10 @@ inline Point2D findCenterlineIntersection(const std::vector<Point2D>& cl1,
 }
 
 // ─── Build approach centerline ─────────────────────────────
+// Builds a trimmed centerline from one side of the intersection.
+// startSide=true: from road start to intersection (reversed)
+// startSide=false: from intersection to road end
+// The approach ends exactly at trimDist from the center.
 inline std::vector<Point2D> buildApproachCenterline(
     const std::vector<Point2D>& samples,
     const Point2D& center,
@@ -56,27 +60,46 @@ inline std::vector<Point2D> buildApproachCenterline(
     std::vector<Point2D> approach;
 
     if (startSide) {
+        // Collect samples from start up to closestIdx that are beyond trimDist
         for (size_t i = 0; i <= closestIdx; i++) {
             double d = samples[i].distanceTo(center);
-            if (d > trimDist) approach.push_back(samples[i]);
+            if (d > trimDist) {
+                approach.push_back(samples[i]);
+            }
         }
-        if (!approach.empty()) {
+        // Add the exact trim point along the line from last sample to center
+        if (approach.empty()) {
+            // All samples are within trimDist — create a point at exactly trimDist
+            // along the direction from center to the closest sample
+            Vec2 dir = (samples[closestIdx] - center).normalized();
+            approach.push_back(center + dir * trimDist);
+        } else {
             auto& last = approach.back();
-            Vec2 dir = (center - last).normalized();
             double d = last.distanceTo(center);
-            if (d > 0) {
+            if (d > trimDist) {
+                Vec2 dir = (center - last).normalized();
                 approach.push_back(last + dir * (d - trimDist));
             }
         }
     } else {
+        // Collect samples from closestIdx to end that are beyond trimDist
         for (size_t i = closestIdx; i < samples.size(); i++) {
             double d = samples[i].distanceTo(center);
-            if (d > trimDist) approach.push_back(samples[i]);
+            if (d > trimDist) {
+                approach.push_back(samples[i]);
+            }
         }
-        if (!approach.empty()) {
+        // Prepend the exact trim point along the line from center to first sample
+        if (approach.empty()) {
+            Vec2 dir = (samples[closestIdx] - center).normalized();
+            approach.push_back(center + dir * trimDist);
+        } else {
             auto& first = approach.front();
-            Vec2 dir = (first - center).normalized();
-            approach.insert(approach.begin(), center + dir * trimDist);
+            double d = first.distanceTo(center);
+            if (d > trimDist) {
+                Vec2 dir = (first - center).normalized();
+                approach.insert(approach.begin(), center + dir * trimDist);
+            }
         }
     }
     return approach;
@@ -137,29 +160,48 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         Point2D corner = lineIntersection(current.rightEdge, current.tangent,
                                            next.leftEdge, next.tangent);
 
-        // Add right edge of current
+        // Add right edge of current approach
         polygon.push_back(current.rightEdge);
 
         if (isValid(corner)) {
-            Vec2 dirIn = (current.rightEdge - corner).normalized();
-            Vec2 dirOut = (next.leftEdge - corner).normalized();
-            double lenIn = current.rightEdge.distanceTo(corner);
-            double lenOut = next.leftEdge.distanceTo(corner);
-            double r = std::min({cornerRadius, lenIn * 0.9, lenOut * 0.9});
+            // Check if corner is reasonable (not too far from center)
+            double cornerDist = corner.distanceTo(center);
+            double maxCornerDist = 100.0;  // sanity limit
 
-            if (r > 0.1) {
-                auto arc = filletArc(corner, dirIn, dirOut, r, filletSegments);
-                for (size_t j = 1; j < arc.size() - 1; j++) {
-                    polygon.push_back(arc[j]);
+            if (cornerDist < maxCornerDist) {
+                Vec2 dirIn = (current.rightEdge - corner).normalized();
+                Vec2 dirOut = (next.leftEdge - corner).normalized();
+                double lenIn = current.rightEdge.distanceTo(corner);
+                double lenOut = next.leftEdge.distanceTo(corner);
+                double r = std::min({cornerRadius, lenIn * 0.9, lenOut * 0.9});
+
+                if (r > 0.1) {
+                    auto arc = filletArc(corner, dirIn, dirOut, r, filletSegments);
+                    for (size_t j = 1; j < arc.size() - 1; j++) {
+                        polygon.push_back(arc[j]);
+                    }
                 }
             }
+            // If corner is invalid/too far, just connect directly (sharp corner)
         }
 
-        // Add left edge of next
+        // Add left edge of next approach
         polygon.push_back(next.leftEdge);
     }
 
-    return polygon;
+    // Validate polygon: remove duplicate consecutive points
+    std::vector<Point2D> cleaned;
+    for (const auto& p : polygon) {
+        if (cleaned.empty() || p.distanceTo(cleaned.back()) > EPSILON) {
+            cleaned.push_back(p);
+        }
+    }
+    // Check first/last duplicate
+    if (cleaned.size() > 1 && cleaned.front().distanceTo(cleaned.back()) < EPSILON) {
+        cleaned.pop_back();
+    }
+
+    return cleaned;
 }
 
 // ─── Generate lane connections ─────────────────────────────

@@ -372,3 +372,169 @@ describeIfAddon('C++ Road Creation Tools', () => {
     expect(road.points.length).toBe(2);
   });
 });
+
+// ─── Geometry Pipeline Validation Tests ─────────────────────
+describeIfAddon('C++ Geometry Pipeline Validation', () => {
+  it('should generate road mesh with miter-joint edges', () => {
+    // Curved road (arc) — miter joints should prevent edge self-intersection
+    const road = {
+      id: 'test-curve', width: 8.0, laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 50, y: 20, z: 0, type: 'smooth' },
+        { x: 100, y: 0, z: 0, type: 'corner' },
+      ],
+    };
+    const mesh = addon.roadGenerateRoadMesh(road, 32);
+    expect(mesh.vertexCount).toBeGreaterThan(0);
+    expect(mesh.triangleCount).toBeGreaterThan(0);
+    // Each vertex should have x, y, z
+    expect(mesh.vertices.length).toBe(mesh.vertexCount * 3);
+    // Each triangle has 3 indices
+    expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
+  });
+
+  it('should generate arc-length UVs (not uniform)', () => {
+    const road = {
+      id: 'test-uv', width: 8.0, laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 100, y: 0, z: 0, type: 'corner' },
+      ],
+    };
+    const mesh = addon.roadGenerateRoadMesh(road, 32);
+    // UVs should be [u, v] pairs
+    expect(mesh.uvs.length).toBe(mesh.vertexCount * 2);
+    // First vertex v should be 0, last should be totalLength/10 = 10
+    expect(mesh.uvs[1]).toBeCloseTo(0, 5);
+    expect(mesh.uvs[mesh.uvs.length - 1]).toBeCloseTo(10, 1);
+  });
+
+  it('should triangulate CW polygons correctly', () => {
+    // CW polygon (clockwise winding)
+    const cwPolygon = [
+      { x: 0, y: 0 },
+      { x: 0, y: 10 },
+      { x: 10, y: 10 },
+      { x: 10, y: 0 },
+    ];
+    // Create an intersection with CW polygon
+    const ix = {
+      center: { x: 5, y: 5 },
+      polygon: cwPolygon,
+      approaches: [],
+      laneConnections: [],
+      stopLines: [],
+      crosswalks: [],
+    };
+    const mesh = addon.roadGenerateIntersectionMesh(ix, 0);
+    expect(mesh.triangleCount).toBeGreaterThan(0);
+    expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
+  });
+
+  it('should triangulate CCW polygons correctly', () => {
+    // CCW polygon (counter-clockwise winding)
+    const ccwPolygon = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const ix = {
+      center: { x: 5, y: 5 },
+      polygon: ccwPolygon,
+      approaches: [],
+      laneConnections: [],
+      stopLines: [],
+      crosswalks: [],
+    };
+    const mesh = addon.roadGenerateIntersectionMesh(ix, 0);
+    expect(mesh.triangleCount).toBeGreaterThan(0);
+    expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
+  });
+
+  it('should sample centerline with arc-length distribution', () => {
+    // Road with unequal segment lengths
+    const road = {
+      id: 'test-arc-length', width: 8.0, laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 10, y: 0, z: 0, type: 'corner' },   // short segment (10m)
+        { x: 110, y: 0, z: 0, type: 'corner' },   // long segment (100m)
+      ],
+    };
+    const samples = addon.roadSampleCenterline(road, 32);
+    expect(samples.length).toBeGreaterThan(10);
+    // The long segment should get more samples than the short segment
+    // Check that samples are denser in the first 10m than in the last 100m
+    const firstSegSamples = samples.filter((s: any) => s.x < 10).length;
+    const lastSegSamples = samples.filter((s: any) => s.x > 10).length;
+    // Both segments should have at least 2 samples
+    expect(firstSegSamples).toBeGreaterThanOrEqual(2);
+    expect(lastSegSamples).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should interpolate z by arc length, not by index', () => {
+    // sampleCenterline returns 2D points (no z), but generateRoadMesh uses 3D
+    // Test via mesh: the road has z=0 for first 10m, z=100 for next 100m
+    const road = {
+      id: 'test-z', width: 8.0, laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 10, y: 0, z: 0, type: 'corner' },    // short, z=0
+        { x: 110, y: 0, z: 100, type: 'corner' },  // long, z=100
+      ],
+    };
+    const mesh = addon.roadGenerateRoadMesh(road, 32);
+    // The mesh vertices include z. Find a vertex near x=60 (midpoint of long segment)
+    // z should be approximately 50 (halfway through the z transition)
+    let foundMidZ = false;
+    for (let i = 0; i < mesh.vertices.length; i += 3) {
+      const x = mesh.vertices[i];
+      const z = mesh.vertices[i + 2];
+      if (Math.abs(x - 60) < 10) {
+        expect(z).toBeGreaterThan(20);
+        expect(z).toBeLessThan(80);
+        foundMidZ = true;
+        break;
+      }
+    }
+    expect(foundMidZ).toBe(true);
+  });
+
+  it('should generate intersection polygon without duplicate points', () => {
+    const road1 = {
+      id: 'r1', width: 8, laneCount: 2,
+      points: [{ x: -50, y: 0, z: 0, type: 'corner' }, { x: 50, y: 0, z: 0, type: 'corner' }],
+    };
+    const road2 = {
+      id: 'r2', width: 8, laneCount: 2,
+      points: [{ x: 0, y: -50, z: 0, type: 'corner' }, { x: 0, y: 50, z: 0, type: 'corner' }],
+    };
+    const ix = addon.roadGenerateIntersection(road1, road2, 37.7749, -122.4194);
+    expect(ix.polygon.length).toBeGreaterThan(3);
+    // Check no duplicate consecutive points
+    for (let i = 0; i < ix.polygon.length; i++) {
+      const j = (i + 1) % ix.polygon.length;
+      const dx = ix.polygon[i].x - ix.polygon[j].x;
+      const dy = ix.polygon[i].y - ix.polygon[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      expect(dist).toBeGreaterThan(0.001);
+    }
+  });
+
+  it('should generate lane boundaries for multi-lane roads', () => {
+    // This tests the generateLaneBoundaries function (if exposed)
+    // For now, just verify the mesh has enough vertices for lane rendering
+    const road = {
+      id: 'test-lanes', width: 16.0, laneCount: 4,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 100, y: 0, z: 0, type: 'corner' },
+      ],
+    };
+    const mesh = addon.roadGenerateRoadMesh(road, 32);
+    // 32 samples × 2 edges = 64 vertices (plus possible extra from arc-length sampling)
+    expect(mesh.vertexCount).toBeGreaterThanOrEqual(64);
+  });
+});

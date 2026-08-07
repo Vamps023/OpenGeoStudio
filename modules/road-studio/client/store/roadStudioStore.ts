@@ -63,6 +63,18 @@ interface RoadStudioState {
   arcStartDirection: Point2D | null;
   /** Arc tool: current preview arc (updated on mouse move) */
   arcPreview: CircleArc | null;
+  /** Preview point for all tools (in local meters) — updated on mouse move */
+  previewPoint: Point2D | null;
+  /** Clothoid tool: end direction (for G2 continuity) */
+  clothoidEndDirection: Point2D | null;
+  /** Clothoid tool: preview result */
+  clothoidPreview: Array<{ x: number; y: number }> | null;
+  /** Polyline tool: points being collected (in local meters) */
+  polylinePoints: Array<{ x: number; y: number }> | null;
+  /** Spline tool: points being collected (in local meters) */
+  splinePoints: Array<{ x: number; y: number }> | null;
+  /** Spline tool: start tangent direction */
+  splineStartTangent: Point2D | null;
   /** View mode: 'top' = 2D top-down, 'perspective' = 3D angled */
   viewMode: 'top' | 'perspective';
   /** Whether the satellite map overlay is shown in top view */
@@ -130,6 +142,39 @@ interface RoadStudioState {
   /** Arc tool: cancel the current arc */
   cancelArc: () => void;
 
+  /** Set the preview point (mouse position in local meters) */
+  setPreviewPoint: (point: Point2D | null) => void;
+
+  /** Clothoid tool: start a clothoid arc from a point with direction */
+  startClothoid: (startPoint: Point2D, startDirection: Point2D) => void;
+  /** Clothoid tool: update preview based on mouse position */
+  updateClothoidPreview: (endPoint: Point2D) => void;
+  /** Clothoid tool: finish — creates road from clothoid */
+  finishClothoid: () => void;
+  /** Clothoid tool: cancel */
+  cancelClothoid: () => void;
+
+  /** Polyline tool: start collecting points */
+  startPolyline: (firstPoint: Point2D) => void;
+  /** Polyline tool: add a point */
+  addPolylinePoint: (point: Point2D) => void;
+  /** Polyline tool: finish — creates road from polyline */
+  finishPolyline: () => void;
+  /** Polyline tool: cancel */
+  cancelPolyline: () => void;
+
+  /** Spline tool: start collecting points */
+  startSpline: (firstPoint: Point2D) => void;
+  /** Spline tool: add a point */
+  addSplinePoint: (point: Point2D) => void;
+  /** Spline tool: finish — creates road from clothoid spline */
+  finishSpline: () => void;
+  /** Spline tool: cancel */
+  cancelSpline: () => void;
+
+  /** Generic: cancel any in-progress tool operation */
+  cancelDrawing: () => void;
+
   /** Undo */
   undo: () => void;
   /** Redo */
@@ -192,6 +237,12 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   arcStartPoint: null,
   arcStartDirection: null,
   arcPreview: null,
+  previewPoint: null,
+  clothoidEndDirection: null,
+  clothoidPreview: null,
+  polylinePoints: null,
+  splinePoints: null,
+  splineStartTangent: null,
   viewMode: 'top',
   showMapOverlay: false,
   intersections: [],
@@ -259,13 +310,14 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       handleOut: null,
       type: 'corner',
     };
+    const newPointIndex = state.roads.find((r) => r.id === roadId)?.points.length ?? 0;
     set({
       roads: state.roads.map((r) =>
         r.id === roadId
           ? { ...r, points: [...r.points, point] }
           : r
       ),
-      selection: { roadId, pointIndices: [0], handle: null },
+      selection: { roadId, pointIndices: [newPointIndex], handle: null },
     });
   },
 
@@ -517,6 +569,256 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   },
 
   cancelArc: () => set({ arcStartPoint: null, arcStartDirection: null, arcPreview: null }),
+
+  // ─── Preview point (all tools) ────────────────────────────
+  setPreviewPoint: (point) => set({ previewPoint: point }),
+
+  // ─── Clothoid Arc tool ────────────────────────────────────
+  startClothoid: (startPoint, startDirection) => {
+    set({
+      arcStartPoint: startPoint,
+      arcStartDirection: startDirection,
+      clothoidEndDirection: null,
+      clothoidPreview: null,
+    });
+  },
+
+  updateClothoidPreview: (endPoint) => {
+    const state = get();
+    if (!state.arcStartPoint || !state.arcStartDirection) return;
+    // Estimate end direction from the last road segment or default perpendicular
+    const endDir = state.clothoidEndDirection || {
+      x: endPoint.x - state.arcStartPoint.x,
+      y: endPoint.y - state.arcStartPoint.y,
+    };
+    const len = Math.sqrt(endDir.x * endDir.x + endDir.y * endDir.y) || 1;
+    const normEndDir = { x: endDir.x / len, y: endDir.y / len };
+
+    roadEngine.createClothoidArc(
+      state.arcStartPoint.x, state.arcStartPoint.y,
+      state.arcStartDirection.x, state.arcStartDirection.y,
+      endPoint.x, endPoint.y,
+      normEndDir.x, normEndDir.y,
+      16
+    ).then((result: any) => {
+      if (result?.points) {
+        set({ clothoidPreview: result.points });
+      }
+    }).catch((err) => {
+      console.error('[Store] updateClothoidPreview: C++ engine failed:', err);
+    });
+  },
+
+  finishClothoid: () => {
+    const state = get();
+    if (!state.clothoidPreview || state.clothoidPreview.length < 2) {
+      set({ arcStartPoint: null, arcStartDirection: null, clothoidPreview: null, clothoidEndDirection: null });
+      return;
+    }
+
+    const controlPoints: ControlPoint[] = state.clothoidPreview.map((p) => {
+      const geo = localToGeo(p.x, p.y, state.refLat, state.refLon);
+      return {
+        id: generateId(),
+        lat: geo.lat,
+        lon: geo.lon,
+        z: 0,
+        handleIn: null,
+        handleOut: null,
+        type: 'smooth' as const,
+      };
+    });
+
+    const roadId = `road_${generateId()}`;
+    const road: Road = {
+      id: roadId,
+      name: `Clothoid Road ${state.roads.length + 1}`,
+      points: controlPoints,
+      width: state.defaultWidth,
+      laneCount: state.defaultLaneCount,
+      color: '#4ecca3',
+      profile: { ...ROAD_PROFILES.city_2x1 },
+      startIntersectionId: null,
+      endIntersectionId: null,
+    };
+
+    get().pushHistory('Finish clothoid road');
+    set({
+      roads: [...state.roads, road],
+      arcStartPoint: null,
+      arcStartDirection: null,
+      clothoidPreview: null,
+      clothoidEndDirection: null,
+      selection: { roadId, pointIndices: [], handle: null },
+    });
+  },
+
+  cancelClothoid: () => set({
+    arcStartPoint: null,
+    arcStartDirection: null,
+    clothoidPreview: null,
+    clothoidEndDirection: null,
+  }),
+
+  // ─── Polyline tool ────────────────────────────────────────
+  startPolyline: (firstPoint) => {
+    set({ polylinePoints: [firstPoint] });
+  },
+
+  addPolylinePoint: (point) => {
+    const state = get();
+    if (!state.polylinePoints) return;
+    set({ polylinePoints: [...state.polylinePoints, point] });
+  },
+
+  finishPolyline: () => {
+    const state = get();
+    if (!state.polylinePoints || state.polylinePoints.length < 2) {
+      set({ polylinePoints: null });
+      return;
+    }
+
+    // Use C++ engine to create polyline with fillet corners
+    roadEngine.createPolyline(state.polylinePoints, 5.0, 6).then((result: any) => {
+      if (!result?.points || result.points.length < 2) {
+        set({ polylinePoints: null });
+        return;
+      }
+      const controlPoints: ControlPoint[] = result.points.map((p: any) => {
+        const geo = localToGeo(p.x, p.y, state.refLat, state.refLon);
+        return {
+          id: generateId(),
+          lat: geo.lat,
+          lon: geo.lon,
+          z: 0,
+          handleIn: null,
+          handleOut: null,
+          type: (p.type === 'smooth' ? 'smooth' : 'corner') as 'smooth' | 'corner',
+        };
+      });
+
+      const roadId = `road_${generateId()}`;
+      const road: Road = {
+        id: roadId,
+        name: `Polyline Road ${get().roads.length + 1}`,
+        points: controlPoints,
+        width: get().defaultWidth,
+        laneCount: get().defaultLaneCount,
+        color: '#4ecca3',
+        profile: { ...ROAD_PROFILES.city_2x1 },
+        startIntersectionId: null,
+        endIntersectionId: null,
+      };
+
+      get().pushHistory('Finish polyline road');
+      set({
+        roads: [...get().roads, road],
+        polylinePoints: null,
+        selection: { roadId, pointIndices: [], handle: null },
+      });
+    }).catch((err) => {
+      console.error('[Store] finishPolyline: C++ engine failed:', err);
+      set({ polylinePoints: null });
+    });
+  },
+
+  cancelPolyline: () => set({ polylinePoints: null }),
+
+  // ─── Clothoid Spline tool ─────────────────────────────────
+  startSpline: (firstPoint) => {
+    set({ splinePoints: [firstPoint], splineStartTangent: null });
+  },
+
+  addSplinePoint: (point) => {
+    const state = get();
+    if (!state.splinePoints) return;
+    set({ splinePoints: [...state.splinePoints, point] });
+  },
+
+  finishSpline: () => {
+    const state = get();
+    if (!state.splinePoints || state.splinePoints.length < 2) {
+      set({ splinePoints: null, splineStartTangent: null });
+      return;
+    }
+
+    // Estimate start and end tangents from the point sequence
+    const pts = state.splinePoints;
+    const startTan = {
+      x: pts[1].x - pts[0].x,
+      y: pts[1].y - pts[0].y,
+    };
+    const sl = Math.sqrt(startTan.x * startTan.x + startTan.y * startTan.y) || 1;
+    const endTan = {
+      x: pts[pts.length - 1].x - pts[pts.length - 2].x,
+      y: pts[pts.length - 1].y - pts[pts.length - 2].y,
+    };
+    const el = Math.sqrt(endTan.x * endTan.x + endTan.y * endTan.y) || 1;
+
+    roadEngine.createClothoidSpline(
+      pts,
+      startTan.x / sl, startTan.y / sl,
+      endTan.x / el, endTan.y / el,
+      8
+    ).then((result: any) => {
+      if (!result?.points || result.points.length < 2) {
+        set({ splinePoints: null, splineStartTangent: null });
+        return;
+      }
+      const controlPoints: ControlPoint[] = result.points.map((p: any) => {
+        const geo = localToGeo(p.x, p.y, state.refLat, state.refLon);
+        return {
+          id: generateId(),
+          lat: geo.lat,
+          lon: geo.lon,
+          z: 0,
+          handleIn: null,
+          handleOut: null,
+          type: 'smooth' as const,
+        };
+      });
+
+      const roadId = `road_${generateId()}`;
+      const road: Road = {
+        id: roadId,
+        name: `Spline Road ${get().roads.length + 1}`,
+        points: controlPoints,
+        width: get().defaultWidth,
+        laneCount: get().defaultLaneCount,
+        color: '#4ecca3',
+        profile: { ...ROAD_PROFILES.city_2x1 },
+        startIntersectionId: null,
+        endIntersectionId: null,
+      };
+
+      get().pushHistory('Finish spline road');
+      set({
+        roads: [...get().roads, road],
+        splinePoints: null,
+        splineStartTangent: null,
+        selection: { roadId, pointIndices: [], handle: null },
+      });
+    }).catch((err) => {
+      console.error('[Store] finishSpline: C++ engine failed:', err);
+      set({ splinePoints: null, splineStartTangent: null });
+    });
+  },
+
+  cancelSpline: () => set({ splinePoints: null, splineStartTangent: null }),
+
+  // ─── Generic cancel ───────────────────────────────────────
+  cancelDrawing: () => set({
+    arcStartPoint: null,
+    arcStartDirection: null,
+    arcPreview: null,
+    clothoidPreview: null,
+    clothoidEndDirection: null,
+    polylinePoints: null,
+    splinePoints: null,
+    splineStartTangent: null,
+    previewPoint: null,
+    drawingRoadId: null,
+  }),
 
   pushHistory: (description) => {
     const state = get();

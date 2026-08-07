@@ -24,7 +24,7 @@
     "build:mac": "npm run build:vite && npm run build:electron && electron-builder --mac",
     "build:linux": "npm run build:vite && npm run build:electron && electron-builder --linux",
     "build:vite": "vite build",
-    "build:electron": "tsc --project app/tsconfig.json && node -e \"require('fs').mkdirSync('dist-electron', {recursive:true}); require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'})+\\\"\\n\\\");\"",
+    "build:electron": "tsc --project app/tsconfig.json && node -e \"require('fs').mkdirSync('dist-electron', {recursive:true}); require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'})+\\\"\\n\\\");\" && node -e \"const fs=require('fs'),p=require('path');const src='app/native/road_engine/build/Release/road_engine_native.node';const dstDir='dist-electron/native/road_engine/build/Release';if(fs.existsSync(src)){fs.mkdirSync(dstDir,{recursive:true});fs.copyFileSync(src,p.join(dstDir,'road_engine_native.node'));console.log('[build] Copied native addon to dist-electron/native/');}else{console.warn('[build] WARNING: native addon not found at',src);}\"",
     "lint": "eslint . --report-unused-disable-directives",
     "preview": "vite preview",
     "rebuild:native": "cd app/native && npx node-gyp rebuild",

@@ -120,6 +120,9 @@ struct MeshData {
     std::vector<float> normals;    // nx, ny, nz
     std::vector<float> uvs;        // u, v
     std::vector<uint32_t> indices; // triangle indices
+    uint32_t vertexCount = 0;      // number of vertices (not floats)
+    uint32_t indexCount = 0;       // number of indices
+    uint32_t triangleCount = 0;    // number of triangles
 };
 
 // ─── Road implementation (inline for header-only) ──────────
@@ -133,33 +136,90 @@ inline std::vector<Point2D> Road::sampleCenterline(int numSamples) const {
         return samples;
     }
 
-    // For each segment between control points, sample
+    // ─── Arc-length-based sampling ───────────────────────────
+    // 1. Compute segment lengths (approximate for bezier via subdivision)
+    // 2. Distribute samples proportional to segment length
+    // This ensures uniform sample density along the road, regardless of
+    // whether segments are straight or curved.
+
+    struct SegmentInfo {
+        double length;
+        Point2D cp0, cp1, cp2, cp3;  // bezier control points (cp1=cp0+handleOut, etc.)
+        bool isBezier;
+    };
+
+    std::vector<SegmentInfo> segs;
+    segs.reserve(points.size() - 1);
+    double totalLength = 0;
+
     for (size_t i = 0; i < points.size() - 1; i++) {
         const auto& p0 = points[i];
         const auto& p1 = points[i + 1];
+        SegmentInfo si;
+        si.cp0 = p0.position;
+        si.cp3 = p1.position;
+        si.isBezier = p0.hasHandleOut || p1.hasHandleIn;
 
-        int segSamples = numSamples / static_cast<int>(points.size() - 1);
-        if (segSamples < 2) segSamples = 2;
+        if (si.isBezier) {
+            si.cp1 = p0.position + p0.handleOut;
+            si.cp2 = p1.position + p1.handleIn;
+            // Approximate bezier length by sampling
+            double len = 0;
+            Point2D prev = si.cp0;
+            const int N = 16;
+            for (int j = 1; j <= N; j++) {
+                double t = static_cast<double>(j) / N;
+                Point2D pt = bezierCubic(si.cp0, si.cp1, si.cp2, si.cp3, t);
+                len += pt.distanceTo(prev);
+                prev = pt;
+            }
+            si.length = len;
+        } else {
+            si.cp1 = si.cp0;
+            si.cp2 = si.cp3;
+            si.length = p0.position.distanceTo(p1.position);
+        }
+        totalLength += si.length;
+        segs.push_back(si);
+    }
 
-        // Check if this segment uses bezier handles
-        bool hasBezier = p0.hasHandleOut || p1.hasHandleIn;
+    if (totalLength < EPSILON) {
+        // Degenerate road — just return control points
+        for (const auto& p : points) samples.push_back(p.position);
+        return samples;
+    }
 
-        if (hasBezier) {
-            // Cubic bezier: P0, P0+handleOut, P1+handleIn, P1
-            Point2D cp0 = p0.position;
-            Point2D cp1 = p0.position + p0.handleOut;
-            Point2D cp2 = p1.position + p1.handleIn;
-            Point2D cp3 = p1.position;
+    // Distribute samples proportional to segment length
+    // Each segment gets at least 2 samples
+    std::vector<int> segSampleCounts(segs.size(), 0);
+    int remaining = numSamples;
+    for (size_t i = 0; i < segs.size(); i++) {
+        segSampleCounts[i] = 2;  // minimum
+        remaining -= 2;
+    }
+    // Distribute remaining samples proportionally
+    if (remaining > 0) {
+        for (size_t i = 0; i < segs.size() && remaining > 0; i++) {
+            int extra = static_cast<int>(std::round(static_cast<double>(remaining) * segs[i].length / totalLength));
+            segSampleCounts[i] += extra;
+        }
+    }
 
-            for (int j = 0; j < segSamples; j++) {
-                double t = static_cast<double>(j) / segSamples;
-                samples.push_back(bezierCubic(cp0, cp1, cp2, cp3, t));
+    // Sample each segment
+    for (size_t i = 0; i < segs.size(); i++) {
+        const auto& si = segs[i];
+        int n = segSampleCounts[i];
+        if (n < 2) n = 2;
+
+        if (si.isBezier) {
+            for (int j = 0; j < n; j++) {
+                double t = static_cast<double>(j) / n;
+                samples.push_back(bezierCubic(si.cp0, si.cp1, si.cp2, si.cp3, t));
             }
         } else {
-            // Linear interpolation
-            for (int j = 0; j < segSamples; j++) {
-                double t = static_cast<double>(j) / segSamples;
-                samples.push_back(Point2D::lerp(p0.position, p1.position, t));
+            for (int j = 0; j < n; j++) {
+                double t = static_cast<double>(j) / n;
+                samples.push_back(Point2D::lerp(si.cp0, si.cp3, t));
             }
         }
     }
@@ -174,22 +234,57 @@ inline std::vector<Point3D> Road::sampleCenterline3D(int numSamples) const {
     std::vector<Point3D> result;
     result.reserve(xy.size());
 
-    // Interpolate z along the centerline
+    if (xy.empty()) return result;
+
+    // ─── Arc-length-based z interpolation ────────────────────
+    // Compute cumulative arc length of the 2D samples, then interpolate z
+    // based on the arc-length position within the control point sequence.
+    // This ensures elevation follows the actual road geometry.
+
+    // Compute cumulative arc length of samples
+    std::vector<double> sampleArcLen(xy.size(), 0);
+    for (size_t i = 1; i < xy.size(); i++) {
+        sampleArcLen[i] = sampleArcLen[i - 1] + xy[i].distanceTo(xy[i - 1]);
+    }
+    double totalSampleLen = sampleArcLen.back();
+
+    // Compute cumulative arc length of control points (2D)
+    std::vector<double> cpArcLen(points.size(), 0);
+    for (size_t i = 1; i < points.size(); i++) {
+        cpArcLen[i] = cpArcLen[i - 1] + points[i].position.distanceTo(points[i - 1].position);
+    }
+    double totalCpLen = cpArcLen.back();
+
+    if (totalCpLen < EPSILON) {
+        // All control points at same position — use first z
+        double z = points.empty() ? 0 : points[0].z;
+        for (const auto& p : xy) result.push_back({p.x, p.y, z});
+        return result;
+    }
+
+    // For each sample, find its arc-length position and interpolate z
     for (size_t i = 0; i < xy.size(); i++) {
-        double t = static_cast<double>(i) / std::max(1.0, static_cast<double>(xy.size() - 1));
-        // Find z by interpolating between control points
-        double z = 0;
-        if (!points.empty()) {
-            double totalT = t * (points.size() - 1);
-            size_t idx = static_cast<size_t>(totalT);
-            double frac = totalT - idx;
-            if (idx >= points.size() - 1) {
-                z = points.back().z;
-            } else {
-                z = points[idx].z + (points[idx + 1].z - points[idx].z) * frac;
+        double t = totalSampleLen > EPSILON ? sampleArcLen[i] / totalSampleLen : 0;
+        double targetLen = t * totalCpLen;
+
+        // Find which control point segment this falls in
+        size_t idx = 0;
+        for (size_t j = 1; j < points.size(); j++) {
+            if (cpArcLen[j] >= targetLen) {
+                idx = j - 1;
+                break;
             }
+            idx = j;
         }
-        result.push_back({xy[i].x, xy[i].y, z});
+        if (idx >= points.size() - 1) {
+            result.push_back({xy[i].x, xy[i].y, points.back().z});
+        } else {
+            double segLen = cpArcLen[idx + 1] - cpArcLen[idx];
+            double frac = segLen > EPSILON ? (targetLen - cpArcLen[idx]) / segLen : 0;
+            frac = std::max(0.0, std::min(1.0, frac));
+            double z = points[idx].z + (points[idx + 1].z - points[idx].z) * frac;
+            result.push_back({xy[i].x, xy[i].y, z});
+        }
     }
     return result;
 }
