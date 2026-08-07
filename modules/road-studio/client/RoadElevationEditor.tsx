@@ -18,7 +18,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useRoadStudioStore } from './store/roadStudioStore';
-import { type Road, type ControlPoint, geoToLocal, sampleRoad } from '../shared/types';
+import { type Road, type ControlPoint, geoToLocal } from '../shared/types';
 
 // ─── Catmull-Rom interpolation ──────────────────────────────
 

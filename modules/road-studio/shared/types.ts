@@ -4,6 +4,12 @@
  * Roads use geographic coordinates (lat/lon) with elevation in meters.
  * Control points support Bezier handles for smooth curve editing,
  * similar to Figma/Illustrator pen tool.
+ *
+ * NOTE: All geometry computation (sampling, intersection, arcs, clothoids,
+ * mesh generation, OpenDRIVE export) is handled by the C++ native engine
+ * via the roadEngineClient. This file contains ONLY type definitions
+ * and small utility functions (ID generation, coordinate conversion for
+ * UI-level operations).
  */
 
 /** A control point on a road — the fundamental editable unit */
@@ -161,7 +167,21 @@ export interface HistorySnapshot {
   timestamp: number;
 }
 
-/** Convert lat/lon to local meters relative to a reference origin */
+// ═══════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS (non-geometric — kept for UI-level use)
+// ═══════════════════════════════════════════════════════════
+
+/** Generate a unique ID */
+export function generateId(): string {
+  return `cp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Convert lat/lon to local meters relative to a reference origin.
+ * This is a simple equirectangular projection used for UI-level
+ * coordinate conversion. For heavy geometry computation, use the
+ * C++ engine via roadEngineClient.
+ */
 export function geoToLocal(
   lat: number,
   lon: number,
@@ -173,7 +193,10 @@ export function geoToLocal(
   return { x, y };
 }
 
-/** Convert local meters back to lat/lon */
+/**
+ * Convert local meters back to lat/lon.
+ * Inverse of geoToLocal.
+ */
 export function localToGeo(
   x: number,
   y: number,
@@ -184,82 +207,6 @@ export function localToGeo(
   const lon = x / (Math.cos((refLat * Math.PI) / 180) * 111320) + refLon;
   return { lat, lon };
 }
-
-/** Generate a unique ID */
-export function generateId(): string {
-  return `cp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/** Cubic Bezier interpolation between two control points */
-export function bezierPoint(
-  p0: ControlPoint,
-  p1: ControlPoint,
-  t: number,
-  refLat: number,
-  refLon: number
-): { x: number; y: number; z: number } {
-  const p0Local = geoToLocal(p0.lat, p0.lon, refLat, refLon);
-  const p1Local = geoToLocal(p1.lat, p1.lon, refLat, refLon);
-
-  // Handle offsets are in lat/lon — convert to local meters
-  const h0Out = p0.handleOut
-    ? geoToLocal(p0.lat + p0.handleOut.lat, p0.lon + p0.handleOut.lon, refLat, refLon)
-    : { x: p0Local.x + (p1Local.x - p0Local.x) / 3, y: p0Local.y + (p1Local.y - p0Local.y) / 3 };
-
-  const h1In = p1.handleIn
-    ? geoToLocal(p1.lat + p1.handleIn.lat, p1.lon + p1.handleIn.lon, refLat, refLon)
-    : { x: p1Local.x - (p1Local.x - p0Local.x) / 3, y: p1Local.y - (p1Local.y - p0Local.y) / 3 };
-
-  const mt = 1 - t;
-  const x =
-    mt * mt * mt * p0Local.x +
-    3 * mt * mt * t * h0Out.x +
-    3 * mt * t * t * h1In.x +
-    t * t * t * p1Local.x;
-  const y =
-    mt * mt * mt * p0Local.y +
-    3 * mt * mt * t * h0Out.y +
-    3 * mt * t * t * h1In.y +
-    t * t * t * p1Local.y;
-
-  // Linear interpolation for elevation (can be improved with bezier if handles have z)
-  const z = p0.z + (p1.z - p0.z) * t;
-
-  return { x, y, z };
-}
-
-/** Sample a road into a series of points for mesh generation */
-export function sampleRoad(
-  road: Road,
-  refLat: number,
-  refLon: number,
-  segmentsPerSpan: number = 16
-): Array<{ x: number; y: number; z: number }> {
-  const samples: Array<{ x: number; y: number; z: number }> = [];
-  if (road.points.length < 2) return samples;
-
-  for (let i = 0; i < road.points.length - 1; i++) {
-    const p0 = road.points[i];
-    const p1 = road.points[i + 1];
-    for (let s = 0; s < segmentsPerSpan; s++) {
-      const t = s / segmentsPerSpan;
-      samples.push(bezierPoint(p0, p1, t, refLat, refLon));
-    }
-  }
-  // Add final point
-  const last = road.points[road.points.length - 1];
-  const lastLocal = geoToLocal(last.lat, last.lon, refLat, refLon);
-  samples.push({ x: lastLocal.x, y: lastLocal.y, z: last.z });
-
-  return samples;
-}
-
-// ═══════════════════════════════════════════════════════════
-// INTERSECTION DETECTION
-// ═══════════════════════════════════════════════════════════
-
-/** Threshold distance (meters) for detecting endpoint proximity */
-export const INTERSECTION_THRESHOLD = 3.0;
 
 /** Distance between two lat/lon points in meters (haversine approximation) */
 export function distanceMeters(
@@ -272,15 +219,14 @@ export function distanceMeters(
 }
 
 /**
- * Detect intersections by checking:
- * 1. Endpoint-to-endpoint proximity (two road endpoints within threshold)
- * 2. Endpoint-on-road (a road endpoint near another road's centerline)
- *
- * Returns the list of detected intersections with their connections.
+ * Detect intersections by checking endpoint proximity.
+ * This is a lightweight utility (not heavy geometry) — it only checks
+ * if road endpoints are close enough to form an intersection.
+ * The actual intersection geometry is generated by the C++ engine.
  */
 export function detectIntersections(roads: Road[]): Intersection[] {
   const intersections: Intersection[] = [];
-  const used: Set<string> = new Set(); // track endpoint pairs already matched
+  const used: Set<string> = new Set();
 
   for (let i = 0; i < roads.length; i++) {
     const roadA = roads[i];
@@ -296,7 +242,6 @@ export function detectIntersections(roads: Road[]): Intersection[] {
       const bStart = roadB.points[0];
       const bEnd = roadB.points[roadB.points.length - 1];
 
-      // Check all 4 endpoint combinations (skip same road same endpoint)
       const pairs: Array<{
         a: { point: typeof aStart; end: 'start' | 'end' };
         b: { point: typeof bStart; end: 'start' | 'end' };
@@ -308,7 +253,6 @@ export function detectIntersections(roads: Road[]): Intersection[] {
       ];
 
       for (const pair of pairs) {
-        // Skip same road, same endpoint
         if (i === j && pair.a.end === pair.b.end) continue;
 
         const key = `${roadA.id}:${pair.a.end}↔${roadB.id}:${pair.b.end}`;
@@ -322,18 +266,15 @@ export function detectIntersections(roads: Road[]): Intersection[] {
 
         if (dist <= INTERSECTION_THRESHOLD) {
           used.add(key);
-          // Use midpoint as intersection center
           const lat = (pair.a.point.lat + pair.b.point.lat) / 2;
           const lon = (pair.a.point.lon + pair.b.point.lon) / 2;
           const z = (pair.a.point.z + pair.b.point.z) / 2;
 
-          // Check if this intersection is near an existing one (merge)
           const existing = intersections.find(
             (ix) => distanceMeters(ix.lat, ix.lon, lat, lon) < INTERSECTION_THRESHOLD * 2
           );
 
           if (existing) {
-            // Add connections if not already present
             const connA = { roadId: roadA.id, end: pair.a.end };
             const connB = { roadId: roadB.id, end: pair.b.end };
             if (!existing.connections.some(c => c.roadId === connA.roadId && c.end === connA.end)) {
@@ -363,94 +304,8 @@ export function detectIntersections(roads: Road[]): Intersection[] {
   return intersections;
 }
 
-/**
- * Compute the intersection polygon — the area where road surfaces overlap.
- * This is a convex hull of all road edge points near the intersection center.
- */
-export function computeIntersectionPolygon(
-  intersection: Intersection,
-  roads: Road[],
-  refLat: number,
-  refLon: number
-): Array<{ x: number; y: number }> {
-  const points: Array<{ x: number; y: number }> = [];
-  const ixLocal = geoToLocal(intersection.lat, intersection.lon, refLat, refLon);
-
-  for (const conn of intersection.connections) {
-    const road = roads.find((r) => r.id === conn.roadId);
-    if (!road || road.points.length < 2) continue;
-
-    const samples = sampleRoad(road, refLat, refLon, 16);
-    const halfW = road.width / 2;
-
-    // Find the sample index closest to the intersection
-    let closestIdx = 0;
-    let closestDist = Infinity;
-    for (let i = 0; i < samples.length; i++) {
-      const d = Math.sqrt(
-        (samples[i].x - ixLocal.x) ** 2 + (samples[i].y - ixLocal.y) ** 2
-      );
-      if (d < closestDist) { closestDist = d; closestIdx = i; }
-    }
-
-    // Take a few samples around the closest point to get edge points
-    const range = 3;
-    for (let i = Math.max(0, closestIdx - range); i <= Math.min(samples.length - 1, closestIdx + range); i++) {
-      const s = samples[i];
-      // Compute normal at this sample
-      let tx: number, ty: number;
-      if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
-      else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
-      else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
-      const len = Math.sqrt(tx * tx + ty * ty) || 1;
-      const nx = -ty / len;
-      const ny = tx / len;
-
-      // Left and right edge points
-      points.push({ x: s.x + nx * halfW, y: s.y + ny * halfW });
-      points.push({ x: s.x - nx * halfW, y: s.y - ny * halfW });
-    }
-  }
-
-  // Compute convex hull of all edge points
-  return convexHull(points);
-}
-
-/** Compute the convex hull of a set of 2D points (Andrew's monotone chain) */
-export function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
-  if (points.length < 3) return points;
-
-  // Sort points by x, then y
-  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
-
-  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-
-  // Build lower hull
-  const lower: typeof sorted = [];
-  for (const p of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
-      lower.pop();
-    }
-    lower.push(p);
-  }
-
-  // Build upper hull
-  const upper: typeof sorted = [];
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
-      upper.pop();
-    }
-    upper.push(p);
-  }
-
-  // Concatenate (omit last point of each half — it's the first of the other)
-  return lower.slice(0, -1).concat(upper.slice(0, -1));
-}
-
 // ═══════════════════════════════════════════════════════════
-// INTERSECTION GENERATION ALGORITHM
+// GEOMETRY TYPES (used by C++ engine results)
 // ═══════════════════════════════════════════════════════════
 
 /** A 2D point in local meters */
@@ -459,243 +314,32 @@ export interface Point2D { x: number; y: number; }
 /** A line segment in 2D */
 export interface Segment2D { p1: Point2D; p2: Point2D; }
 
-/**
- * Find where two line segments intersect.
- * Returns the intersection point, or null if they don't cross.
- */
-export function segmentIntersection(
-  s1: Segment2D, s2: Segment2D
-): Point2D | null {
-  const x1 = s1.p1.x, y1 = s1.p1.y;
-  const x2 = s1.p2.x, y2 = s1.p2.y;
-  const x3 = s2.p1.x, y3 = s2.p1.y;
-  const x4 = s2.p2.x, y4 = s2.p2.y;
+/** Threshold distance (meters) for detecting endpoint proximity */
+export const INTERSECTION_THRESHOLD = 3.0;
 
-  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-  if (Math.abs(denom) < 1e-10) return null; // parallel
+// ─── Generated Intersection Types ──────────────────────────
 
-  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
-  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
-
-  if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-    return {
-      x: x1 + t * (x2 - x1),
-      y: y1 + t * (y2 - y1),
-    };
-  }
-  return null;
-}
-
-/**
- * Intersection of two INFINITE lines (not just segments).
- * Each line is defined by a point and a direction.
- * Returns the intersection point, or null if parallel.
- */
-export function lineIntersection(
-  p1: Point2D, dir1: Point2D,
-  p2: Point2D, dir2: Point2D
-): Point2D | null {
-  const denom = dir1.x * dir2.y - dir1.y * dir2.x;
-  if (Math.abs(denom) < 1e-10) return null; // parallel
-
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-  const t = (dx * dir2.y - dy * dir2.x) / denom;
-
-  return {
-    x: p1.x + dir1.x * t,
-    y: p1.y + dir1.y * t,
-  };
-}
-
-/**
- * Find where two road centerlines intersect.
- * Samples both roads and checks all segment pairs.
- * Returns the intersection point in local meters, or null.
- */
-export function findCenterlineIntersection(
-  road1: Road,
-  road2: Road,
-  refLat: number,
-  refLon: number
-): Point2D | null {
-  const s1 = sampleRoad(road1, refLat, refLon, 24);
-  const s2 = sampleRoad(road2, refLat, refLon, 24);
-  if (s1.length < 2 || s2.length < 2) return null;
-
-  for (let i = 0; i < s1.length - 1; i++) {
-    for (let j = 0; j < s2.length - 1; j++) {
-      const result = segmentIntersection(
-        { p1: { x: s1[i].x, y: s1[i].y }, p2: { x: s1[i + 1].x, y: s1[i + 1].y } },
-        { p1: { x: s2[j].x, y: s2[j].y }, p2: { x: s2[j + 1].x, y: s2[j + 1].y } }
-      );
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-/**
- * Find the closest point on a road's centerline to a given point.
- * Returns the sample index and the point itself.
- */
-export function closestPointOnRoad(
-  road: Road,
-  target: Point2D,
-  refLat: number,
-  refLon: number
-): { index: number; point: Point2D; distance: number } | null {
-  const samples = sampleRoad(road, refLat, refLon, 24);
-  if (samples.length === 0) return null;
-
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < samples.length; i++) {
-    const d = Math.sqrt((samples[i].x - target.x) ** 2 + (samples[i].y - target.y) ** 2);
-    if (d < bestDist) { bestDist = d; bestIdx = i; }
-  }
-  return { index: bestIdx, point: { x: samples[bestIdx].x, y: samples[bestIdx].y }, distance: bestDist };
-}
-
-/**
- * Compute the tangent direction at a sample point on a road.
- * Returns a normalized direction vector.
- */
-export function tangentAtSample(
-  samples: Array<{ x: number; y: number; z: number }>,
-  index: number
-): Point2D {
-  let tx: number, ty: number;
-  if (index === 0) {
-    tx = samples[1].x - samples[0].x;
-    ty = samples[1].y - samples[0].y;
-  } else if (index === samples.length - 1) {
-    tx = samples[index].x - samples[index - 1].x;
-    ty = samples[index].y - samples[index - 1].y;
-  } else {
-    tx = samples[index + 1].x - samples[index - 1].x;
-    ty = samples[index + 1].y - samples[index - 1].y;
-  }
-  const len = Math.sqrt(tx * tx + ty * ty) || 1;
-  return { x: tx / len, y: ty / len };
-}
-
-/**
- * Compute the normal (perpendicular) at a sample point.
- * Normal = rotate tangent 90° counter-clockwise.
- */
-export function normalAtSample(
-  samples: Array<{ x: number; y: number; z: number }>,
-  index: number
-): Point2D {
-  const t = tangentAtSample(samples, index);
-  return { x: -t.y, y: t.x };
-}
-
-/**
- * Generate a fillet (rounded corner) arc between two line segments.
- * Returns a list of points along the arc.
- */
-/**
- * Generate a true circular fillet arc between two lines that meet at a corner.
- *
- * Given:
- *  - corner: the point where the two lines meet
- *  - dirIn: direction TOWARD the corner (along the incoming edge)
- *  - dirOut: direction AWAY from the corner (along the outgoing edge)
- *  - radius: the fillet radius
- *
- * Returns points along a circular arc that is tangent to both lines.
- *
- * Algorithm:
- * 1. Find tangent points: at distance `radius` from corner along each line
- * 2. Find arc center: at distance `radius` from both tangent points, on the inside of the corner
- * 3. Sample the arc from start tangent to end tangent
- */
-export function filletArc(
-  corner: Point2D,
-  dirIn: Point2D,   // direction TOWARD corner (incoming)
-  dirOut: Point2D,  // direction AWAY from corner (outgoing)
-  radius: number,
-  segments: number = 8
-): Point2D[] {
-  // Tangent points: at distance `radius` from corner along each direction
-  // dirIn points toward the corner, so the start tangent is at corner - dirIn * radius
-  const p1 = { x: corner.x - dirIn.x * radius, y: corner.y - dirIn.y * radius };
-  const p2 = { x: corner.x + dirOut.x * radius, y: corner.y + dirOut.y * radius };
-
-  // The arc center is at distance `radius` from both p1 and p2, perpendicular to the edges
-  // The perpendicular direction is the bisector of the two edge directions, pointing inward
-  // Bisector direction = normalize(dirIn_reversed + dirOut) = normalize(-dirIn + dirOut)
-  // But we need the perpendicular to the edges, which is the angle bisector of the normals
-
-  // Simpler: the center is at the intersection of lines perpendicular to each edge
-  // at the tangent points
-  // Perpendicular to dirIn at p1: direction = rotate(dirIn, 90°)
-  // Perpendicular to dirOut at p2: direction = rotate(dirOut, 90°)
-
-  const perpIn = { x: -dirIn.y, y: dirIn.x };   // perpendicular to incoming edge
-  const perpOut = { x: -dirOut.y, y: dirOut.x }; // perpendicular to outgoing edge
-
-  const center = lineIntersection(p1, perpIn, p2, perpOut);
-  if (!center) {
-    // Edges are parallel — return a straight line
-    const points: Point2D[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      points.push({
-        x: p1.x + (p2.x - p1.x) * t,
-        y: p1.y + (p2.y - p1.y) * t,
-      });
-    }
-    return points;
-  }
-
-  // Sample the circular arc from p1 to p2 around the center
-  const startAngle = Math.atan2(p1.y - center.y, p1.x - center.x);
-  const endAngle = Math.atan2(p2.y - center.y, p2.x - center.x);
-
-  // Determine sweep direction (shortest arc)
-  let sweep = endAngle - startAngle;
-  // Normalize to [-π, π]
-  while (sweep > Math.PI) sweep -= 2 * Math.PI;
-  while (sweep < -Math.PI) sweep += 2 * Math.PI;
-
-  const points: Point2D[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const angle = startAngle + sweep * t;
-    points.push({
-      x: center.x + radius * Math.cos(angle),
-      y: center.y + radius * Math.sin(angle),
-    });
-  }
-  return points;
-}
-
-/**
- * Result of generating an intersection between two roads.
- */
+/** A fully generated intersection with polygon, approaches, and markings */
 export interface GeneratedIntersection {
   /** Center point of the intersection (local meters) */
   center: Point2D;
-  /** The polygon outline of the intersection surface (local meters) */
+  /** The intersection boundary polygon (local meters) */
   polygon: Point2D[];
-  /** The 4 approach roads (trimmed), or 2 if roads don't cross but just meet */
+  /** The 2-4 road approaches meeting at this intersection */
   approaches: ApproachRoad[];
-  /** Lane connectivity graph */
+  /** Lane-to-lane connections through the intersection */
   laneConnections: LaneConnection[];
-  /** Stop line positions (one per approach) */
+  /** Stop lines for each approach */
   stopLines: StopLine[];
-  /** Crosswalk positions (one per approach) */
+  /** Crosswalk markings for each approach */
   crosswalks: CrosswalkMarking[];
 }
 
-/** An approach road — one of the 4 segments after splitting */
+/** A road approaching an intersection */
 export interface ApproachRoad {
-  /** Which road this came from */
+  /** Which road this approach comes from */
   roadId: string;
-  /** Which side of the intersection: N, S, E, W (or computed) */
+  /** Compass direction from intersection center */
   direction: 'north' | 'south' | 'east' | 'west';
   /** The centerline points of this approach (from intersection outward) */
   centerline: Point2D[];
@@ -731,487 +375,9 @@ export interface CrosswalkMarking {
   corners: Point2D[];
 }
 
-/**
- * Determine compass direction from intersection center to a point.
- */
-function compassDirection(from: Point2D, to: Point2D): 'north' | 'south' | 'east' | 'west' {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  if (Math.abs(dx) > Math.abs(dy)) {
-    return dx > 0 ? 'east' : 'west';
-  } else {
-    return dy > 0 ? 'north' : 'south';
-  }
-}
+// ─── Circle Arc Types ──────────────────────────────────────
 
-/**
- * Generate a complete intersection between two roads.
- *
- * Algorithm:
- * 1. Find where centerlines cross
- * 2. Split each road at the crossing point → 4 approaches
- * 3. Trim road ends to leave space for the junction
- * 4. Generate intersection polygon with rounded corners
- * 5. Generate lane connectivity (straight, left, right)
- * 6. Generate stop lines and crosswalks
- */
-export function generateIntersection(
-  road1: Road,
-  road2: Road,
-  refLat: number,
-  refLon: number
-): GeneratedIntersection | null {
-  // Step 1: Find geometric intersection of centerlines
-  const center = findCenterlineIntersection(road1, road2, refLat, refLon);
-  if (!center) {
-    // Fallback: use closest point between the two roads
-    const s1 = sampleRoad(road1, refLat, refLon, 24);
-    const s2 = sampleRoad(road2, refLat, refLon, 24);
-    if (s1.length < 2 || s2.length < 2) return null;
-
-    let minDist = Infinity;
-    let bestP: Point2D = { x: 0, y: 0 };
-    for (const a of s1) {
-      for (const b of s2) {
-        const d = Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
-        if (d < minDist) { minDist = d; bestP = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
-      }
-    }
-    if (minDist > 50) return null; // too far apart
-    return generateIntersectionFromPoint(road1, road2, bestP, refLat, refLon);
-  }
-
-  return generateIntersectionFromPoint(road1, road2, center, refLat, refLon);
-}
-
-/**
-/**
- * Generate intersection from a known center point.
- *
- * EDGE-BASED ALGORITHM:
- * 1. Compute road edge lines (left + right offsets from centerline)
- * 2. Find edge-edge intersections → true corner points
- * 3. Compute angle between roads → trim distance = R × tan(θ/2)
- * 4. Generate circular fillet arcs at tangent points
- * 5. Build polygon from edge segments + arc fillets
- * 6. Generate lane connectivity, stop lines, crosswalks
- */
-function generateIntersectionFromPoint(
-  road1: Road,
-  road2: Road,
-  center: Point2D,
-  refLat: number,
-  refLon: number
-): GeneratedIntersection | null {
-  const s1 = sampleRoad(road1, refLat, refLon, 32);
-  const s2 = sampleRoad(road2, refLat, refLon, 32);
-  if (s1.length < 2 || s2.length < 2) return null;
-
-  // Step 2: Find closest sample on each road to the intersection center
-  let idx1 = 0, idx2 = 0;
-  let minDist1 = Infinity, minDist2 = Infinity;
-  for (let i = 0; i < s1.length; i++) {
-    const d = Math.sqrt((s1[i].x - center.x) ** 2 + (s1[i].y - center.y) ** 2);
-    if (d < minDist1) { minDist1 = d; idx1 = i; }
-  }
-  for (let i = 0; i < s2.length; i++) {
-    const d = Math.sqrt((s2[i].x - center.x) ** 2 + (s2[i].y - center.y) ** 2);
-    if (d < minDist2) { minDist2 = d; idx2 = i; }
-  }
-
-  // Step 3: Compute approach directions (tangent at intersection point)
-  const r1Tangent = computeTangentAt(s1, idx1);
-  const r2Tangent = computeTangentAt(s2, idx2);
-
-  // Step 4: Compute the angle between the two roads
-  // Trim distance = halfWidth_other + R × tan(θ/2)
-  const halfWidth1 = road1.width / 2;
-  const halfWidth2 = road2.width / 2;
-  const maxHalfWidth = Math.max(halfWidth1, halfWidth2);
-  const cornerRadius = Math.min(maxHalfWidth, 5);
-
-  // Angle between the two road tangents
-  const dot = r1Tangent.x * r2Tangent.x + r1Tangent.y * r2Tangent.y;
-  const angleBetween = Math.acos(Math.min(1, Math.max(-1, Math.abs(dot))));
-  const halfAngle = angleBetween / 2;
-
-  // Trim distance for each road (along its centerline)
-  // Road 1 stops where road 2's edge + corner arc begins
-  const trimDist1 = halfWidth2 + cornerRadius * Math.tan(halfAngle);
-  const trimDist2 = halfWidth1 + cornerRadius * Math.tan(halfAngle);
-
-  // Step 5: Build 4 approaches
-  const approaches: ApproachRoad[] = [];
-  const z1 = s1[idx1].z;
-  const z2 = s2[idx2].z;
-  const zAvg = (z1 + z2) / 2;
-
-  const r1StartApproach = buildApproachCenterline(s1, center, idx1, trimDist1, true);
-  const r1EndApproach = buildApproachCenterline(s1, center, idx1, trimDist1, false);
-  const r2StartApproach = buildApproachCenterline(s2, center, idx2, trimDist2, true);
-  const r2EndApproach = buildApproachCenterline(s2, center, idx2, trimDist2, false);
-
-  if (r1StartApproach.length >= 2) {
-    const dir = compassDirection(center, r1StartApproach[r1StartApproach.length - 1]);
-    approaches.push({
-      roadId: road1.id, direction: dir,
-      centerline: r1StartApproach.reverse(),
-      width: road1.width, laneCount: road1.laneCount, z: zAvg,
-    });
-  }
-  if (r1EndApproach.length >= 2) {
-    const dir = compassDirection(center, r1EndApproach[0]);
-    approaches.push({
-      roadId: road1.id, direction: dir,
-      centerline: r1EndApproach,
-      width: road1.width, laneCount: road1.laneCount, z: zAvg,
-    });
-  }
-  if (r2StartApproach.length >= 2) {
-    const dir = compassDirection(center, r2StartApproach[r2StartApproach.length - 1]);
-    approaches.push({
-      roadId: road2.id, direction: dir,
-      centerline: r2StartApproach.reverse(),
-      width: road2.width, laneCount: road2.laneCount, z: zAvg,
-    });
-  }
-  if (r2EndApproach.length >= 2) {
-    const dir = compassDirection(center, r2EndApproach[0]);
-    approaches.push({
-      roadId: road2.id, direction: dir,
-      centerline: r2EndApproach,
-      width: road2.width, laneCount: road2.laneCount, z: zAvg,
-    });
-  }
-
-  if (approaches.length < 2) return null;
-
-  // Step 6: Generate intersection polygon using EDGE-BASED construction
-  const polygon = generateEdgeBasedPolygon(approaches, center, cornerRadius);
-
-  // Step 7: Generate lane connectivity
-  const laneConnections = generateLaneConnections(approaches, center);
-
-  // Step 8: Generate stop lines and crosswalks
-  const stopLines: StopLine[] = [];
-  const crosswalks: CrosswalkMarking[] = [];
-
-  for (const approach of approaches) {
-    if (approach.centerline.length < 2) continue;
-
-    const edgePoint = approach.centerline[0];
-    const tangent = {
-      x: approach.centerline[1].x - approach.centerline[0].x,
-      y: approach.centerline[1].y - approach.centerline[0].y,
-    };
-    const tLen = Math.sqrt(tangent.x * tangent.x + tangent.y * tangent.y) || 1;
-    const nx = -tangent.y / tLen;
-    const ny = tangent.x / tLen;
-    const halfW = approach.width / 2;
-
-    stopLines.push({
-      approach: approach.direction,
-      p1: { x: edgePoint.x + nx * halfW, y: edgePoint.y + ny * halfW },
-      p2: { x: edgePoint.x - nx * halfW, y: edgePoint.y - ny * halfW },
-    });
-
-    const cwOffset = 3;
-    const cwCenter = {
-      x: edgePoint.x - (tangent.x / tLen) * cwOffset,
-      y: edgePoint.y - (tangent.y / tLen) * cwOffset,
-    };
-    const cwDepth = 2;
-    const cwCorners = [
-      { x: cwCenter.x + nx * halfW, y: cwCenter.y + ny * halfW },
-      { x: cwCenter.x - nx * halfW, y: cwCenter.y - ny * halfW },
-      {
-        x: cwCenter.x - (tangent.x / tLen) * cwDepth - nx * halfW,
-        y: cwCenter.y - (tangent.y / tLen) * cwDepth - ny * halfW,
-      },
-      {
-        x: cwCenter.x - (tangent.x / tLen) * cwDepth + nx * halfW,
-        y: cwCenter.y - (tangent.y / tLen) * cwDepth + ny * halfW,
-      },
-    ];
-    crosswalks.push({ approach: approach.direction, corners: cwCorners });
-  }
-
-  return {
-    center,
-    polygon,
-    approaches,
-    laneConnections,
-    stopLines,
-    crosswalks,
-  };
-}
-
-/**
- * Compute the tangent direction at a sample index.
- * Uses central difference (or forward/backward at endpoints).
- */
-function computeTangentAt(samples: Point2D[], idx: number): Point2D {
-  let dx: number, dy: number;
-  if (idx === 0) {
-    dx = samples[1].x - samples[0].x;
-    dy = samples[1].y - samples[0].y;
-  } else if (idx === samples.length - 1) {
-    dx = samples[idx].x - samples[idx - 1].x;
-    dy = samples[idx].y - samples[idx - 1].y;
-  } else {
-    dx = samples[idx + 1].x - samples[idx - 1].x;
-    dy = samples[idx + 1].y - samples[idx - 1].y;
-  }
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  return { x: dx / len, y: dy / len };
-}
-
-/**
- * Build an approach centerline from a road's samples.
- * startSide=true: from road start to intersection (before)
- * startSide=false: from intersection to road end (after)
- * Trims at trimDist from center.
- */
-function buildApproachCenterline(
-  samples: Point2D[],
-  center: Point2D,
-  closestIdx: number,
-  trimDist: number,
-  startSide: boolean
-): Point2D[] {
-  const approach: Point2D[] = [];
-
-  if (startSide) {
-    for (let i = 0; i <= closestIdx; i++) {
-      const d = Math.sqrt((samples[i].x - center.x) ** 2 + (samples[i].y - center.y) ** 2);
-      if (d > trimDist) approach.push({ x: samples[i].x, y: samples[i].y });
-    }
-    if (approach.length > 0) {
-      const last = approach[approach.length - 1];
-      const dx = center.x - last.x;
-      const dy = center.y - last.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > 0) {
-        approach.push({
-          x: last.x + (dx / d) * (d - trimDist),
-          y: last.y + (dy / d) * (d - trimDist),
-        });
-      }
-    }
-  } else {
-    for (let i = closestIdx; i < samples.length; i++) {
-      const d = Math.sqrt((samples[i].x - center.x) ** 2 + (samples[i].y - center.y) ** 2);
-      if (d > trimDist) approach.push({ x: samples[i].x, y: samples[i].y });
-    }
-    if (approach.length > 0) {
-      const first = approach[0];
-      const dx = first.x - center.x;
-      const dy = first.y - center.y;
-      const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > 0) {
-        approach.unshift({
-          x: center.x + (dx / d) * trimDist,
-          y: center.y + (dy / d) * trimDist,
-        });
-      }
-    }
-  }
-
-  return approach;
-}
-
-/**
- * EDGE-BASED intersection polygon generation.
- *
- * 1. Computes left/right edge lines for each approach
- * 2. Finds edge-edge intersections → true corner points
- * 3. Generates circular fillet arcs at each corner
- * 4. Builds polygon from edge segments + arcs
- */
-function generateEdgeBasedPolygon(
-  approaches: ApproachRoad[],
-  center: Point2D,
-  cornerRadius: number
-): Point2D[] {
-  if (approaches.length < 2) return [];
-
-  interface EdgeInfo {
-    approach: ApproachRoad;
-    angle: number;
-    leftEdge: Point2D;
-    rightEdge: Point2D;
-    tangent: Point2D;
-    normal: Point2D;
-    halfWidth: number;
-  }
-
-  const edges: EdgeInfo[] = [];
-
-  for (const approach of approaches) {
-    if (approach.centerline.length < 2) continue;
-
-    const edgePt = approach.centerline[0];
-    const tangent = {
-      x: approach.centerline[1].x - approach.centerline[0].x,
-      y: approach.centerline[1].y - approach.centerline[0].y,
-    };
-    const tLen = Math.sqrt(tangent.x * tangent.x + tangent.y * tangent.y) || 1;
-    const tx = tangent.x / tLen;
-    const ty = tangent.y / tLen;
-    const nx = -ty;
-    const ny = tx;
-    const halfW = approach.width / 2;
-
-    edges.push({
-      approach,
-      angle: Math.atan2(ty, tx),
-      leftEdge: { x: edgePt.x + nx * halfW, y: edgePt.y + ny * halfW },
-      rightEdge: { x: edgePt.x - nx * halfW, y: edgePt.y - ny * halfW },
-      tangent: { x: tx, y: ty },
-      normal: { x: nx, y: ny },
-      halfWidth: halfW,
-    });
-  }
-
-  if (edges.length < 2) return [];
-
-  // Sort by angle around center
-  edges.sort((a, b) => a.angle - b.angle);
-
-  // Build polygon: connect right edge of current → left edge of next with fillet arc
-  const polygon: Point2D[] = [];
-  const filletSegments = 8;
-
-  for (let i = 0; i < edges.length; i++) {
-    const current = edges[i];
-    const next = edges[(i + 1) % edges.length];
-
-    // Corner = intersection of right edge line of current and left edge line of next
-    const corner = lineIntersection(
-      current.rightEdge, current.tangent,
-      next.leftEdge, next.tangent
-    );
-
-    // Add right edge point of current approach
-    polygon.push(current.rightEdge);
-
-    if (corner) {
-      // Directions for fillet arc
-      const dirIn = {
-        x: current.rightEdge.x - corner.x,
-        y: current.rightEdge.y - corner.y,
-      };
-      const dirOut = {
-        x: next.leftEdge.x - corner.x,
-        y: next.leftEdge.y - corner.y,
-      };
-      const lenIn = Math.sqrt(dirIn.x ** 2 + dirIn.y ** 2) || 1;
-      const lenOut = Math.sqrt(dirOut.x ** 2 + dirOut.y ** 2) || 1;
-
-      // Clamp radius to available edge length
-      const r = Math.min(cornerRadius, lenIn * 0.9, lenOut * 0.9);
-
-      if (r > 0.1) {
-        const arc = filletArc(
-          corner,
-          { x: dirIn.x / lenIn, y: dirIn.y / lenIn },
-          { x: dirOut.x / lenOut, y: dirOut.y / lenOut },
-          r,
-          filletSegments
-        );
-        // Add arc points (skip first = current.rightEdge, skip last = next.leftEdge)
-        for (let j = 1; j < arc.length - 1; j++) {
-          polygon.push(arc[j]);
-        }
-      }
-    }
-
-    // Add left edge point of next approach
-    polygon.push(next.leftEdge);
-  }
-
-  return polygon;
-}
-
-/**
- * Generate lane connections between approaches.
- * For each pair of approaches, determine if the connection is straight, left, or right.
- */
-function generateLaneConnections(
-  approaches: ApproachRoad[],
-  center: Point2D
-): LaneConnection[] {
-  const connections: LaneConnection[] = [];
-
-  for (const from of approaches) {
-    for (const to of approaches) {
-      if (from.direction === to.direction) continue; // skip same approach
-
-      // Determine turn type based on angle between directions
-      const fromDir = {
-        x: from.centerline[0].x - center.x,
-        y: from.centerline[0].y - center.y,
-      };
-      const toDir = {
-        x: to.centerline[0].x - center.x,
-        y: to.centerline[0].y - center.y,
-      };
-
-      const fromLen = Math.sqrt(fromDir.x ** 2 + fromDir.y ** 2) || 1;
-      const toLen = Math.sqrt(toDir.x ** 2 + toDir.y ** 2) || 1;
-      const dot = (fromDir.x * toDir.x + fromDir.y * toDir.y) / (fromLen * toLen);
-      const cross = fromDir.x * toDir.y - fromDir.y * toDir.x;
-
-      let type: 'straight' | 'left' | 'right';
-      if (dot > 0.3) {
-        type = 'straight';
-      } else if (cross > 0) {
-        type = 'left';
-      } else {
-        type = 'right';
-      }
-
-      // Generate path as a simple spline through the center
-      const path: Point2D[] = [
-        from.centerline[0],
-        { x: center.x, y: center.y },
-        to.centerline[0],
-      ];
-
-      connections.push({
-        fromApproach: from.direction,
-        toApproach: to.direction,
-        type,
-        path,
-      });
-    }
-  }
-
-  return connections;
-}
-
-// ═══════════════════════════════════════════════════════════
-// CIRCLE ARC TOOL — Constant-radius circular arc with tangent continuity
-// ═══════════════════════════════════════════════════════════
-
-/**
- * Compute a circular arc between two points with tangent continuity.
- *
- * Given:
- *  - startPoint: where the arc begins
- *  - startDirection: the heading of the incoming straight (normalized)
- *  - endPoint: where the arc should end (mouse position)
- *
- * Returns:
- *  - center: the circle center
- *  - radius: the arc radius
- *  - startAngle: angle from center to start point
- *  - endAngle: angle from center to end point
- *  - sweep: the angular sweep (positive = left/CCW, negative = right/CW)
- *  - points: sampled points along the arc
- *  - tangentIn: direction at start (matches incoming straight)
- *  - tangentOut: direction at end
- */
+/** A circular arc result from the arc tool */
 export interface CircleArc {
   center: Point2D;
   radius: number;
@@ -1221,192 +387,4 @@ export interface CircleArc {
   points: Point2D[];
   tangentIn: Point2D;  // direction at arc start
   tangentOut: Point2D; // direction at arc end
-}
-
-/**
- * Compute a circular arc from a start point + direction to an end point.
- *
- * The arc starts tangent to the given direction (G1 continuity with the
- * incoming straight), and passes through the end point.
- *
- * Algorithm:
- * 1. The circle center is perpendicular to the start direction, at distance = radius
- * 2. The radius is determined by the end point position
- * 3. The center is on the side that makes the arc pass through the end point
- */
-export function computeCircleArc(
-  startPoint: Point2D,
-  startDirection: Point2D,  // normalized
-  endPoint: Point2D,
-  segments: number = 32
-): CircleArc | null {
-  // Vector from start to end
-  const dx = endPoint.x - startPoint.x;
-  const dy = endPoint.y - startPoint.y;
-  const chordLen = Math.sqrt(dx * dx + dy * dy);
-  if (chordLen < 0.1) return null;
-
-  // The angle of the chord
-  const chordAngle = Math.atan2(dy, dx);
-
-  // The angle of the start direction
-  const dirAngle = Math.atan2(startDirection.y, startDirection.x);
-
-  // The angle between the start direction and the chord
-  // This determines which side the center is on and the radius
-  const halfAngle = (chordAngle - dirAngle) / 2;
-
-  // If halfAngle is 0, the arc is a straight line (infinite radius)
-  if (Math.abs(halfAngle) < 1e-6) {
-    // Straight line — return a degenerate arc (just the chord)
-    const points: Point2D[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      points.push({
-        x: startPoint.x + dx * t,
-        y: startPoint.y + dy * t,
-      });
-    }
-    return {
-      center: { x: Infinity, y: Infinity },
-      radius: Infinity,
-      startAngle: 0,
-      endAngle: 0,
-      sweep: 0,
-      points,
-      tangentIn: startDirection,
-      tangentOut: startDirection,
-    };
-  }
-
-  // Radius from chord length and sweep angle
-  // chord = 2 * r * sin(sweep/2) → r = chord / (2 * sin(sweep/2))
-  // The sweep angle = 2 * halfAngle (but we need to determine direction)
-  // Actually: the angle between direction and chord = half the sweep angle
-  // So sweep = 2 * (chordAngle - dirAngle), but we need to normalize
-
-  // The center is perpendicular to the start direction
-  // Perpendicular: rotate direction 90°
-  // Left turn (CCW): center is to the left of the direction
-  // Right turn (CW): center is to the right
-
-  // Determine turn direction: cross product of direction and chord
-  const cross = startDirection.x * dy - startDirection.y * dx;
-  const isLeftTurn = cross > 0;
-
-  // The center is at distance r perpendicular to the start direction
-  // Perpendicular direction (left = +90°, right = -90°)
-  const perpDir = isLeftTurn
-    ? { x: -startDirection.y, y: startDirection.x }   // left (CCW)
-    : { x: startDirection.y, y: -startDirection.x };   // right (CW)
-
-  // The sweep angle: angle subtended by the arc at the center
-  // = 2 * angle between chord and tangent at start
-  // The angle between the start direction and the chord = |chordAngle - dirAngle|
-  // The inscribed angle theorem: sweep = 2 * (angle between tangent and chord)
-  let sweepAngle = 2 * Math.abs(chordAngle - dirAngle);
-  // Normalize to [0, 2π]
-  if (sweepAngle > Math.PI) sweepAngle = 2 * Math.PI - sweepAngle;
-
-  // Radius
-  const radius = chordLen / (2 * Math.sin(sweepAngle / 2));
-  if (radius < 0.5 || !isFinite(radius)) {
-    // Radius too small or invalid — fallback to straight line
-    const points: Point2D[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      points.push({
-        x: startPoint.x + dx * t,
-        y: startPoint.y + dy * t,
-      });
-    }
-    return {
-      center: { x: startPoint.x + perpDir.x * 1000, y: startPoint.y + perpDir.y * 1000 },
-      radius: 1000,
-      startAngle: 0,
-      endAngle: 0,
-      sweep: 0,
-      points,
-      tangentIn: startDirection,
-      tangentOut: { x: dx / chordLen, y: dy / chordLen },
-    };
-  }
-
-  // Center position
-  const center = {
-    x: startPoint.x + perpDir.x * radius,
-    y: startPoint.y + perpDir.y * radius,
-  };
-
-  // Start and end angles (from center)
-  const startAngle = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
-  const endAngle = Math.atan2(endPoint.y - center.y, endPoint.x - center.x);
-
-  // Sweep direction
-  const sweep = isLeftTurn
-    ? normalizeAngle(endAngle - startAngle)   // CCW (positive)
-    : -normalizeAngle(startAngle - endAngle);  // CW (negative)
-
-  // Sample points along the arc
-  const points: Point2D[] = [];
-  const absSweep = Math.abs(sweep);
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const angle = isLeftTurn
-      ? startAngle + sweep * t
-      : startAngle + sweep * t;
-    points.push({
-      x: center.x + radius * Math.cos(angle),
-      y: center.y + radius * Math.sin(angle),
-    });
-  }
-
-  // Tangent at end (perpendicular to radius at end point, in direction of travel)
-  const tangentOut = isLeftTurn
-    ? { x: -Math.sin(endAngle), y: Math.cos(endAngle) }   // CCW
-    : { x: Math.sin(endAngle), y: -Math.cos(endAngle) };   // CW
-
-  return {
-    center,
-    radius,
-    startAngle,
-    endAngle,
-    sweep,
-    points,
-    tangentIn: startDirection,
-    tangentOut,
-  };
-}
-
-/** Normalize angle to [0, 2π) */
-function normalizeAngle(a: number): number {
-  while (a < 0) a += 2 * Math.PI;
-  while (a >= 2 * Math.PI) a -= 2 * Math.PI;
-  return a;
-}
-
-/**
- * Convert a CircleArc to control points for a Road.
- * The arc is represented as a series of smooth control points.
- */
-export function arcToControlPoints(
-  arc: CircleArc,
-  refLat: number,
-  refLon: number,
-  z: number = 0
-): ControlPoint[] {
-  const points: ControlPoint[] = [];
-  for (let i = 0; i < arc.points.length; i++) {
-    const geo = localToGeo(arc.points[i].x, arc.points[i].y, refLat, refLon);
-    points.push({
-      id: generateId(),
-      lat: geo.lat,
-      lon: geo.lon,
-      z,
-      handleIn: null,
-      handleOut: null,
-      type: 'smooth',
-    });
-  }
-  return points;
 }

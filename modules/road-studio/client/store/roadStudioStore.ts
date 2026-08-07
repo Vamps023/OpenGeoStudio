@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection, Point2D, CircleArc } from '../../shared/types';
-import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal, computeCircleArc } from '../../shared/types';
+import { generateId, ROAD_PROFILES, distanceMeters, localToGeo, geoToLocal, detectIntersections } from '../../shared/types';
 import { roadEngine } from '../../shared/roadEngineClient';
 
 /** Compute tangent direction at a sample index */
@@ -153,7 +153,7 @@ interface RoadStudioState {
   clearRoadSelection: () => void;
 
   /** Manually create an intersection between 2 roads at their closest point */
-  createIntersectionAtClosestPoint: (roadId1: string, roadId2: string) => void;
+  createIntersectionAtClosestPoint: (roadId1: string, roadId2: string) => Promise<void>;
 
   /** Detect intersection between 2 roads (full algorithm: split, trim, generate) */
   detectIntersection: (roadId1: string, roadId2: string) => Promise<boolean>;
@@ -461,8 +461,14 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   updateArcPreview: (endPoint) => {
     const state = get();
     if (!state.arcStartPoint || !state.arcStartDirection) return;
-    const arc = computeCircleArc(state.arcStartPoint, state.arcStartDirection, endPoint, 32);
-    set({ arcPreview: arc });
+    // C++ engine is async — fire and forget for real-time preview
+    roadEngine.computeCircleArc(state.arcStartPoint, state.arcStartDirection, endPoint, 32)
+      .then((arc) => {
+        set({ arcPreview: arc });
+      })
+      .catch((err) => {
+        console.error('[Store] updateArcPreview: C++ engine failed:', err);
+      });
   },
 
   finishArc: () => {
@@ -578,15 +584,15 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
 
   setRoadPickMode: (enabled) => set({ roadPickMode: enabled }),
 
-  createIntersectionAtClosestPoint: (roadId1, roadId2) => {
+  createIntersectionAtClosestPoint: async (roadId1, roadId2) => {
     const state = get();
     const road1 = state.roads.find((r) => r.id === roadId1);
     const road2 = state.roads.find((r) => r.id === roadId2);
     if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return;
 
-    // Sample both roads
-    const samples1 = sampleRoad(road1, state.refLat, state.refLon, 16);
-    const samples2 = sampleRoad(road2, state.refLat, state.refLon, 16);
+    // Sample both roads using C++ engine
+    const samples1 = await roadEngine.sampleCenterline(road1, state.refLat, state.refLon, 16);
+    const samples2 = await roadEngine.sampleCenterline(road2, state.refLat, state.refLon, 16);
 
     // Find the closest pair of points between the two roads
     let minDist = Infinity;
@@ -686,7 +692,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return false;
 
     // Run the full intersection generation algorithm via C++ engine
-    // NO SILENT FALLBACK — if C++ fails, we want to see the error
+    // NO FALLBACK — C++ is the only geometry backend
     let generated: GeneratedIntersection | null;
     try {
       console.log('[Store] detectIntersection: calling roadEngine.generateIntersection()');
@@ -695,22 +701,20 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       console.log('[Store] detectIntersection: C++ result received, polygon pts:', generated?.polygon?.length);
     } catch (err) {
       console.error('[Store] detectIntersection: C++ engine FAILED:', err);
-      console.error('[Store] Falling back to TypeScript generateIntersection()');
-      generated = generateIntersection(road1, road2, state.refLat, state.refLon);
+      return false;
     }
     if (!generated) return false;
 
     // Step 3 (split): Split each road into two halves at the intersection,
     // trimming each end so roads stop well before the junction.
-    // Trim distance is angle-dependent: trimDist = halfWidth_other + R × tan(θ/2)
     const halfWidth1 = road1.width / 2;
     const halfWidth2 = road2.width / 2;
     const maxHalfWidth = Math.max(halfWidth1, halfWidth2);
     const cornerRadius = Math.min(maxHalfWidth, 5);
 
-    // Compute angle between the two roads at the intersection
-    const s1Angle = sampleRoad(road1, state.refLat, state.refLon, 32);
-    const s2Angle = sampleRoad(road2, state.refLat, state.refLon, 32);
+    // Sample roads using C++ engine for angle computation
+    const s1Angle = await roadEngine.sampleCenterline(road1, state.refLat, state.refLon, 32);
+    const s2Angle = await roadEngine.sampleCenterline(road2, state.refLat, state.refLon, 32);
     let idx1Angle = 0, idx2Angle = 0;
     let minD1 = Infinity, minD2 = Infinity;
     for (let i = 0; i < s1Angle.length; i++) {
@@ -729,12 +733,11 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     const halfAngle = angleBetween / 2;
 
     // Trim distance for each road (along its centerline)
-    // Road 1 stops where road 2's edge + corner arc begins
     const trimDist1 = halfWidth2 + cornerRadius * Math.tan(halfAngle);
     const trimDist2 = halfWidth1 + cornerRadius * Math.tan(halfAngle);
 
-    const splitAndTrimRoad = (road: Road, trimDist: number): Road[] => {
-      const samples = sampleRoad(road, state.refLat, state.refLon, 32);
+    const splitAndTrimRoad = async (road: Road, trimDist: number): Promise<Road[]> => {
+      const samples = await roadEngine.sampleCenterline(road, state.refLat, state.refLon, 32);
       if (samples.length < 2) return [road];
 
       // Find closest sample to intersection center
@@ -838,8 +841,8 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       return newRoads;
     };
 
-    const roads1 = splitAndTrimRoad(road1, trimDist1);
-    const roads2 = splitAndTrimRoad(road2, trimDist2);
+    const roads1 = await splitAndTrimRoad(road1, trimDist1);
+    const roads2 = await splitAndTrimRoad(road2, trimDist2);
     const updatedRoads = state.roads
       .filter((r) => r.id !== roadId1 && r.id !== roadId2)
       .concat(roads1, roads2);

@@ -1,16 +1,15 @@
 /**
  * Road Engine Client — Renderer-side wrapper for the C++ road geometry engine.
  *
- * This module provides a unified API for road geometry operations.
- * It delegates to the C++ native addon via IPC when available,
- * and falls back to the TypeScript implementations in types.ts when not.
+ * This is the ONLY geometry backend. All road geometry computation is done
+ * in the C++ native addon via IPC. There is no TypeScript fallback.
  *
  * Usage:
  *   import { roadEngine } from '../shared/roadEngineClient';
  *   const intersection = await roadEngine.generateIntersection(road1, road2, refLat, refLon);
  */
 
-import type { Road, GeneratedIntersection, CircleArc, ControlPoint, Point2D } from './types';
+import type { Road, GeneratedIntersection, CircleArc, Point2D } from './types';
 import { geoToLocal as tsGeoToLocal, localToGeo as tsLocalToGeo } from './types';
 
 // ─── Clothoid result type ──────────────────────────────────
@@ -74,7 +73,7 @@ interface CppRoad {
 }
 
 /** Convert a TS Road (lat/lon) to C++ Road format (local x/y meters) */
-function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
+export function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
   return {
     id: road.id,
     name: road.name,
@@ -103,9 +102,6 @@ function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
   };
 }
 
-// ─── Type definitions for the C++ addon return types ───────
-// The C++ addon returns plain objects with the same shape as our TS types.
-
 // ─── Road Engine API ───────────────────────────────────────
 export interface RoadEngineAPI {
   getVersion(): Promise<string>;
@@ -124,22 +120,22 @@ export interface RoadEngineAPI {
     initialA?: number,
     segments?: number
   ): Promise<ClothoidResult>;
-  generateRoadMesh(road: Road, numSamples?: number): Promise<MeshData>;
+  generateRoadMesh(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<MeshData>;
   generateIntersectionMesh(intersection: GeneratedIntersection, z?: number): Promise<MeshData>;
   exportOpenDrive(roads: Road[], refLat: number, refLon: number): Promise<string>;
-  sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>>;
+  sampleCenterline(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>>;
   geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
   localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
   /** Whether the C++ native engine is available */
   isNative(): boolean;
 }
 
-// ─── Native (C++) implementation ───────────────────────────
+// ─── C++ Native Engine (the only implementation) ───────────
 class NativeRoadEngine implements RoadEngineAPI {
   private get api() {
     const ea = window.electronAPI;
     if (!ea?.roadEngine) {
-      throw new Error('Road engine IPC bridge not available (electronAPI.roadEngine missing)');
+      throw new Error('Road engine IPC bridge not available (electronAPI.roadEngine missing). The C++ native addon is not loaded.');
     }
     return ea.roadEngine;
   }
@@ -178,8 +174,8 @@ class NativeRoadEngine implements RoadEngineAPI {
     return this.api.computeClothoid(startPoint, startDirection, endPoint, endDirection, initialA, segments) as Promise<ClothoidResult>;
   }
 
-  async generateRoadMesh(road: Road, numSamples?: number): Promise<MeshData> {
-    const cppRoad = toCppRoad(road, 0, 0);  // mesh uses local coords
+  async generateRoadMesh(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<MeshData> {
+    const cppRoad = toCppRoad(road, refLat, refLon);
     return this.api.generateRoadMesh(cppRoad, numSamples) as Promise<MeshData>;
   }
 
@@ -192,14 +188,33 @@ class NativeRoadEngine implements RoadEngineAPI {
     return this.api.exportOpenDrive(cppRoads, refLat, refLon);
   }
 
-  async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
-    // Convert road to C++ format using 0,0 as reference (points are already in local if pre-converted)
-    // For the general case, we need refLat/refLon — but sampleCenterline is mainly used internally
-    // with already-converted roads. If the road has lat/lon points, convert them.
-    const refLat = 0;
-    const refLon = 0;
+  async sampleCenterline(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>> {
     const cppRoad = toCppRoad(road, refLat, refLon);
-    return this.api.sampleCenterline(cppRoad, numSamples) as Promise<Array<{ x: number; y: number }>>;
+    const result = await this.api.sampleCenterline(cppRoad, numSamples);
+    // C++ returns { x, y } — we need to add z from the road's elevation
+    const samples = result as Array<{ x: number; y: number }>;
+    // Interpolate z along the centerline
+    return samples.map((s) => {
+      // Find closest control point for z interpolation
+      let z = 0;
+      if (road.points.length > 0) {
+        // Simple: interpolate z based on position along road
+        // For now, use linear interpolation between control points
+        z = road.points[0].z;
+        if (road.points.length > 1) {
+          // Find which segment this sample falls on
+          let bestDist = Infinity;
+          let bestZ = road.points[0].z;
+          for (const cp of road.points) {
+            const cpLocal = tsGeoToLocal(cp.lat, cp.lon, refLat, refLon);
+            const d = Math.sqrt((s.x - cpLocal.x) ** 2 + (s.y - cpLocal.y) ** 2);
+            if (d < bestDist) { bestDist = d; bestZ = cp.z; }
+          }
+          z = bestZ;
+        }
+      }
+      return { x: s.x, y: s.y, z };
+    });
   }
 
   async geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }> {
@@ -216,79 +231,28 @@ let _engine: RoadEngineAPI | null = null;
 
 /**
  * Get the road engine instance.
- * Uses C++ native addon when available, falls back to TypeScript otherwise.
+ * Always uses the C++ native addon. Throws if not available.
  */
 export function getRoadEngine(): RoadEngineAPI {
   if (_engine) return _engine;
 
-  // Check if native C++ engine is available via Electron preload
   if (window.electronAPI?.roadEngine) {
     console.log('[RoadEngine] Using C++ native engine (window.electronAPI.roadEngine available)');
     _engine = new NativeRoadEngine();
   } else {
-    console.warn('[RoadEngine] ⚠️ Using TypeScript fallback engine (window.electronAPI.roadEngine NOT available)');
-    console.warn('[RoadEngine] This means the C++ native addon is not loaded. Road geometry will be slower and may produce different results.');
-    _engine = new TypeScriptRoadEngineFallback();
+    console.error('[RoadEngine] ❌ C++ native engine NOT available! window.electronAPI.roadEngine is missing.');
+    console.error('[RoadEngine] The C++ addon is not loaded. Road geometry will not work.');
+    console.error('[RoadEngine] Run: npm run rebuild:road-engine');
+    // Return a stub that throws on every call
+    _engine = new NativeRoadEngine();
   }
 
   return _engine;
 }
 
-// ─── TypeScript fallback ───────────────────────────────────
-// Used when the C++ native addon is not available (e.g. in dev mode
-// before the addon is built, or when running outside Electron).
-import {
-  generateIntersection as tsGenerateIntersection,
-  computeCircleArc as tsComputeCircleArc,
-  sampleRoad as tsSampleRoad,
-} from './types';
-
-class TypeScriptRoadEngineFallback implements RoadEngineAPI {
-  isNative(): boolean {
-    return false;
-  }
-
-  async getVersion(): Promise<string> {
-    return '0.0.0-ts-fallback';
-  }
-
-  async generateIntersection(road1: Road, road2: Road, refLat: number, refLon: number): Promise<GeneratedIntersection> {
-    const result = tsGenerateIntersection(road1, road2, refLat, refLon);
-    if (!result) throw new Error('Failed to generate intersection');
-    return result;
-  }
-
-  async computeCircleArc(
-    startPoint: { x: number; y: number },
-    startDirection: { x: number; y: number },
-    endPoint: { x: number; y: number },
-    segments?: number
-  ): Promise<CircleArc> {
-    const result = tsComputeCircleArc(startPoint as any, startDirection as any, endPoint as any, segments ?? 32);
-    if (!result) throw new Error('Failed to compute circle arc');
-    return result;
-  }
-
-  async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
-    // TS sampleRoad needs refLat/refLon from the road — use 0,0 as fallback
-    // (the C++ version uses local coordinates directly)
-    const refLat = (road as any)._refLat ?? 0;
-    const refLon = (road as any)._refLon ?? 0;
-    return tsSampleRoad(road, refLat, refLon, numSamples ?? 24);
-  }
-
-  async geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }> {
-    return tsGeoToLocal(lat, lon, refLat, refLon);
-  }
-
-  async localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }> {
-    const result = tsLocalToGeo(x, y, refLat, refLon);
-    return { lat: result.lat, lon: result.lon };
-  }
-}
-
 // ─── Convenience exports ───────────────────────────────────
 export const roadEngine = {
+  isNative: () => getRoadEngine().isNative(),
   getVersion: () => getRoadEngine().getVersion(),
   generateIntersection: (r1: Road, r2: Road, refLat: number, refLon: number) =>
     getRoadEngine().generateIntersection(r1, r2, refLat, refLon),
@@ -306,17 +270,16 @@ export const roadEngine = {
     initialA?: number,
     segments?: number
   ) => getRoadEngine().computeClothoid(sp, sd, ep, ed, initialA, segments),
-  generateRoadMesh: (road: Road, numSamples?: number) =>
-    getRoadEngine().generateRoadMesh(road, numSamples),
+  generateRoadMesh: (road: Road, refLat: number, refLon: number, numSamples?: number) =>
+    getRoadEngine().generateRoadMesh(road, refLat, refLon, numSamples),
   generateIntersectionMesh: (intersection: GeneratedIntersection, z?: number) =>
     getRoadEngine().generateIntersectionMesh(intersection, z),
   exportOpenDrive: (roads: Road[], refLat: number, refLon: number) =>
     getRoadEngine().exportOpenDrive(roads, refLat, refLon),
-  sampleCenterline: (road: Road, numSamples?: number) =>
-    getRoadEngine().sampleCenterline(road, numSamples),
+  sampleCenterline: (road: Road, refLat: number, refLon: number, numSamples?: number) =>
+    getRoadEngine().sampleCenterline(road, refLat, refLon, numSamples),
   geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) =>
     getRoadEngine().geoToLocal(lat, lon, refLat, refLon),
   localToGeo: (x: number, y: number, refLat: number, refLon: number) =>
     getRoadEngine().localToGeo(x, y, refLat, refLon),
-  isNative: () => getRoadEngine().isNative(),
 };

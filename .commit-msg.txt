@@ -1,26 +1,36 @@
-Add comprehensive logging to verify C++ engine is actually used
+Fix ABI mismatch + remove all old TypeScript geometry implementations
 
-Problem: The C++ road engine was built but there was no way to verify
-it was actually being called at runtime. The store had a silent
-try/catch fallback to TypeScript that could mask failures.
+CRITICAL FIX: The C++ addon was compiled for Node.js ABI (137) but Electron
+uses ABI 146. The addon couldn't load in Electron, causing silent fallback
+to TypeScript. Now rebuilt with --target=42.5.1 --dist-url=electronjs.org/headers.
 
 Changes:
-- C++ road_bridge.cpp: Added roadLog() function with OutputDebugStringA
-  on Windows + stderr. Logs every call to roadGenerateIntersection()
-  with road IDs, point counts, and result details.
-- roadEngineHandler.ts: Logs addon search paths, load success/failure,
-  and every IPC call with [RoadEngine:C++] or [RoadEngine:TS-Fallback] tag.
-- roadEngineClient.ts: Logs whether native or fallback engine is selected.
-- roadStudioStore.ts: detectIntersection() now logs which engine is called
-  and only falls back to TS with an explicit error message.
-- RoadToolbar.tsx: Added engine status indicator (green=C++ active,
-  orange=TS fallback) so user can see which engine is running.
-- Added getEngineInfo() to store for UI queries.
+- binding.gyp: Rebuilt against Electron 42.5.1 headers (ABI 146)
+- package.json: Updated build:road-engine and added rebuild:road-engine
+  scripts with correct Electron target
+- types.ts: REMOVED all geometry implementations:
+  - bezierPoint, sampleRoad (→ C++ sampleCenterline)
+  - segmentIntersection, lineIntersection, findCenterlineIntersection
+  - closestPointOnRoad, tangentAtSample, normalAtSample, filletArc
+  - computeIntersectionPolygon, convexHull
+  - generateIntersection + all helper functions
+  - computeCircleArc, arcToControlPoints
+  KEPT: type definitions, generateId, geoToLocal, localToGeo,
+  distanceMeters, detectIntersections (lightweight endpoint check)
+- roadEngineClient.ts: Removed TypeScriptRoadEngineFallback class entirely.
+  C++ native engine is the ONLY backend. Throws if not available.
+  Updated sampleCenterline and generateRoadMesh to take refLat/refLon.
+- roadStudioStore.ts: All sampleRoad() calls → roadEngine.sampleCenterline()
+  (async). Removed TS generateIntersection fallback. createIntersectionAtClosestPoint
+  is now async. detectIntersection fails loudly if C++ engine fails.
+- RoadViewport.tsx: Removed sampleRoad, computeIntersectionPolygon, convexHull,
+  computeCircleArc imports. Added sample cache (refreshSampleCache) populated
+  async by C++ engine, used sync for rendering. computeIntersectionPolygonFromCache
+  replaces the old TS function using cached samples.
+- RoadElevationEditor.tsx: Removed unused sampleRoad import.
 
-Test output confirms C++ engine runs:
-  [C++ RoadEngine] roadGenerateIntersection() CALLED
-  [C++ RoadEngine] road1: r1 pts: 2 road2: r2 pts: 2
-  [C++ RoadEngine] result center: (0,0) polygon pts: 36 approaches: 4
+Verified: C++ addon loads in Electron (tested with npx electron -e).
+All 11 tests pass with C++ logging output visible.
 
 Generated with Devin (https://devin.ai)
 

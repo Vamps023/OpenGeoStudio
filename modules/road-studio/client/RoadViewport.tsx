@@ -30,13 +30,10 @@ import {
   type Point2D,
   geoToLocal,
   localToGeo,
-  sampleRoad,
   detectIntersections,
-  computeIntersectionPolygon,
-  convexHull,
   distanceMeters,
-  computeCircleArc,
 } from '../shared/types';
+import { roadEngine } from '../shared/roadEngineClient';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
   MeshBuilder, StandardMaterial, Color3, Color4, Mesh, LinesMesh, Texture,
@@ -83,6 +80,9 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     handle: 'in' | 'out' | null;
   }>({ mode: 'none', roadId: null, pointIndex: -1, handle: null });
 
+  // ─── Road sample cache (populated async by C++ engine, used sync for rendering) ───
+  const sampleCacheRef = useRef<Map<string, Array<{ x: number; y: number; z: number }>>>(new Map());
+
   // Track shift key state globally (more reliable than e.originalEvent.shiftKey in Electron)
   const shiftDownRef = useRef(false);
 
@@ -99,6 +99,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     // Recompute intersections whenever roads change
     intersectionsRef.current = detectIntersections(store.roads);
     if (store.recomputeIntersections) store.recomputeIntersections();
+    // Refresh sample cache from C++ engine
+    refreshSampleCache();
     updateAllViews();
   }, [store.roads]);
   useEffect(() => { refLatRef.current = store.refLat; refLonRef.current = store.refLon; updateAllViews(); }, [store.refLat, store.refLon]);
@@ -201,7 +203,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           let closestDist = Infinity;
           for (const road of roadsRef.current) {
             if (road.points.length < 2) continue;
-            const samples = sampleRoad(road, refLat, refLon, 24);
+            const samples = getCachedSamples(road.id);
             for (const s of samples) {
               const dx = s.x - clickLocal.x;
               const dy = s.y - clickLocal.y;
@@ -450,8 +452,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     for (const road of roads) {
       if (road.points.length < 2) continue;
 
-      // Sample road path with bezier curves
-      const samples = sampleRoad(road, refLat, refLon, 24);
+      // Sample road path (from C++ engine cache)
+      const samples = getCachedSamples(road.id);
       if (samples.length < 2) continue;
 
       const profile = road.profile;
@@ -655,8 +657,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     for (const ix of intersections) {
       if (ix.connections.length < 2) continue;
 
-      // Compute intersection polygon in local meters
-      const polyLocal = computeIntersectionPolygon(ix, roads, refLat, refLon);
+      // Compute intersection polygon from cached road samples
+      const polyLocal = computeIntersectionPolygonFromCache(ix, roads);
       if (polyLocal.length < 3) continue;
 
       // Convert to lat/lon for GeoJSON
@@ -707,7 +709,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const road = roads.find((r) => r.id === conn.roadId);
         if (!road || road.points.length < 2) continue;
 
-        const samples = sampleRoad(road, refLat, refLon, 16);
+        const samples = getCachedSamples(road.id);
         const ixLocal = geoToLocal(ix.lat, ix.lon, refLat, refLon);
         const halfW = road.width / 2;
 
@@ -1235,7 +1237,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
               let closestDist = Infinity;
               for (const road of roadsRef.current) {
                 if (road.points.length < 2) continue;
-                const samples = sampleRoad(road, refLatRef.current, refLonRef.current, 24);
+                const samples = getCachedSamples(road.id);
                 for (const s of samples) {
                   const d = Math.sqrt((s.x - px) ** 2 + (s.y - py) ** 2);
                   if (d < closestDist) { closestDist = d; closestId = road.id; }
@@ -1326,6 +1328,88 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     if (viewMode === 'perspective') update3DMeshes();
   }, [store.roads, store.selection, viewMode]);
 
+  // ─── Refresh sample cache from C++ engine ───────────────
+  async function refreshSampleCache() {
+    const refLat = refLatRef.current;
+    const refLon = refLonRef.current;
+    const newCache = new Map<string, Array<{ x: number; y: number; z: number }>>();
+    for (const road of roadsRef.current) {
+      if (road.points.length < 2) continue;
+      try {
+        const samples = await roadEngine.sampleCenterline(road, refLat, refLon, 24);
+        newCache.set(road.id, samples);
+      } catch (err) {
+        console.error('[RoadViewport] Failed to sample road', road.id, err);
+      }
+    }
+    sampleCacheRef.current = newCache;
+    updateAllViews();
+  }
+
+  /** Get cached road samples (sync) or empty array */
+  function getCachedSamples(roadId: string): Array<{ x: number; y: number; z: number }> {
+    return sampleCacheRef.current.get(roadId) ?? [];
+  }
+
+  /** Compute intersection polygon from cached road samples (replaces TS computeIntersectionPolygon) */
+  function computeIntersectionPolygonFromCache(
+    ix: Intersection,
+    roads: Road[]
+  ): Array<{ x: number; y: number }> {
+    const ixLocal = geoToLocal(ix.lat, ix.lon, refLatRef.current, refLonRef.current);
+    const points: Array<{ x: number; y: number }> = [];
+
+    for (const conn of ix.connections) {
+      const road = roads.find((r) => r.id === conn.roadId);
+      if (!road || road.points.length < 2) continue;
+
+      const samples = getCachedSamples(road.id);
+      if (samples.length < 2) continue;
+      const halfW = road.width / 2;
+
+      // Find closest sample to intersection
+      let closestIdx = 0;
+      let closestDist = Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const d = Math.sqrt((samples[i].x - ixLocal.x) ** 2 + (samples[i].y - ixLocal.y) ** 2);
+        if (d < closestDist) { closestDist = d; closestIdx = i; }
+      }
+
+      // Take samples around closest point and compute edge points
+      const range = 3;
+      for (let i = Math.max(0, closestIdx - range); i <= Math.min(samples.length - 1, closestIdx + range); i++) {
+        const s = samples[i];
+        let tx: number, ty: number;
+        if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+        else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+        points.push({ x: s.x + nx * halfW, y: s.y + ny * halfW });
+        points.push({ x: s.x - nx * halfW, y: s.y - ny * halfW });
+      }
+    }
+
+    // Simple convex hull (Andrew's monotone chain)
+    if (points.length < 3) return points;
+    const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (o: typeof sorted[0], a: typeof sorted[0], b: typeof sorted[0]) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: typeof sorted = [];
+    for (const p of sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper: typeof sorted = [];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const p = sorted[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    return lower.slice(0, -1).concat(upper.slice(0, -1));
+  }
+
   function updateAllViews() {
     if (viewMode === 'top' && mapRef.current) updateMapRoads(mapRef.current);
     else if (viewMode === 'perspective') update3DMeshes();
@@ -1369,7 +1453,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     for (const road of roads) {
       if (road.points.length < 2) { createCPMeshes(road, refLat, refLon, scene, selection); continue; }
 
-      const samples = sampleRoad(road, refLat, refLon, 16);
+      const samples = getCachedSamples(road.id);
       if (samples.length < 2) continue;
 
       const halfW = road.width / 2;
@@ -1619,7 +1703,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     for (const ix of intersections) {
       if (ix.connections.length < 2) continue;
 
-      const polyLocal = computeIntersectionPolygon(ix, roads, refLat, refLon);
+      const polyLocal = computeIntersectionPolygonFromCache(ix, roads);
       if (polyLocal.length < 3) continue;
 
       // Build intersection surface as a custom mesh (filled polygon at road height)
@@ -1682,7 +1766,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const road = roads.find((r) => r.id === conn.roadId);
         if (!road || road.points.length < 2) continue;
 
-        const samples = sampleRoad(road, refLat, refLon, 16);
+        const samples = getCachedSamples(road.id);
         const halfW = road.width / 2;
 
         // Find closest sample to intersection
