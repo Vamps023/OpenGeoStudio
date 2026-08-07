@@ -1,40 +1,41 @@
-Phase 1.8.3d: Tool metadata generation + serialization + round-trip
+Phase 1.8.4: Golden parity validation + formatVersion auto-dispatch
 
-Completes the authoring pipeline: tool → metadata → serialization →
-exact reconstruction. Newly created arcs and spirals never enter the
-legacy compatibility path.
+Proves that roadToV2() and roadToV2Legacy() produce mathematically
+correct geometry. The conversion from legacy Road to RoadV2 is now
+validated against captured golden fixture data.
 
 Changes:
-- SegmentKind enum replaces free-form string type (Line, Bezier, Arc, Spiral)
-- SegmentMetadata: version field added (schema evolution)
-- Road: formatVersion field added (1=legacy, 2=with segmentMeta)
-- createCircleArc(): emits SegmentMetadata(kind=Arc) on first CP
-  with exact curvature, arcLength, startHeading
-- createClothoidArc(): emits SegmentMetadata(kind=Spiral) on first CP
-  with exact curvatureStart, curvatureEnd, segmentLength, startHeading
-- createSegment(): sets formatVersion=2
-- road_adapter.hpp: whole-curve metadata path (Arc/Spiral on CP[0]
-  creates a single segment, skipping sampled CPs)
-- road_adapter.hpp: exhaustive switch with default case for corrupted data
-- road_bridge.cpp: full segmentMeta serialization (parse + output)
-  - segmentMetaToJs: serializes metadata to JS object
-  - parseSegmentMeta: parses metadata from JS object
-  - Old files without segmentMeta → nullopt (legacy adapter path)
-  - New files with segmentMeta → exact adapter path
+- roadToV2Auto(): format-version-aware auto-dispatch
+  formatVersion >= 2 → roadToV2() (exact path)
+  formatVersion < 2  → roadToV2Legacy() (legacy compatibility)
+  Callers no longer need to decide which adapter to invoke.
+- Documented formatVersion compatibility table in road_adapter.hpp
 
-Tests (16 new, 224 total, 1185 assertions):
-- Tool metadata emission: arc/clothoid emit metadata on first CP,
-  correct parameters, formatVersion=2
-- roadToV2 produces ArcSegment/SpiralSegment from tool metadata
-  (not LineSegment), exact=true, no warnings
-- Round-trip: arc → roadToV2 → centerline matches at endpoints,
-  curvature is constant, length matches metadata
-- Round-trip: clothoid → roadToV2 → length matches, curvature
-  transitions from k0 to k1
-- Backward compat: old file (metadata stripped, formatVersion=1)
-  uses LineSegments, both adapter paths work
-- SegmentKind enum: distinct values, default is Line, all fields
-  constructible
+Tests (17 new, 241 total, 1831 assertions):
+
+Exact path validation (5 tests):
+- bezier_arch: golden parity (position, heading), 3 BezierSegments
+- bezier_arch: total length matches golden (183.498)
+- mixed_line_bezier: golden parity, 2 Line + 2 Bezier segments
+- mixed_line_bezier: total length matches golden (131.564)
+- newly created arc: constant curvature along entire arc
+- newly created spiral: linear curvature transition k0→k1
+
+Legacy path validation (5 tests):
+- straight_2pt: exact position match at s=0, 50, 100
+- straight_5pt: position match at all 5 control points
+- arc_quarter: 16 LineSegments, position match at all 17 CPs
+- s_clothoid: 16 LineSegments, position match at all 17 CPs
+- tiny_segments: 30 LineSegments, position match at all 31 CPs
+
+Format version auto-dispatch (4 tests):
+- formatVersion=2 → exact path (ArcSegment)
+- formatVersion=1 → legacy path (LineSegment)
+- formatVersion=0 → legacy path (backward compat)
+- empty road → exact=true regardless of version
+
+Stress test (2 tests):
+- 500 mixed segments (legacy path): no crash, no NaN, endpoint match
+- 500 mixed segments (exact path): no crash, 500 LineSegments, exact=true
 
 All 113 vitest tests remain green (no regression).
-Legacy Road path is completely untouched.

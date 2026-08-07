@@ -27,9 +27,16 @@
 // Phase history:
 //   1.8.3a: Infrastructure + LineSegment only
 //   1.8.3b: Bezier/Arc/Spiral exact reconstruction from metadata
-//   1.8.3c: Legacy compatibility reconstruction (this phase)
-//   1.8.3d: Update creation tools to emit SegmentMetadata
-//   1.8.4:  Golden parity — all 7 fixtures against both paths
+//   1.8.3c: Legacy compatibility reconstruction
+//   1.8.3d: Update creation tools to emit SegmentMetadata + serialization
+//   1.8.4:  Golden parity validation + formatVersion auto-dispatch
+//
+// formatVersion compatibility table:
+//   1 = Legacy ControlPoint[] only (no SegmentMetadata)
+//       → roadToV2Auto() dispatches to roadToV2Legacy()
+//   2 = ControlPoint[] + SegmentMetadata
+//       → roadToV2Auto() dispatches to roadToV2() (exact path)
+//   Future versions reserved.
 //
 // The legacy Road path remains completely untouched.
 
@@ -346,6 +353,35 @@ inline RoadV2 roadToV2Legacy(const Road& legacy, AdapterReport& report) {
 inline RoadV2 roadToV2Legacy(const Road& legacy) {
     AdapterReport unused;
     return roadToV2Legacy(legacy, unused);
+}
+
+// ═══════════════════════════════════════════════════════════
+// roadToV2Auto — Format-version-aware auto-dispatch
+// ═══════════════════════════════════════════════════════════
+//
+// Automatically selects the correct adapter path based on
+// Road::formatVersion:
+//   formatVersion >= 2 → roadToV2() (exact path)
+//   formatVersion < 2  → roadToV2Legacy() (legacy compatibility)
+//
+// This removes the need for callers to decide which adapter to
+// invoke. The formatVersion is set by the creation tools and
+// preserved through serialization.
+//
+// For explicit control, callers can still invoke roadToV2() or
+// roadToV2Legacy() directly.
+//
+inline RoadV2 roadToV2Auto(const Road& legacy, AdapterReport& report) {
+    if (legacy.formatVersion >= 2) {
+        return roadToV2(legacy, report);
+    }
+    return roadToV2Legacy(legacy, report);
+}
+
+// ─── Convenience overload (no report) ──────────────────────
+inline RoadV2 roadToV2Auto(const Road& legacy) {
+    AdapterReport unused;
+    return roadToV2Auto(legacy, unused);
 }
 
 } // namespace geo
