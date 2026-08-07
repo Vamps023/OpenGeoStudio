@@ -4208,3 +4208,477 @@ TEST_CASE("1.8.4 stress: 500 segments — exact path also works") {
     CHECK(pEnd.x == doctest::Approx(pts.back().x).epsilon(0.01));
     CHECK(pEnd.y == doctest::Approx(pts.back().y).epsilon(0.01));
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 1.8.5 — roadFromV2() Inverse Adapter + Round-trip
+// ═══════════════════════════════════════════════════════════
+//
+// Tests the inverse adapter: RoadV2 → Road.
+//
+// Key invariant:
+//   roadFromV2(roadToV2(Road))  is always LOSSLESS
+//   roadToV2(roadFromV2(RoadV2)) MAY be lossy in Phase 2
+//
+// Three test groups:
+//   1.8.5a: Basic conversion (each segment type → ControlPoints)
+//   1.8.5b: Round-trip verification (Road → RoadV2 → Road' == Road)
+//   1.8.5c: Information loss report (ReverseAdapterReport)
+// ═══════════════════════════════════════════════════════════
+
+using geo::roadFromV2;
+using geo::ReverseAdapterReport;
+
+// ═══════════════════════════════════════════════════════════
+// 1.8.5a: Basic Conversion Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("1.8.5a: roadFromV2 empty road → empty Road") {
+    RoadV2 v2;
+    v2.id = "empty";
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    CHECK(road.id == "empty");
+    CHECK(road.points.empty());
+    CHECK(report.lossless == true);
+    CHECK(road.formatVersion == 2);
+}
+
+TEST_CASE("1.8.5a: roadFromV2 LineSegment → 2 corner CPs") {
+    RoadV2 v2;
+    v2.id = "line_test";
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    REQUIRE(road.points.size() == 2);
+    CHECK(road.points[0].position.x == doctest::Approx(0.0));
+    CHECK(road.points[0].position.y == doctest::Approx(0.0));
+    CHECK(road.points[1].position.x == doctest::Approx(100.0));
+    CHECK(road.points[1].position.y == doctest::Approx(0.0));
+    CHECK(road.points[0].type == "corner");
+    CHECK(road.points[1].type == "corner");
+    CHECK(report.lineSegments == 1);
+    CHECK(report.lossless == true);
+}
+
+TEST_CASE("1.8.5a: roadFromV2 BezierSegment → 2 smooth CPs with handles") {
+    RoadV2 v2;
+    v2.id = "bez_test";
+    v2.addSegment<BezierSegment>(
+        Point2D(0, 0), Point2D(25, 40), Point2D(75, 40), Point2D(100, 0)
+    );
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    REQUIRE(road.points.size() == 2);
+    CHECK(road.points[0].type == "smooth");
+    CHECK(road.points[1].type == "smooth");
+    CHECK(road.points[0].hasHandleOut == true);
+    CHECK(road.points[1].hasHandleIn == true);
+    // handleOut should be relative to position: p1 - p0 = (25, 40)
+    CHECK(road.points[0].handleOut.x == doctest::Approx(25.0));
+    CHECK(road.points[0].handleOut.y == doctest::Approx(40.0));
+    // handleIn should be relative to position: p2 - p3 = (75-100, 40-0) = (-25, 40)
+    CHECK(road.points[1].handleIn.x == doctest::Approx(-25.0));
+    CHECK(road.points[1].handleIn.y == doctest::Approx(40.0));
+    CHECK(report.bezierSegments == 1);
+    CHECK(report.lossless == true);
+}
+
+TEST_CASE("1.8.5a: roadFromV2 ArcSegment → CP with Arc metadata") {
+    RoadV2 v2;
+    v2.id = "arc_test";
+    v2.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 50.0);
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    REQUIRE(road.points.size() == 2);
+    CHECK(road.points[0].segmentMeta.has_value());
+    CHECK(road.points[0].segmentMeta->kind == SegmentKind::Arc);
+    CHECK(road.points[0].segmentMeta->startHeading == doctest::Approx(0.0));
+    CHECK(road.points[0].segmentMeta->curvature == doctest::Approx(0.02));
+    CHECK(road.points[0].segmentMeta->arcLength == doctest::Approx(50.0));
+    // End CP should NOT have metadata
+    CHECK(!road.points[1].segmentMeta.has_value());
+    CHECK(report.arcSegments == 1);
+    CHECK(report.lossless == true);
+}
+
+TEST_CASE("1.8.5a: roadFromV2 SpiralSegment → CP with Spiral metadata") {
+    RoadV2 v2;
+    v2.id = "spiral_test";
+    v2.addSegment<SpiralSegment>(Point2D(0, 0), 0.0, 0.0, 0.01, 80.0);
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    REQUIRE(road.points.size() == 2);
+    CHECK(road.points[0].segmentMeta.has_value());
+    CHECK(road.points[0].segmentMeta->kind == SegmentKind::Spiral);
+    CHECK(road.points[0].segmentMeta->curvatureStart == doctest::Approx(0.0));
+    CHECK(road.points[0].segmentMeta->curvatureEnd == doctest::Approx(0.01));
+    CHECK(road.points[0].segmentMeta->segmentLength == doctest::Approx(80.0));
+    CHECK(report.spiralSegments == 1);
+    CHECK(report.lossless == true);
+}
+
+TEST_CASE("1.8.5a: roadFromV2 multiple LineSegments → shared boundary CPs") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(50, 0));
+    v2.addSegment<LineSegment>(Point2D(50, 0), Point2D(100, 0));
+
+    Road road = roadFromV2(v2);
+
+    // 2 segments → 3 CPs (boundary shared)
+    REQUIRE(road.points.size() == 3);
+    CHECK(road.points[0].position.x == doctest::Approx(0.0));
+    CHECK(road.points[1].position.x == doctest::Approx(50.0));
+    CHECK(road.points[2].position.x == doctest::Approx(100.0));
+}
+
+TEST_CASE("1.8.5a: roadFromV2 mixed segments → correct CP count") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(40, 0));
+    v2.addSegment<BezierSegment>(
+        Point2D(40, 0), Point2D(50, 15), Point2D(70, 15), Point2D(80, 0)
+    );
+    v2.addSegment<LineSegment>(Point2D(80, 0), Point2D(120, 0));
+
+    Road road = roadFromV2(v2);
+
+    // 3 segments → 4 CPs (boundaries shared)
+    REQUIRE(road.points.size() == 4);
+    CHECK(road.points[0].position.x == doctest::Approx(0.0));
+    CHECK(road.points[1].position.x == doctest::Approx(40.0));
+    CHECK(road.points[2].position.x == doctest::Approx(80.0));
+    CHECK(road.points[3].position.x == doctest::Approx(120.0));
+}
+
+TEST_CASE("1.8.5a: roadFromV2 preserves metadata fields") {
+    RoadV2 v2;
+    v2.id = "meta_test";
+    v2.name = "Meta Test Road";
+    v2.color = "#ff0000";
+    v2.profileName = "highway_3x2";
+    v2.startIntersectionId = "ix_start";
+    v2.endIntersectionId = "ix_end";
+    v2.width = 12.0;
+    v2.laneCount = 6;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    Road road = roadFromV2(v2);
+
+    CHECK(road.id == "meta_test");
+    CHECK(road.name == "Meta Test Road");
+    CHECK(road.color == "#ff0000");
+    CHECK(road.profileName == "highway_3x2");
+    CHECK(road.startIntersectionId == "ix_start");
+    CHECK(road.endIntersectionId == "ix_end");
+    CHECK(road.width == doctest::Approx(12.0));
+    CHECK(road.laneCount == 6);
+    CHECK(road.formatVersion == 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 1.8.5b: Round-trip Verification
+// Road → roadToV2() → RoadV2 → roadFromV2() → Road'
+// Verify Road' == Road for all representable fields.
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("1.8.5b: round-trip line road — lossless") {
+    Road original = makeLegacyRoad("rt_line", {{0, 0}, {50, 0}, {100, 0}});
+    original.formatVersion = 2;
+    original.name = "Round Trip Line";
+    original.width = 10.0;
+    original.laneCount = 4;
+
+    RoadV2 v2 = roadToV2(original);
+    ReverseAdapterReport report;
+    Road restored = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(restored.id == original.id);
+    CHECK(restored.name == original.name);
+    CHECK(restored.width == doctest::Approx(original.width));
+    CHECK(restored.laneCount == original.laneCount);
+    CHECK(restored.formatVersion == 2);
+    REQUIRE(restored.points.size() == original.points.size());
+    for (size_t i = 0; i < original.points.size(); i++) {
+        CHECK(restored.points[i].position.x == doctest::Approx(original.points[i].position.x));
+        CHECK(restored.points[i].position.y == doctest::Approx(original.points[i].position.y));
+    }
+}
+
+TEST_CASE("1.8.5b: round-trip bezier road — lossless (handles preserved)") {
+    Road original;
+    original.id = "rt_bez";
+    original.name = "Round Trip Bezier";
+    original.width = 6.0;
+    original.laneCount = 2;
+    original.formatVersion = 2;
+
+    original.points.push_back(makeSmoothCP({0, 0}, {0, 0}, {25, 40}, false, true));
+    original.points.push_back(makeSmoothCP({100, 0}, {-25, 40}, {0, 0}, true, false));
+
+    RoadV2 v2 = roadToV2(original);
+    ReverseAdapterReport report;
+    Road restored = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.bezierSegments == 1);
+    REQUIRE(restored.points.size() == 2);
+
+    // Positions match
+    CHECK(restored.points[0].position.x == doctest::Approx(0.0));
+    CHECK(restored.points[0].position.y == doctest::Approx(0.0));
+    CHECK(restored.points[1].position.x == doctest::Approx(100.0));
+    CHECK(restored.points[1].position.y == doctest::Approx(0.0));
+
+    // Handles match
+    CHECK(restored.points[0].hasHandleOut == true);
+    CHECK(restored.points[0].handleOut.x == doctest::Approx(25.0));
+    CHECK(restored.points[0].handleOut.y == doctest::Approx(40.0));
+    CHECK(restored.points[1].hasHandleIn == true);
+    CHECK(restored.points[1].handleIn.x == doctest::Approx(-25.0));
+    CHECK(restored.points[1].handleIn.y == doctest::Approx(40.0));
+}
+
+TEST_CASE("1.8.5b: round-trip arc road — lossless (metadata preserved)") {
+    Road original = createCircleArc({0, 0}, {1, 0}, {50, 50}, 8);
+
+    RoadV2 v2 = roadToV2(original);
+    ReverseAdapterReport report;
+    Road restored = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.arcSegments == 1);
+
+    // Metadata preserved
+    REQUIRE(restored.points.size() >= 2);
+    CHECK(restored.points[0].segmentMeta.has_value());
+    CHECK(restored.points[0].segmentMeta->kind == SegmentKind::Arc);
+    CHECK(restored.points[0].segmentMeta->curvature ==
+          doctest::Approx(original.points[0].segmentMeta->curvature));
+    CHECK(restored.points[0].segmentMeta->arcLength ==
+          doctest::Approx(original.points[0].segmentMeta->arcLength));
+    CHECK(restored.points[0].segmentMeta->startHeading ==
+          doctest::Approx(original.points[0].segmentMeta->startHeading));
+
+    // Double round-trip: restored → RoadV2 → should produce same ArcSegment
+    RoadV2 v2Again = roadToV2(restored);
+    CHECK(v2Again.numSegments() == 1);
+    CHECK(v2Again.segment(0).type() == GeometryType::Arc);
+    CHECK(v2Again.totalLength() == doctest::Approx(v2.totalLength()));
+}
+
+TEST_CASE("1.8.5b: round-trip spiral road — lossless (metadata preserved)") {
+    Road original = createClothoidArc({0, 0}, {1, 0}, {80, 20}, {0.8, 0.6}, 8);
+
+    RoadV2 v2 = roadToV2(original);
+    ReverseAdapterReport report;
+    Road restored = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.spiralSegments == 1);
+
+    // Metadata preserved
+    REQUIRE(restored.points.size() >= 2);
+    CHECK(restored.points[0].segmentMeta.has_value());
+    CHECK(restored.points[0].segmentMeta->kind == SegmentKind::Spiral);
+    CHECK(restored.points[0].segmentMeta->curvatureStart ==
+          doctest::Approx(original.points[0].segmentMeta->curvatureStart));
+    CHECK(restored.points[0].segmentMeta->curvatureEnd ==
+          doctest::Approx(original.points[0].segmentMeta->curvatureEnd));
+    CHECK(restored.points[0].segmentMeta->segmentLength ==
+          doctest::Approx(original.points[0].segmentMeta->segmentLength));
+
+    // Double round-trip
+    RoadV2 v2Again = roadToV2(restored);
+    CHECK(v2Again.numSegments() == 1);
+    CHECK(v2Again.segment(0).type() == GeometryType::Spiral);
+    CHECK(v2Again.totalLength() == doctest::Approx(v2.totalLength()));
+}
+
+TEST_CASE("1.8.5b: round-trip mixed road — lossless") {
+    Road original;
+    original.id = "rt_mixed";
+    original.name = "Round Trip Mixed";
+    original.width = 7.0;
+    original.laneCount = 2;
+    original.formatVersion = 2;
+
+    original.points.push_back(makeLegacyRoad("x", {{0, 0}}).points[0]);
+    original.points.push_back(makeLegacyRoad("x", {{40, 0}}).points[0]);
+    original.points.push_back(makeSmoothCP({60, 15}, {-10, 0}, {10, 0}));
+    original.points.push_back(makeLegacyRoad("x", {{80, 0}}).points[0]);
+    original.points.push_back(makeLegacyRoad("x", {{120, 0}}).points[0]);
+
+    RoadV2 v2 = roadToV2(original);
+    ReverseAdapterReport report;
+    Road restored = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(restored.id == original.id);
+    CHECK(restored.name == original.name);
+    CHECK(restored.width == doctest::Approx(original.width));
+    CHECK(restored.laneCount == original.laneCount);
+
+    // 4 segments → 5 CPs
+    REQUIRE(restored.points.size() == 5);
+    for (size_t i = 0; i < 5; i++) {
+        CHECK(restored.points[i].position.x ==
+              doctest::Approx(original.points[i].position.x));
+        CHECK(restored.points[i].position.y ==
+              doctest::Approx(original.points[i].position.y));
+    }
+
+    // Bezier handles preserved on CPs 1 and 2
+    CHECK(restored.points[1].hasHandleOut == true);
+    CHECK(restored.points[2].hasHandleIn == true);
+    CHECK(restored.points[2].hasHandleOut == true);
+    CHECK(restored.points[3].hasHandleIn == true);
+}
+
+TEST_CASE("1.8.5b: round-trip geometry parity — centerline matches") {
+    Road original;
+    original.id = "rt_geom";
+    original.formatVersion = 2;
+    original.points.push_back(makeSmoothCP({0, 0}, {0, 0}, {25, 40}, false, true));
+    original.points.push_back(makeSmoothCP({100, 0}, {-25, 40}, {0, 0}, true, false));
+
+    RoadV2 v2 = roadToV2(original);
+    Road restored = roadFromV2(v2);
+    RoadV2 v2Again = roadToV2(restored);
+
+    // Centerline at 10 sample points should match
+    double len = v2.totalLength();
+    for (int i = 0; i <= 10; i++) {
+        double s = len * i / 10.0;
+        Point2D p1 = v2.geometry().positionAt(s);
+        Point2D p2 = v2Again.geometry().positionAt(s);
+        CHECK(p1.x == doctest::Approx(p2.x).epsilon(0.001));
+        CHECK(p1.y == doctest::Approx(p2.y).epsilon(0.001));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 1.8.5c: Information Loss Report
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("1.8.5c: ReverseAdapterReport — lossless for line-only road") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.warnings.empty());
+    CHECK(report.lineSegments == 1);
+    CHECK(report.approximatedSegments == 0);
+    CHECK(report.unsupportedSegments == 0);
+}
+
+TEST_CASE("1.8.5c: ReverseAdapterReport — lossless for mixed road") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(40, 0));
+    v2.addSegment<BezierSegment>(
+        Point2D(40, 0), Point2D(50, 15), Point2D(70, 15), Point2D(80, 0)
+    );
+    v2.addSegment<ArcSegment>(Point2D(80, 0), 0.0, 0.02, 50.0);
+    v2.addSegment<SpiralSegment>(Point2D(0, 0), 0.0, 0.0, 0.01, 80.0);
+
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.warnings.empty());
+    CHECK(report.lineSegments == 1);
+    CHECK(report.bezierSegments == 1);
+    CHECK(report.arcSegments == 1);
+    CHECK(report.spiralSegments == 1);
+    CHECK(report.approximatedSegments == 0);
+    CHECK(report.unsupportedSegments == 0);
+}
+
+TEST_CASE("1.8.5c: ReverseAdapterReport — LaneSection causes lossless=false") {
+    RoadV2 v2;
+    v2.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    v2.addLaneSection(LaneSection{});  // Phase 2 placeholder
+
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lossless == false);
+    CHECK(!report.warnings.empty());
+    CHECK(report.warnings[0].find("LaneSection") != std::string::npos);
+}
+
+TEST_CASE("1.8.5c: ReverseAdapterReport — empty road is lossless") {
+    RoadV2 v2;
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.warnings.empty());
+    CHECK(report.lineSegments == 0);
+}
+
+TEST_CASE("1.8.5c: ReverseAdapterReport — segment counts match") {
+    RoadV2 v2;
+    for (int i = 0; i < 5; i++) {
+        v2.addSegment<LineSegment>(
+            Point2D(i * 20, 0), Point2D((i + 1) * 20, 0)
+        );
+    }
+
+    ReverseAdapterReport report;
+    roadFromV2(v2, report);
+
+    CHECK(report.lineSegments == 5);
+    CHECK(report.bezierSegments == 0);
+    CHECK(report.arcSegments == 0);
+    CHECK(report.spiralSegments == 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 1.8.5: Full round-trip stress test
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("1.8.5: round-trip stress — 100 line segments, lossless") {
+    RoadV2 v2;
+    for (int i = 0; i < 100; i++) {
+        v2.addSegment<LineSegment>(
+            Point2D(i * 10, sin(i * 0.3) * 5),
+            Point2D((i + 1) * 10, sin((i + 1) * 0.3) * 5)
+        );
+    }
+
+    ReverseAdapterReport report;
+    Road road = roadFromV2(v2, report);
+
+    CHECK(report.lossless == true);
+    CHECK(report.lineSegments == 100);
+    REQUIRE(road.points.size() == 101);
+
+    // Round-trip back to RoadV2
+    RoadV2 v2Again = roadToV2(road);
+
+    CHECK(v2Again.numSegments() == 100);
+    CHECK(v2Again.totalLength() == doctest::Approx(v2.totalLength()).epsilon(0.001));
+
+    // Position at every CP matches
+    for (int i = 0; i <= 100; i++) {
+        double s = 0;
+        for (int j = 0; j < i; j++) s += v2.segment(j).length();
+        Point2D p1 = v2.geometry().positionAt(s);
+        Point2D p2 = v2Again.geometry().positionAt(s);
+        CHECK(p1.x == doctest::Approx(p2.x).epsilon(0.001));
+        CHECK(p1.y == doctest::Approx(p2.y).epsilon(0.001));
+    }
+}

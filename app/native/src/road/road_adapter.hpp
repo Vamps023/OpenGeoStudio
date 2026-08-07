@@ -384,4 +384,251 @@ inline RoadV2 roadToV2Auto(const Road& legacy) {
     return roadToV2Auto(legacy, unused);
 }
 
+// ═══════════════════════════════════════════════════════════
+// ReverseAdapterReport — Diagnostics for roadFromV2()
+// ═══════════════════════════════════════════════════════════
+//
+// Reports information loss when converting RoadV2 → Road.
+//
+// Key invariant:
+//   roadFromV2(roadToV2(Road))  is always LOSSLESS
+//   roadToV2(roadFromV2(RoadV2)) MAY be lossy once Phase 2 adds
+//   features that legacy Road cannot express (LaneSection, etc.)
+//
+struct ReverseAdapterReport {
+    bool lossless = true;             // true if no information was lost
+    std::vector<std::string> warnings;
+
+    int lineSegments = 0;             // segments converted to corner CPs
+    int bezierSegments = 0;           // segments converted to smooth CPs with handles
+    int arcSegments = 0;              // segments converted to CPs with Arc metadata
+    int spiralSegments = 0;           // segments converted to CPs with Spiral metadata
+    int approximatedSegments = 0;     // segments that required approximation
+    int unsupportedSegments = 0;      // segments that cannot be represented in legacy Road
+
+    std::vector<int> approximatedSegmentIndices;
+    std::vector<int> unsupportedSegmentIndices;
+};
+
+// ═══════════════════════════════════════════════════════════
+// roadFromV2 — Inverse adapter: RoadV2 → Road
+// ═══════════════════════════════════════════════════════════
+//
+// Converts a RoadV2 back to the legacy Road representation.
+//
+// Conversion rules (per segment type):
+//   LineSegment   → 2 corner ControlPoints (start, end)
+//   BezierSegment → 2 smooth ControlPoints with handles
+//   ArcSegment    → 2 ControlPoints, first has SegmentMetadata(kind=Arc)
+//   SpiralSegment → 2 ControlPoints, first has SegmentMetadata(kind=Spiral)
+//
+// Adjacent segments share the boundary ControlPoint (the end CP of
+// segment N is the start CP of segment N+1). This produces a
+// continuous ControlPoint[] just like the legacy model.
+//
+// Metadata copy:
+//   id, name, color, profileName, startIntersectionId, endIntersectionId,
+//   width, laneCount are all preserved.
+//   formatVersion is set to 2 (the output includes SegmentMetadata).
+//
+// Information loss:
+//   Phase 1: lossless for all segment types
+//   Phase 2: LaneSection data cannot be represented → warning + lossless=false
+//
+inline Road roadFromV2(const RoadV2& v2, ReverseAdapterReport& report) {
+    Road road;
+    report = ReverseAdapterReport{};
+
+    // ─── Metadata copy ───
+    road.id = v2.id;
+    road.name = v2.name;
+    road.color = v2.color;
+    road.profileName = v2.profileName;
+    road.startIntersectionId = v2.startIntersectionId;
+    road.endIntersectionId = v2.endIntersectionId;
+    road.width = v2.width;
+    road.laneCount = v2.laneCount;
+    road.formatVersion = 2;
+
+    // ─── Empty road ───
+    if (v2.numSegments() == 0) {
+        return road;
+    }
+
+    // ─── Phase 2: LaneSection information loss ───
+    if (v2.numLaneSections() > 0) {
+        report.warnings.push_back(
+            "RoadV2 has " + std::to_string(v2.numLaneSections()) +
+            " LaneSection(s) that cannot be represented in legacy Road");
+        report.lossless = false;
+    }
+
+    // ─── Convert each segment to ControlPoint(s) ───
+    // Strategy:
+    //   - For each segment, emit the END ControlPoint.
+    //   - For the first segment (i == 0), also emit the START ControlPoint.
+    //   - For subsequent segments (i > 0), the start CP is already the
+    //     last CP in the list (shared boundary). Update it with any
+    //     additional properties (handles, metadata) from this segment.
+    //
+    // This produces a continuous ControlPoint[] where adjacent segments
+    // share boundary points, matching the legacy Road model.
+    //
+    int cpIdx = 0;
+    for (int i = 0; i < v2.numSegments(); i++) {
+        const GeometrySegment& seg = v2.segment(i);
+        int segIdx = i;
+
+        switch (seg.type()) {
+
+        case GeometryType::Line: {
+            const LineSegment& ls = static_cast<const LineSegment&>(seg);
+
+            // Start CP (only for first segment — otherwise boundary is shared)
+            if (i == 0) {
+                ControlPoint cpStart;
+                cpStart.position = ls.p0;
+                cpStart.type = "corner";
+                cpStart.id = "cp_" + std::to_string(cpIdx++);
+                road.points.push_back(cpStart);
+            }
+
+            // End CP (always emitted)
+            ControlPoint cpEnd;
+            cpEnd.position = ls.p1;
+            cpEnd.type = "corner";
+            cpEnd.id = "cp_" + std::to_string(cpIdx++);
+            road.points.push_back(cpEnd);
+
+            report.lineSegments++;
+            break;
+        }
+
+        case GeometryType::Bezier: {
+            const BezierSegment& bs = static_cast<const BezierSegment&>(seg);
+
+            // Start CP: has handleOut
+            if (i == 0) {
+                ControlPoint cpStart;
+                cpStart.position = bs.p0;
+                cpStart.type = "smooth";
+                cpStart.id = "cp_" + std::to_string(cpIdx++);
+                cpStart.handleOut = bs.p1 - bs.p0;
+                cpStart.hasHandleOut = true;
+                road.points.push_back(cpStart);
+            } else {
+                // Update existing boundary CP with handleOut
+                ControlPoint& prev = road.points.back();
+                prev.handleOut = bs.p1 - bs.p0;
+                prev.hasHandleOut = true;
+                prev.type = "smooth";
+            }
+
+            // End CP: has handleIn
+            ControlPoint cpEnd;
+            cpEnd.position = bs.p3;
+            cpEnd.type = "smooth";
+            cpEnd.id = "cp_" + std::to_string(cpIdx++);
+            cpEnd.handleIn = bs.p2 - bs.p3;
+            cpEnd.hasHandleIn = true;
+            road.points.push_back(cpEnd);
+
+            report.bezierSegments++;
+            break;
+        }
+
+        case GeometryType::Arc: {
+            const ArcSegment& as = static_cast<const ArcSegment&>(seg);
+
+            SegmentMetadata meta;
+            meta.kind = SegmentKind::Arc;
+            meta.startHeading = as.startHeading_;
+            meta.curvature = as.curvature_;
+            meta.arcLength = as.arcLength_;
+
+            // Start CP with Arc metadata
+            if (i == 0) {
+                ControlPoint cpStart;
+                cpStart.position = as.startPoint_;
+                cpStart.type = "smooth";
+                cpStart.id = "cp_" + std::to_string(cpIdx++);
+                cpStart.segmentMeta = meta;
+                road.points.push_back(cpStart);
+            } else {
+                // Update existing boundary CP with metadata
+                ControlPoint& prev = road.points.back();
+                prev.segmentMeta = meta;
+                prev.type = "smooth";
+            }
+
+            // End CP (sampled point on the arc)
+            double endX, endY, endHeading;
+            as.evaluateDS(as.arcLength_, endX, endY, endHeading);
+            ControlPoint cpEnd;
+            cpEnd.position = {endX, endY};
+            cpEnd.type = "smooth";
+            cpEnd.id = "cp_" + std::to_string(cpIdx++);
+            road.points.push_back(cpEnd);
+
+            report.arcSegments++;
+            break;
+        }
+
+        case GeometryType::Spiral: {
+            const SpiralSegment& ss = static_cast<const SpiralSegment&>(seg);
+
+            SegmentMetadata meta;
+            meta.kind = SegmentKind::Spiral;
+            meta.startHeading = ss.startHeading_;
+            meta.curvatureStart = ss.curvatureStart_;
+            meta.curvatureEnd = ss.curvatureEnd_;
+            meta.segmentLength = ss.segmentLength_;
+
+            // Start CP with Spiral metadata
+            if (i == 0) {
+                ControlPoint cpStart;
+                cpStart.position = ss.startPoint_;
+                cpStart.type = "smooth";
+                cpStart.id = "cp_" + std::to_string(cpIdx++);
+                cpStart.segmentMeta = meta;
+                road.points.push_back(cpStart);
+            } else {
+                ControlPoint& prev = road.points.back();
+                prev.segmentMeta = meta;
+                prev.type = "smooth";
+            }
+
+            // End CP (sampled point on the spiral)
+            double endX, endY, endHeading;
+            ss.evaluateDS(ss.segmentLength_, endX, endY, endHeading);
+            ControlPoint cpEnd;
+            cpEnd.position = {endX, endY};
+            cpEnd.type = "smooth";
+            cpEnd.id = "cp_" + std::to_string(cpIdx++);
+            road.points.push_back(cpEnd);
+
+            report.spiralSegments++;
+            break;
+        }
+
+        default:
+            report.warnings.push_back(
+                "Segment " + std::to_string(i) +
+                ": unknown geometry type — cannot convert to legacy Road");
+            report.unsupportedSegments++;
+            report.unsupportedSegmentIndices.push_back(segIdx);
+            report.lossless = false;
+            break;
+        }
+    }
+
+    return road;
+}
+
+// ─── Convenience overload (no report) ──────────────────────
+inline Road roadFromV2(const RoadV2& v2) {
+    ReverseAdapterReport unused;
+    return roadFromV2(v2, unused);
+}
+
 } // namespace geo

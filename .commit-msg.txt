@@ -1,41 +1,61 @@
-Phase 1.8.4: Golden parity validation + formatVersion auto-dispatch
+Phase 1.8.5: roadFromV2() inverse adapter + round-trip verification
 
-Proves that roadToV2() and roadToV2Legacy() produce mathematically
-correct geometry. The conversion from legacy Road to RoadV2 is now
-validated against captured golden fixture data.
+Completes the bidirectional conversion between legacy Road and RoadV2.
+The full round-trip is now validated:
+
+  Road → roadToV2() → RoadV2 → roadFromV2() → Road'
+
+Key invariant:
+  roadFromV2(roadToV2(Road))  is always LOSSLESS
+  roadToV2(roadFromV2(RoadV2)) MAY be lossy once Phase 2 adds
+  features that legacy Road cannot express (LaneSection, etc.)
 
 Changes:
-- roadToV2Auto(): format-version-aware auto-dispatch
-  formatVersion >= 2 → roadToV2() (exact path)
-  formatVersion < 2  → roadToV2Legacy() (legacy compatibility)
-  Callers no longer need to decide which adapter to invoke.
-- Documented formatVersion compatibility table in road_adapter.hpp
+- ReverseAdapterReport struct: tracks lossless flag, warnings,
+  segment counts (line/bezier/arc/spiral), approximated/unsupported
+  segments
+- roadFromV2() function: converts RoadV2 → Road
+  - LineSegment → 2 corner ControlPoints
+  - BezierSegment → 2 smooth ControlPoints with handles
+  - ArcSegment → ControlPoint with SegmentMetadata(kind=Arc)
+  - SpiralSegment → ControlPoint with SegmentMetadata(kind=Spiral)
+  - Adjacent segments share boundary ControlPoints
+  - All metadata preserved (id, name, color, profile, width, laneCount)
+  - formatVersion set to 2
+  - LaneSection (Phase 2) → warning + lossless=false
 
-Tests (17 new, 241 total, 1831 assertions):
+Tests (20 new, 261 total, 2210 assertions):
 
-Exact path validation (5 tests):
-- bezier_arch: golden parity (position, heading), 3 BezierSegments
-- bezier_arch: total length matches golden (183.498)
-- mixed_line_bezier: golden parity, 2 Line + 2 Bezier segments
-- mixed_line_bezier: total length matches golden (131.564)
-- newly created arc: constant curvature along entire arc
-- newly created spiral: linear curvature transition k0→k1
+1.8.5a Basic conversion (8 tests):
+- Empty road → empty Road
+- LineSegment → 2 corner CPs
+- BezierSegment → 2 smooth CPs with handles (relative)
+- ArcSegment → CP with Arc metadata (curvature, arcLength, startHeading)
+- SpiralSegment → CP with Spiral metadata (k0, k1, length)
+- Multiple LineSegments → shared boundary CPs (N+1 CPs for N segments)
+- Mixed segments → correct CP count with shared boundaries
+- Metadata fields preserved (id, name, color, profile, width, laneCount)
 
-Legacy path validation (5 tests):
-- straight_2pt: exact position match at s=0, 50, 100
-- straight_5pt: position match at all 5 control points
-- arc_quarter: 16 LineSegments, position match at all 17 CPs
-- s_clothoid: 16 LineSegments, position match at all 17 CPs
-- tiny_segments: 30 LineSegments, position match at all 31 CPs
+1.8.5b Round-trip verification (6 tests):
+- Line road: lossless, positions match
+- Bezier road: lossless, handles preserved
+- Arc road: lossless, metadata preserved, double round-trip produces
+  same ArcSegment
+- Spiral road: lossless, metadata preserved, double round-trip produces
+  same SpiralSegment
+- Mixed road: lossless, all CP positions and handles preserved
+- Geometry parity: centerline at 10 sample points matches after
+  full round-trip
 
-Format version auto-dispatch (4 tests):
-- formatVersion=2 → exact path (ArcSegment)
-- formatVersion=1 → legacy path (LineSegment)
-- formatVersion=0 → legacy path (backward compat)
-- empty road → exact=true regardless of version
+1.8.5c Information loss report (5 tests):
+- Line-only road: lossless=true, no warnings
+- Mixed road (line+bezier+arc+spiral): lossless=true, correct counts
+- LaneSection present: lossless=false, warning emitted
+- Empty road: lossless=true
+- Segment counts match road composition
 
-Stress test (2 tests):
-- 500 mixed segments (legacy path): no crash, no NaN, endpoint match
-- 500 mixed segments (exact path): no crash, 500 LineSegments, exact=true
+1.8.5 Stress test (1 test):
+- 100 line segments: lossless, 101 CPs, full round-trip geometry parity
+  at every control point
 
 All 113 vitest tests remain green (no regression).
