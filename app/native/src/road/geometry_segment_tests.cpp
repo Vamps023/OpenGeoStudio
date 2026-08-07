@@ -20,6 +20,7 @@ using geo::LineSegment;
 using geo::Point2D;
 using geo::Vec2;
 using geo::GeometryType;
+using geo::GeometrySegment;
 using geo::MAX_GEOM_ERROR_HORIZONTAL;
 using geo::MAX_GEOM_ERROR_VERTICAL;
 using geo::GEOM_TOLERANCE;
@@ -1481,4 +1482,249 @@ TEST_CASE("SegmentSequence: three segments binary search correctness") {
     check(25, 2);
     check(29.9, 2);
     check(30, 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Geometry Kernel Review Checklist Tests
+// ═══════════════════════════════════════════════════════════
+
+// ─── 1. Boundary semantics ────────────────────────────────
+// At a segment boundary, s belongs to the NEXT segment (upper_bound).
+// This must be consistent across all methods.
+
+TEST_CASE("Boundary semantics: s=0 → segment 0, localS=0") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(0.0);
+    CHECK(loc.segmentIndex == 0);
+    CHECK(loc.localS == doctest::Approx(0.0));
+}
+
+TEST_CASE("Boundary semantics: s=totalLength → last segment, localS=length") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(20.0);
+    CHECK(loc.segmentIndex == 1);
+    CHECK(loc.localS == doctest::Approx(10.0));
+}
+
+TEST_CASE("Boundary semantics: s at exact boundary → next segment, localS=0") {
+    // seg0 length=10, seg1 length=5. s=10 is the boundary.
+    // Convention: belongs to segment 1 with localS=0.
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {15, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(10.0);
+    CHECK(loc.segmentIndex == 1);
+    CHECK(loc.localS == doctest::Approx(0.0));
+}
+
+TEST_CASE("Boundary semantics: s<0 → clamped to segment 0, localS=0") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(-5.0);
+    CHECK(loc.segmentIndex == 0);
+    CHECK(loc.localS == doctest::Approx(0.0));
+}
+
+TEST_CASE("Boundary semantics: s>totalLength → clamped to last segment") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(99.0);
+    CHECK(loc.segmentIndex == 1);
+    CHECK(loc.localS == doctest::Approx(10.0));
+}
+
+TEST_CASE("Boundary semantics: position is consistent at boundary regardless of segment choice") {
+    // At s=10 (boundary), whether we evaluate seg0 at localS=10 or seg1 at localS=0,
+    // the position must be the same.
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    Point2D p0 = seg1.positionAt(10.0);  // end of seg1
+    Point2D p1 = seg2.positionAt(0.0);   // start of seg2
+    Point2D pSeq = seq.positionAt(10.0); // sequence at boundary
+
+    CHECK(p0.x == doctest::Approx(p1.x));
+    CHECK(p0.y == doctest::Approx(p1.y));
+    CHECK(pSeq.x == doctest::Approx(p0.x));
+    CHECK(pSeq.y == doctest::Approx(p0.y));
+}
+
+TEST_CASE("Boundary semantics: heading is consistent at boundary for continuous segments") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    double h0 = seg1.endHeading();   // heading at end of seg1
+    double h1 = seg2.startHeading(); // heading at start of seg2
+    double hSeq = seq.headingAt(10.0);
+
+    CHECK(h0 == doctest::Approx(h1));
+    CHECK(hSeq == doctest::Approx(h0));
+}
+
+// ─── 2. Zero-length segments in SegmentSequence ───────────
+
+TEST_CASE("Zero-length: Line(0) in sequence doesn't crash binary search") {
+    LineSegment zero({5, 5}, {5, 5});       // zero-length
+    LineSegment real({5, 5}, {15, 5});      // 10m
+    SegmentSequence seq({{&zero, &real}});
+    CHECK(seq.totalLength() == doctest::Approx(10.0));
+
+    // s=0: offsets_ = [0, 0, 10]. upper_bound(0) finds 10, giving idx=1.
+    // The zero-length segment has no extent, so s=0 maps to the first
+    // non-zero segment. This is correct behavior.
+    auto loc0 = seq.globalSToLocal(0.0);
+    CHECK(loc0.segmentIndex == 1);  // skips zero-length segment
+    CHECK(loc0.localS == doctest::Approx(0.0));
+
+    // s=5 should map to segment 1, localS=5
+    auto loc5 = seq.globalSToLocal(5.0);
+    CHECK(loc5.segmentIndex == 1);
+    CHECK(loc5.localS == doctest::Approx(5.0));
+
+    // Position should be correct
+    Point2D p = seq.positionAt(5.0);
+    CHECK(p.x == doctest::Approx(10.0));
+}
+
+TEST_CASE("Zero-length: Arc(0) in sequence") {
+    ArcSegment zero({0, 0}, 0.0, 0.1, 0.0);  // zero-length arc
+    LineSegment real({0, 0}, {10, 0});
+    SegmentSequence seq({{&zero, &real}});
+    CHECK(seq.totalLength() == doctest::Approx(10.0));
+
+    // Should not crash, position at s=5 should be in real segment
+    Point2D p = seq.positionAt(5.0);
+    CHECK(p.x == doctest::Approx(5.0));
+}
+
+TEST_CASE("Zero-length: Bezier(all coincident) in sequence") {
+    BezierSegment zero({3, 3}, {3, 3}, {3, 3}, {3, 3});
+    LineSegment real({3, 3}, {13, 3});
+    SegmentSequence seq({{&zero, &real}});
+    CHECK(seq.totalLength() == doctest::Approx(10.0));
+
+    Point2D p = seq.positionAt(5.0);
+    CHECK(p.x == doctest::Approx(8.0));
+}
+
+TEST_CASE("Zero-length: two consecutive zero-length segments") {
+    LineSegment z1({0, 0}, {0, 0});
+    LineSegment z2({0, 0}, {0, 0});
+    LineSegment real({0, 0}, {10, 0});
+    SegmentSequence seq({{&z1, &z2, &real}});
+    CHECK(seq.totalLength() == doctest::Approx(10.0));
+
+    // s=5 should reach the real segment
+    Point2D p = seq.positionAt(5.0);
+    CHECK(p.x == doctest::Approx(5.0));
+}
+
+// ─── 3. Floating-point accumulation ───────────────────────
+
+TEST_CASE("Floating-point: 1000 segments of 0.01m — total length accurate") {
+    // 1000 × 0.01m = 10.0m total
+    // Accumulating 1000 small values can introduce error
+    std::vector<std::unique_ptr<LineSegment>> segs;
+    std::vector<const GeometrySegment*> ptrs;
+    segs.reserve(1000);
+    ptrs.reserve(1000);
+    for (int i = 0; i < 1000; i++) {
+        segs.push_back(std::make_unique<LineSegment>(
+            Point2D{i * 0.01, 0.0},
+            Point2D{(i + 1) * 0.01, 0.0}
+        ));
+        ptrs.push_back(segs.back().get());
+    }
+    SegmentSequence seq(ptrs);
+
+    // Total length should be very close to 10.0
+    CHECK(seq.totalLength() == doctest::Approx(10.0).epsilon(0.001));
+
+    // Position at s=5.0 should be close to (5.0, 0.0)
+    Point2D p = seq.positionAt(5.0);
+    CHECK(p.x == doctest::Approx(5.0).epsilon(0.01));
+
+    // Position at s=10.0 (end) should be close to (10.0, 0.0)
+    Point2D pEnd = seq.positionAt(10.0);
+    CHECK(pEnd.x == doctest::Approx(10.0).epsilon(0.01));
+}
+
+TEST_CASE("Floating-point: 100 segments of 0.1m — binary search finds correct segment") {
+    std::vector<std::unique_ptr<LineSegment>> segs;
+    std::vector<const GeometrySegment*> ptrs;
+    segs.reserve(100);
+    ptrs.reserve(100);
+    for (int i = 0; i < 100; i++) {
+        segs.push_back(std::make_unique<LineSegment>(
+            Point2D{i * 0.1, 0.0},
+            Point2D{(i + 1) * 0.1, 0.0}
+        ));
+        ptrs.push_back(segs.back().get());
+    }
+    SegmentSequence seq(ptrs);
+
+    // s=5.0 should be in segment 50 (offset 5.0 = 50 × 0.1)
+    auto loc = seq.globalSToLocal(5.0);
+    CHECK(loc.segmentIndex == 50);
+
+    // s=3.3: due to floating-point, 33*0.1 = 3.3000000000000003,
+    // so offset[33] > 3.3, and upper_bound gives idx=32.
+    // This is correct floating-point behavior. Verify position instead.
+    auto loc33 = seq.globalSToLocal(3.3);
+    Point2D p33 = seq.positionAt(3.3);
+    CHECK(p33.x == doctest::Approx(3.3).epsilon(0.02));
+    // Segment index should be 32 or 33 (boundary floating-point tolerance)
+    CHECK((loc33.segmentIndex == 32 || loc33.segmentIndex == 33));
+}
+
+// ─── 4. Expanded continuity diagnostics ───────────────────
+
+TEST_CASE("Continuity diagnostics: expanded fields populated correctly") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({15, 3}, {25, 3});  // gap + heading change
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto errors = seq.validateContinuity(0.01, 0.01);
+
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].segmentA == 0);
+    CHECK(errors[0].segmentB == 1);
+
+    // Expected end = end of seg1 = (10, 0)
+    CHECK(errors[0].expectedEnd.x == doctest::Approx(10.0));
+    CHECK(errors[0].expectedEnd.y == doctest::Approx(0.0));
+
+    // Actual start = start of seg2 = (15, 3)
+    CHECK(errors[0].actualStart.x == doctest::Approx(15.0));
+    CHECK(errors[0].actualStart.y == doctest::Approx(3.0));
+
+    // Expected heading = end heading of seg1 = 0 (east)
+    CHECK(errors[0].expectedHeading == doctest::Approx(0.0));
+
+    // Actual heading = start heading of seg2 = 0 (east, since seg2 is also horizontal)
+    CHECK(errors[0].actualHeading == doctest::Approx(0.0));
+
+    // Position error = distance between (10,0) and (15,3) = sqrt(25+9) = sqrt(34)
+    CHECK(errors[0].positionError == doctest::Approx(std::sqrt(34.0)).epsilon(0.01));
+}
+
+TEST_CASE("Continuity diagnostics: heading fields populated for heading-only discontinuity") {
+    LineSegment seg1({0, 0}, {10, 0});     // heading east (0)
+    LineSegment seg2({10, 0}, {10, 10});   // heading north (π/2)
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto errors = seq.validateContinuity(0.01, 0.1);
+
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].expectedHeading == doctest::Approx(0.0));       // east
+    CHECK(errors[0].actualHeading == doctest::Approx(geo::HALF_PI)); // north
+    CHECK(errors[0].expectedEnd.x == doctest::Approx(10.0));
+    CHECK(errors[0].actualStart.x == doctest::Approx(10.0));
+    CHECK(errors[0].positionError == doctest::Approx(0.0).epsilon(0.001));  // same point
 }

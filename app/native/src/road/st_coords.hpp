@@ -22,6 +22,33 @@
 // - projectToST() intentionally omitted — declare in Phase 3 when
 //   implemented. A stub returning {0,0} is worse than a compile error.
 //
+// ─── Boundary semantics ───────────────────────────────────
+// At a segment boundary (e.g., s=10 when seg0.length=10, seg1.length=5):
+//   globalSToLocal(10) → {segmentIndex=1, localS=0}
+// Boundaries belong to the NEXT segment (upper_bound convention).
+// This is consistent across all methods (evaluateDS, positionAt, etc.).
+//
+// Edge cases:
+//   s < 0              → clamped to 0 → {0, 0.0}
+//   s > totalLength    → clamped to totalLength → {lastSeg, lastSeg.length}
+//   s = 0              → {0, 0.0}
+//   s = totalLength    → {lastSeg, lastSeg.length}
+//   s = boundary       → {nextSeg, 0.0}
+//
+// ─── Thread safety ────────────────────────────────────────
+// SegmentSequence is read-only after construction. No lazy initialization,
+// no mutable caches, no internal state changes during evaluation. This
+// makes it naturally usable from future mesh generation jobs (multi-threaded).
+//
+// ─── Separation of concerns ───────────────────────────────
+// SegmentSequence does NOT provide sampleAdaptive(). Sampling is owned by
+// GeometrySegment (the primitive). The sequence owns composition only.
+// RoadV2 will concatenate per-segment adaptive samples when it needs a
+// full centerline polyline. This keeps responsibilities clean:
+//   GeometrySegment → sampling
+//   SegmentSequence → composition + coordinate mapping
+//   RoadV2 → ownership + road metadata + lane queries
+//
 // Coordinate convention:
 // - s ∈ [0, totalLength()] is cumulative arc-length from sequence start
 // - t is lateral offset: positive = left (CCW from tangent)
@@ -48,10 +75,15 @@ public:
     };
 
     struct ContinuityError {
-        int segmentA;       // index of first segment
-        int segmentB;       // index of second segment (segmentA + 1)
+        int segmentA;          // index of first segment
+        int segmentB;          // index of second segment (segmentA + 1)
         double positionError;  // distance between end of A and start of B
         double headingError;   // angle between end heading of A and start heading of B
+        // Detailed diagnostics for editor highlighting (no recomputation needed):
+        Point2D expectedEnd;   // end point of segment A
+        Point2D actualStart;   // start point of segment B
+        double expectedHeading; // end heading of segment A
+        double actualHeading;   // start heading of segment B
     };
 
 private:
@@ -190,7 +222,10 @@ public:
             double hErr = std::abs(normalizeAnglePi(hEndA - hStartB));
 
             if (posErr > posTol || hErr > headingTol) {
-                errors.push_back({i, i + 1, posErr, hErr});
+                errors.push_back({
+                    i, i + 1, posErr, hErr,
+                    endA, startB, hEndA, hStartB
+                });
             }
         }
         return errors;

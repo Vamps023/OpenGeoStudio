@@ -396,6 +396,70 @@ with vitest.
 
 ---
 
+## 7. Adapter Contract (Phase 1.8)
+
+### 7.1 Round-Trip Parity
+
+For every legacy `Road`:
+
+```
+Road → roadToV2() → RoadV2 → roadFromV2() → Road'
+```
+
+`Road'` must preserve:
+- **Geometry**: centerline samples match within MAX_GEOM_ERROR_HORIZONTAL (0.25m)
+- **Lane count**: `road.laneCount` preserved
+- **Width**: `road.width` preserved
+- **IDs**: `road.id`, `road.name` preserved
+- **Metadata**: `road.color`, `road.profileName`, intersection IDs preserved
+- **Handles**: bezier handle positions preserved (for editor editing)
+
+### 7.2 Golden Fixture Test
+
+Before writing the adapter, capture golden fixtures from the legacy engine:
+
+| Fixture | Description | Control Points |
+|---------|-------------|----------------|
+| `straight_2pt` | Two corner points, no handles | 2 |
+| `straight_5pt` | Five corner points, polyline | 5 |
+| `arc_quarter` | Arc tool output (quarter circle) | N sampled |
+| `s_clothoid` | Clothoid S-curve | N sampled |
+| `bezier_arch` | Bezier with handles (arch shape) | 4 with handles |
+| `mixed_line_arc_bezier` | Mixed segment types | 8+ |
+
+For each fixture:
+1. Capture legacy centerline (32 samples via `Road.sampleCenterline(32)`)
+2. After adapter: `roadToV2(road)` → `RoadV2.sampleCenterline(32)`
+3. Compare point-for-point within tolerance
+4. This is a dedicated test file: `tests/golden_fixtures.test.ts`
+
+### 7.3 RoadV2 Ownership Model
+
+```
+RoadV2
+ ├── vector<unique_ptr<GeometrySegment>>  (owns geometry)
+ ├── vector<LaneSection>                  (owns lane data, Phase 2)
+ ├── SegmentSequence view                 (non-owning, built once after construction)
+ ├── string id, name, color, profileName  (metadata)
+ ├── string startIntersectionId, endIntersectionId
+ └── double width, int laneCount          (legacy compat, synthesized from LaneSection in Phase 2)
+```
+
+The adapter builds the SegmentSequence view once after construction.
+No duplicate ownership. SegmentSequence is a view, not an owner.
+
+### 7.4 SegmentSequence Design Principles (from geometry kernel review)
+
+- **Non-owning**: `const GeometrySegment*` pointers. RoadV2 owns the `unique_ptr`s.
+- **Read-only after construction**: No lazy init, no mutable caches. Thread-safe.
+- **No sampleAdaptive()**: Sampling is owned by GeometrySegment. Sequence owns composition only.
+- **Boundary semantics**: `s` at a segment boundary belongs to the NEXT segment (upper_bound).
+- **Continuity diagnostics**: `validateContinuity()` returns `vector<ContinuityError>` with
+  `expectedEnd`, `actualStart`, `expectedHeading`, `actualHeading` for editor highlighting.
+- **projectToST() omitted**: Not declared until Phase 3. Compile error > silent bug.
+
+---
+
 ## Appendix: File Creation/Modification Summary
 
 ### New Files (additive, no changes to existing)
