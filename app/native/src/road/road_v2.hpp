@@ -1,0 +1,193 @@
+#pragma once
+
+// ═══════════════════════════════════════════════════════════
+// RoadV2 — New road model with segment-based geometry
+// ═══════════════════════════════════════════════════════════
+//
+// This is the new road representation that replaces the legacy
+// ControlPoint[]-based Road. It owns GeometrySegment objects and
+// exposes a non-owning SegmentSequence view for geometry queries.
+//
+// Design (per review):
+// - segments owns geometry via unique_ptr<GeometrySegment>
+// - geometry is a non-owning SegmentSequence view, rebuilt after
+//   every segment mutation via rebuildGeometryView()
+// - Mutation is encapsulated (addSegment, clearSegments, etc.) to
+//   prevent the "forgot to rebuild" bug
+// - Deep-clone copy constructor/assignment (uses segment clone())
+// - LaneSection is a placeholder for Phase 2 (empty struct for now)
+// - No adapter, no IPC, no serialization — that's 1.8.3+
+//
+// The ONLY objective of 1.8.2:
+//   "Can RoadV2 own geometry safely and expose a valid SegmentSequence view?"
+//
+// Ownership invariant:
+//   segments  → owns the geometry (unique_ptr)
+//   geometry  → never owns anything (const GeometrySegment* view)
+//   Every mutation that changes segments calls rebuildGeometryView()
+
+#include "geometry_segment.hpp"
+#include "st_coords.hpp"
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace geo {
+
+// ─── LaneSection placeholder (Phase 2 will define this properly) ───
+struct LaneSection {
+    // Empty for now — Phase 2 will add lane width polynomials, etc.
+};
+
+// ─── RoadV2 ────────────────────────────────────────────────
+class RoadV2 {
+public:
+    // ─── Geometry ownership ───
+    // Private: mutation goes through addSegment/clearSegments to ensure
+    // rebuildGeometryView() is always called.
+private:
+    std::vector<std::unique_ptr<GeometrySegment>> segments_;
+
+    // ─── Lane ownership (empty for Phase 1) ───
+    std::vector<LaneSection> laneSections_;
+
+    // ─── Legacy-compatible metadata ───
+public:
+    std::string id;
+    std::string name;
+    std::string color = "#4ecca3";
+    std::string profileName = "city_2x1";
+    std::string startIntersectionId;
+    std::string endIntersectionId;
+
+    // Temporary compatibility fields (synthesized from LaneSection in Phase 2)
+    double width = 8.0;
+    int laneCount = 2;
+
+private:
+    // ─── Geometry view (non-owning, rebuilt after mutations) ───
+    SegmentSequence geometry_;
+
+    // Rebuild the SegmentSequence view from current segments.
+    // Called internally after every mutation.
+    void rebuildGeometryView() {
+        std::vector<const GeometrySegment*> ptrs;
+        ptrs.reserve(segments_.size());
+        for (const auto& seg : segments_) {
+            ptrs.push_back(seg.get());
+        }
+        geometry_ = SegmentSequence(std::move(ptrs));
+    }
+
+public:
+    // ─── Rule of five ───
+
+    RoadV2() = default;
+
+    // Deep-clone copy constructor: clones every segment via clone()
+    RoadV2(const RoadV2& other)
+        : laneSections_(other.laneSections_),
+          id(other.id),
+          name(other.name),
+          color(other.color),
+          profileName(other.profileName),
+          startIntersectionId(other.startIntersectionId),
+          endIntersectionId(other.endIntersectionId),
+          width(other.width),
+          laneCount(other.laneCount) {
+        segments_.reserve(other.segments_.size());
+        for (const auto& seg : other.segments_) {
+            segments_.push_back(seg->clone());
+        }
+        rebuildGeometryView();
+    }
+
+    // Deep-clone copy assignment
+    RoadV2& operator=(const RoadV2& other) {
+        if (this == &other) return *this;
+
+        // Clone segments
+        std::vector<std::unique_ptr<GeometrySegment>> newSegs;
+        newSegs.reserve(other.segments_.size());
+        for (const auto& seg : other.segments_) {
+            newSegs.push_back(seg->clone());
+        }
+
+        // Copy all fields
+        segments_ = std::move(newSegs);
+        laneSections_ = other.laneSections_;
+        id = other.id;
+        name = other.name;
+        color = other.color;
+        profileName = other.profileName;
+        startIntersectionId = other.startIntersectionId;
+        endIntersectionId = other.endIntersectionId;
+        width = other.width;
+        laneCount = other.laneCount;
+
+        rebuildGeometryView();
+        return *this;
+    }
+
+    // Move constructor (default — unique_ptr moves are cheap)
+    RoadV2(RoadV2&&) noexcept = default;
+    RoadV2& operator=(RoadV2&&) noexcept = default;
+
+    ~RoadV2() = default;
+
+    // ─── Encapsulated segment mutation ───
+    // These methods ensure rebuildGeometryView() is always called.
+
+    // Add a segment (takes ownership of the unique_ptr)
+    void addSegment(std::unique_ptr<GeometrySegment> seg) {
+        segments_.push_back(std::move(seg));
+        rebuildGeometryView();
+    }
+
+    // Add a segment by constructing in-place (factory function)
+    // Example: road.addSegment<LineSegment>(start, end);
+    template <typename SegType, typename... Args>
+    SegType& addSegment(Args&&... args) {
+        auto seg = std::make_unique<SegType>(std::forward<Args>(args)...);
+        SegType* raw = seg.get();
+        segments_.push_back(std::move(seg));
+        rebuildGeometryView();
+        return *raw;
+    }
+
+    // Reserve capacity for segments (avoids reallocations during bulk add)
+    void reserveSegments(size_t count) {
+        segments_.reserve(count);
+    }
+
+    // Clear all segments
+    void clearSegments() {
+        segments_.clear();
+        rebuildGeometryView();
+    }
+
+    // ─── Read-only accessors ───
+
+    int numSegments() const { return static_cast<int>(segments_.size()); }
+
+    // Access a segment by index (read-only)
+    const GeometrySegment& segment(int idx) const {
+        return *segments_[idx];
+    }
+
+    // Access the geometry view (read-only)
+    const SegmentSequence& geometry() const { return geometry_; }
+
+    // Total geometry length (convenience — delegates to SegmentSequence)
+    double totalLength() const { return geometry_.totalLength(); }
+
+    // ─── Lane section access (Phase 2 will populate these) ───
+
+    int numLaneSections() const { return static_cast<int>(laneSections_.size()); }
+
+    void addLaneSection(LaneSection section) {
+        laneSections_.push_back(std::move(section));
+    }
+};
+
+} // namespace geo

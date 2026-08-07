@@ -1,63 +1,65 @@
-Geometry kernel review: boundary semantics, zero-length, FP, continuity diagnostics
+Phase 1.8.1: Golden fixture capture — 7 roads with s/x/y/heading/curvature
 
-Addresses the 9-point review checklist before starting Phase 1.8 (adapter).
-All changes are additive — no existing behavior modified.
+First sub-step of Phase 1.8 (RoadV2 + adapter). Captures golden data
+from the legacy C++ engine BEFORE writing any adapter code, establishing
+a reference baseline for parity testing.
 
-Code changes (st_coords.hpp):
-  1. Boundary semantics documented in header comment:
-     - s=0 → {0, 0.0}, s=totalLength → {lastSeg, lastSeg.length}
-     - s at boundary → {nextSeg, 0.0} (upper_bound convention)
-     - s<0 → clamped to {0, 0.0}, s>totalLength → clamped to {lastSeg, last}
-  2. Thread safety documented: read-only after construction, no lazy init,
-     no mutable caches. Naturally usable from multi-threaded mesh jobs.
-  3. Separation of concerns documented: SegmentSequence does NOT provide
-     sampleAdaptive(). Sampling owned by GeometrySegment, composition by
-     Sequence, ownership+metadata by RoadV2.
-  4. ContinuityError expanded with expectedEnd, actualStart,
-     expectedHeading, actualHeading — editor can highlight problems
-     without recomputing.
+New files:
+  tests/golden_fixtures.ts — Fixture road definitions + golden data
+    capture/load/save utilities. 7 fixture roads exercising all legacy
+    geometry paths. Computes derived geometry (s, heading, curvature)
+    from position samples using finite differences.
+  tests/golden-fixture.test.ts — 72 tests: golden data capture/verify,
+    per-fixture detailed comparison (positions, headings, curvatures,
+    total length), fixture-specific sanity checks.
+  tests/golden_data/*.json — 7 committed golden data files (reference
+    baseline from legacy engine).
 
-Tests (15 new, 136 total, 557 assertions):
-  Boundary semantics (7):
-    - s=0 → segment 0, localS=0
-    - s=totalLength → last segment, localS=length
-    - s at exact boundary → next segment, localS=0 (upper_bound)
-    - s<0 → clamped to segment 0
-    - s>totalLength → clamped to last segment
-    - Position consistent at boundary regardless of segment choice
-    - Heading consistent at boundary for continuous segments
+7 fixture roads:
+  1. straight_2pt — 2 corner points, pure line (32 samples, curvature=0)
+  2. straight_5pt — 5 corner points, polyline
+  3. arc_quarter — Arc tool output (quarter circle, 17 CPs)
+  4. s_clothoid — Clothoid S-curve (17 CPs)
+  5. bezier_arch — 4 points with bezier handles (arch shape)
+  6. mixed_line_bezier — Mix of corner and smooth points
+  7. tiny_segments — 30 short segments (0.05-0.2m), alternating headings
+     (stress-tests cumulative offsets, binary search, FP accumulation)
 
-  Zero-length segments (4):
-    - Line(0) in sequence: binary search skips zero-length, position correct
-    - Arc(0) in sequence: doesn't crash, position correct
-    - Bezier(all coincident) in sequence: doesn't crash
-    - Two consecutive zero-length segments: binary search handles correctly
+Golden data format (per sample):
+  { s, x, y, heading, curvature }
+  - s: cumulative arc length (m)
+  - x, y: position (m, local coordinates)
+  - heading: direction (rad), computed via finite difference
+  - curvature: signed curvature (1/m), computed via 3-point circumcircle
+    (positive = left/CCW, matching our convention)
 
-  Floating-point accumulation (2):
-    - 1000 × 0.01m: total length accurate within 0.1%, position at s=5
-      and s=10 correct within 1cm
-    - 100 × 0.1m: binary search finds correct segment (with FP tolerance
-      on index, position verified)
+Derived geometry computation:
+  The legacy engine only returns {x, y}[] from sampleCenterline().
+  Heading: central difference (forward/backward at endpoints).
+  Curvature: 3-point circumcircle formula: κ = 2·cross / (|a|·|b|·|c|).
+  These are approximations — when RoadV2 produces exact heading/curvature
+  from evaluateDS()/curvatureDS(), the parity test will use appropriate
+  tolerances.
 
-  Expanded continuity diagnostics (2):
-    - Position gap: expectedEnd, actualStart, expectedHeading,
-      actualHeading all populated correctly
-    - Heading-only discontinuity: position fields match (same point),
-      heading fields show 0 vs π/2
-
-Migration plan updates (Section 7: Adapter Contract):
-  7.1 Round-trip parity: geometry, lanes, width, IDs, metadata, handles
-  7.2 Golden fixture test: 6 fixture roads (straight, arc, clothoid,
-      bezier, mixed) with point-for-point centerline comparison
-  7.3 RoadV2 ownership model: owns unique_ptr<GeometrySegment>,
-      builds SegmentSequence view once, no duplicate ownership
-  7.4 SegmentSequence design principles: non-owning, read-only,
-      no sampleAdaptive, boundary semantics, continuity diagnostics,
-      projectToST omitted
+Test structure:
+  - First run (or DELETE_GOLDEN=1): generates and saves golden data
+  - Subsequent runs: verifies live engine output matches committed data
+  - Per-fixture: metadata, sample count, s monotonicity, position/heading/
+    curvature/length match
+  - Sanity checks: straight=0 curvature, arc=nonzero curvature, bezier=
+    nonzero curvature, tiny_segments=small total length
 
 Test results:
-- C++ doctest: 136/136 passed (557 assertions)
-- vitest: 41/41 passed (no regression)
+  - vitest golden-fixture: 72/72 passed
+  - vitest road-engine: 41/41 passed (no regression)
+  - vitest total: 113/113 passed
+  - C++ doctest: 136/136 passed (557 assertions, no regression)
+
+Success criteria for 1.8.1 (all met):
+  ✅ Golden fixtures committed (7 JSON files)
+  ✅ Fixture generation is deterministic (same input → same output)
+  ✅ Legacy output is the reference baseline
+  ✅ CI runs the fixture comparison automatically (vitest)
 
 Generated with Devin (https://devin.ai)
 

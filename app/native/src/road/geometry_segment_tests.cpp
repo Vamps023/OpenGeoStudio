@@ -1728,3 +1728,261 @@ TEST_CASE("Continuity diagnostics: heading fields populated for heading-only dis
     CHECK(errors[0].actualStart.x == doctest::Approx(10.0));
     CHECK(errors[0].positionError == doctest::Approx(0.0).epsilon(0.001));  // same point
 }
+
+// ═══════════════════════════════════════════════════════════
+// RoadV2 Tests (Task 1.8.2)
+// ═══════════════════════════════════════════════════════════
+// Ownership model: RoadV2 owns unique_ptr<GeometrySegment>,
+// exposes non-owning SegmentSequence view.
+// No adapter — just ownership, copy/move, and view rebuild.
+// ═══════════════════════════════════════════════════════════
+
+#include "road_v2.hpp"
+
+using geo::RoadV2;
+using geo::LaneSection;
+
+TEST_CASE("RoadV2: default constructor creates empty road") {
+    RoadV2 road;
+    CHECK(road.numSegments() == 0);
+    CHECK(road.totalLength() == doctest::Approx(0.0));
+    CHECK(road.geometry().numSegments() == 0);
+}
+
+TEST_CASE("RoadV2: addSegment<LineSegment> takes ownership") {
+    RoadV2 road;
+    auto& seg = road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    CHECK(road.numSegments() == 1);
+    CHECK(road.totalLength() == doctest::Approx(10.0));
+    CHECK(seg.length() == doctest::Approx(10.0));
+    // Geometry view should reflect the segment
+    CHECK(road.geometry().numSegments() == 1);
+    CHECK(road.geometry().positionAt(5).x == doctest::Approx(5.0));
+}
+
+TEST_CASE("RoadV2: addSegment with unique_ptr takes ownership") {
+    RoadV2 road;
+    auto seg = std::make_unique<LineSegment>(Point2D{0, 0}, Point2D{20, 0});
+    road.addSegment(std::move(seg));
+    CHECK(road.numSegments() == 1);
+    CHECK(road.totalLength() == doctest::Approx(20.0));
+}
+
+TEST_CASE("RoadV2: multiple mixed segment types") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    road.addSegment<ArcSegment>(Point2D{10, 0}, 0.0, 0.1, 5.0);
+    road.addSegment<LineSegment>(Point2D{15, 0}, Point2D{25, 0});
+
+    CHECK(road.numSegments() == 3);
+    CHECK(road.totalLength() == doctest::Approx(25.0));  // 10 + 5 + 10
+    CHECK(road.geometry().numSegments() == 3);
+
+    // Position at various s values
+    CHECK(road.geometry().positionAt(0).x == doctest::Approx(0.0));
+    CHECK(road.geometry().positionAt(25).x == doctest::Approx(25.0));
+}
+
+TEST_CASE("RoadV2: copy constructor performs deep clone") {
+    RoadV2 original;
+    original.id = "test_road";
+    original.name = "Test Road";
+    original.width = 7.0;
+    original.laneCount = 3;
+    original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    original.addSegment<ArcSegment>(Point2D{10, 0}, 0.0, 0.1, 5.0);
+
+    RoadV2 copy(original);
+
+    // Metadata preserved
+    CHECK(copy.id == "test_road");
+    CHECK(copy.name == "Test Road");
+    CHECK(copy.width == doctest::Approx(7.0));
+    CHECK(copy.laneCount == 3);
+
+    // Geometry preserved
+    CHECK(copy.numSegments() == 2);
+    CHECK(copy.totalLength() == doctest::Approx(15.0));
+    CHECK(copy.geometry().positionAt(5).x == doctest::Approx(5.0));
+}
+
+TEST_CASE("RoadV2: copy constructor produces independent segments") {
+    RoadV2 original;
+    auto& seg = original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+
+    RoadV2 copy(original);
+
+    // Modify original's segment — copy should be unaffected
+    seg.p1 = Point2D{20, 0};
+    original.geometry();  // view is stale but segments_ is the source of truth
+
+    // Copy's segment should still be (0,0)→(10,0)
+    CHECK(copy.segment(0).length() == doctest::Approx(10.0));
+    // Original's segment should be (0,0)→(20,0)
+    CHECK(original.segment(0).length() == doctest::Approx(20.0));
+}
+
+TEST_CASE("RoadV2: copy assignment performs deep clone") {
+    RoadV2 original;
+    original.id = "orig";
+    original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{30, 0});
+
+    RoadV2 assigned;
+    assigned.id = "assigned";
+    assigned.addSegment<LineSegment>(Point2D{0, 0}, Point2D{5, 0});
+
+    assigned = original;
+
+    CHECK(assigned.id == "orig");
+    CHECK(assigned.numSegments() == 1);
+    CHECK(assigned.totalLength() == doctest::Approx(30.0));
+}
+
+TEST_CASE("RoadV2: copy assignment produces independent segments") {
+    RoadV2 original;
+    auto& origSeg = original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+
+    RoadV2 assigned;
+    assigned.addSegment<LineSegment>(Point2D{0, 0}, Point2D{5, 0});
+    assigned = original;
+
+    // Modify original
+    origSeg.p1 = Point2D{100, 0};
+
+    // Assigned should be unaffected
+    CHECK(assigned.segment(0).length() == doctest::Approx(10.0));
+    CHECK(original.segment(0).length() == doctest::Approx(100.0));
+}
+
+TEST_CASE("RoadV2: self-assignment is safe") {
+    RoadV2 road;
+    road.id = "self_test";
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+
+    road = road;  // self-assignment
+
+    CHECK(road.id == "self_test");
+    CHECK(road.numSegments() == 1);
+    CHECK(road.totalLength() == doctest::Approx(10.0));
+}
+
+TEST_CASE("RoadV2: move constructor transfers ownership") {
+    RoadV2 original;
+    original.id = "move_test";
+    original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{15, 0});
+
+    RoadV2 moved(std::move(original));
+
+    CHECK(moved.id == "move_test");
+    CHECK(moved.numSegments() == 1);
+    CHECK(moved.totalLength() == doctest::Approx(15.0));
+    // Original is in valid but unspecified state (moved-from)
+}
+
+TEST_CASE("RoadV2: move assignment transfers ownership") {
+    RoadV2 original;
+    original.id = "move_assign";
+    original.addSegment<LineSegment>(Point2D{0, 0}, Point2D{20, 0});
+
+    RoadV2 assigned;
+    assigned.addSegment<LineSegment>(Point2D{0, 0}, Point2D{5, 0});
+
+    assigned = std::move(original);
+
+    CHECK(assigned.id == "move_assign");
+    CHECK(assigned.numSegments() == 1);
+    CHECK(assigned.totalLength() == doctest::Approx(20.0));
+}
+
+TEST_CASE("RoadV2: clearSegments removes all segments and rebuilds view") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    road.addSegment<LineSegment>(Point2D{10, 0}, Point2D{20, 0});
+    CHECK(road.numSegments() == 2);
+
+    road.clearSegments();
+    CHECK(road.numSegments() == 0);
+    CHECK(road.totalLength() == doctest::Approx(0.0));
+    CHECK(road.geometry().numSegments() == 0);
+}
+
+TEST_CASE("RoadV2: reserveSegments doesn't change content") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    road.reserveSegments(100);
+    CHECK(road.numSegments() == 1);
+    CHECK(road.totalLength() == doctest::Approx(10.0));
+}
+
+TEST_CASE("RoadV2: geometry view totalLength matches sum of segment lengths") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});   // 10m
+    road.addSegment<ArcSegment>(Point2D{10, 0}, 0.0, 0.1, 5.0);   // 5m
+    road.addSegment<LineSegment>(Point2D{15, 0}, Point2D{25, 0}); // 10m
+
+    double sumLengths = road.segment(0).length() + road.segment(1).length() + road.segment(2).length();
+    CHECK(road.totalLength() == doctest::Approx(sumLengths));
+    CHECK(road.geometry().totalLength() == doctest::Approx(sumLengths));
+}
+
+TEST_CASE("RoadV2: geometry view evaluates correctly after addSegment") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    road.addSegment<LineSegment>(Point2D{10, 0}, Point2D{10, 10});
+
+    // Evaluate at s=5 (in first segment, heading east)
+    double x, y, h;
+    road.geometry().evaluateDS(5, x, y, h);
+    CHECK(x == doctest::Approx(5.0));
+    CHECK(h == doctest::Approx(0.0));
+
+    // Evaluate at s=15 (in second segment, heading north)
+    road.geometry().evaluateDS(15, x, y, h);
+    CHECK(x == doctest::Approx(10.0));
+    CHECK(y == doctest::Approx(5.0));
+    CHECK(h == doctest::Approx(geo::HALF_PI));
+}
+
+TEST_CASE("RoadV2: metadata is preserved through copy") {
+    RoadV2 original;
+    original.id = "meta_test";
+    original.name = "Metadata Test";
+    original.color = "#ff0000";
+    original.profileName = "highway_4x2";
+    original.startIntersectionId = "ix_start";
+    original.endIntersectionId = "ix_end";
+    original.width = 14.0;
+    original.laneCount = 4;
+
+    RoadV2 copy(original);
+
+    CHECK(copy.id == "meta_test");
+    CHECK(copy.name == "Metadata Test");
+    CHECK(copy.color == "#ff0000");
+    CHECK(copy.profileName == "highway_4x2");
+    CHECK(copy.startIntersectionId == "ix_start");
+    CHECK(copy.endIntersectionId == "ix_end");
+    CHECK(copy.width == doctest::Approx(14.0));
+    CHECK(copy.laneCount == 4);
+}
+
+TEST_CASE("RoadV2: lane section access (placeholder for Phase 2)") {
+    RoadV2 road;
+    CHECK(road.numLaneSections() == 0);
+    road.addLaneSection(LaneSection{});
+    CHECK(road.numLaneSections() == 1);
+}
+
+TEST_CASE("RoadV2: all four segment types can be added") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D{0, 0}, Point2D{10, 0});
+    road.addSegment<ArcSegment>(Point2D{10, 0}, 0.0, 0.1, 5.0);
+    road.addSegment<SpiralSegment>(Point2D{15, 0}, 0.0, 0.1, 0.0, 10.0);
+    road.addSegment<BezierSegment>(Point2D{25, 0}, Point2D{28, 5}, Point2D{32, 5}, Point2D{35, 0});
+
+    CHECK(road.numSegments() == 4);
+    CHECK(road.segment(0).type() == GeometryType::Line);
+    CHECK(road.segment(1).type() == GeometryType::Arc);
+    CHECK(road.segment(2).type() == GeometryType::Spiral);
+    CHECK(road.segment(3).type() == GeometryType::Bezier);
+}
