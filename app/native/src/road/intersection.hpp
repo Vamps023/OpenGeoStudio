@@ -129,18 +129,25 @@ struct ApproachEdgeData {
 };
 
 // ─── Generate edge-based polygon (true boundary-based) ─────
-// Complete rewrite: builds polygon from road boundary intersections.
+// Builds the junction polygon from road boundary intersections.
 //
 // Algorithm:
 // 1. Compute left/right boundary lines for each approach
 // 2. Sort approaches by angle (CCW around center)
-// 3. For each pair of adjacent approaches (i, i+1):
-//    a. Find boundary intersection = right line of i ∩ left line of i+1
+// 3. For each pair of adjacent approaches (i, i+1) in CCW order:
+//    a. Find boundary intersection = LEFT line of i ∩ RIGHT line of i+1
+//       (this is the outer corner between the two approaches)
 //    b. Compute tangent points on each line at distance R from corner
 //    c. Compute fillet arc center and radius
 //    d. Generate arc points
-// 4. Build polygon: rightTrim(i) → tangentIn → arc → tangentOut → leftTrim(i+1) → rightTrim(i+1) → ...
+// 4. Build polygon (CCW outer boundary):
+//    leftTrim(i) → tangentIn → arc → tangentOut → rightTrim(i+1)
+//    → [next iteration starts with leftTrim(i+1), crossing the road]
 // 5. Clean and validate
+//
+// Key insight: for a CCW outer boundary, the corner between approach i
+// and approach i+1 is formed by the LEFT edge of i and RIGHT edge of i+1
+// (NOT right of i and left of i+1, which would cross through the center).
 inline std::vector<Point2D> generateEdgeBasedPolygon(
     const std::vector<ApproachRoad>& approaches,
     const Point2D& center,
@@ -160,9 +167,11 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         Point2D trimPt = app.centerline[0];
         // Direction from trim toward center
         Vec2 tangent = (app.centerline[1] - app.centerline[0]).normalized();
-        Vec2 normal = tangent.perp();  // left normal
+        Vec2 normal = tangent.perp();  // left normal (90° CCW from tangent)
         double halfW = app.width / 2.0;
 
+        // Left edge = centerline + normal * halfWidth (left side when facing center)
+        // Right edge = centerline - normal * halfWidth (right side when facing center)
         Point2D leftAtTrim = {trimPt.x + normal.x * halfW, trimPt.y + normal.y * halfW};
         Point2D rightAtTrim = {trimPt.x - normal.x * halfW, trimPt.y - normal.y * halfW};
 
@@ -196,13 +205,15 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         const auto& current = edgeData[i];
         const auto& next = edgeData[(i + 1) % edgeData.size()];
 
-        // Corner = intersection of right boundary line of current
-        //          and left boundary line of next
-        Point2D corner = lineIntersection(current.rightAtTrim, current.tangent,
-                                           next.leftAtTrim, next.tangent);
+        // ─── KEY FIX: Corner = LEFT line of current ∩ RIGHT line of next ───
+        // This gives the OUTER corner of the intersection polygon.
+        // (The old code used right∩left which crosses through the center,
+        //  creating a figure-8 "star" pattern.)
+        Point2D corner = lineIntersection(current.leftAtTrim, current.tangent,
+                                           next.rightAtTrim, next.tangent);
 
         if (!isValid(corner)) {
-            // Parallel edges — skip fillet, will just connect directly
+            // Parallel edges — skip fillet
             outCorners.push_back({
                 corner, corner, corner, corner, 0, {}, (int)i, (int)((i + 1) % edgeData.size())
             });
@@ -211,26 +222,22 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
 
         outBoundaryIntersections.push_back(corner);
 
-        // Compute tangent points: points on each line at distance R from corner
-        // Tangent point on current right line: go from corner toward trim point
-        Vec2 dirToCurrentTrim = (current.rightAtTrim - corner).normalized();
+        // Compute tangent points on each edge line at distance R from corner
+        // Tangent point on current LEFT line: go from corner toward trim point
+        Vec2 dirToCurrentTrim = (current.leftAtTrim - corner).normalized();
         Point2D tangentIn = corner + dirToCurrentTrim * cornerRadius;
 
-        // Tangent point on next left line: go from corner toward trim point
-        Vec2 dirToNextTrim = (next.leftAtTrim - corner).normalized();
+        // Tangent point on next RIGHT line: go from corner toward trim point
+        Vec2 dirToNextTrim = (next.rightAtTrim - corner).normalized();
         Point2D tangentOut = corner + dirToNextTrim * cornerRadius;
 
         // Compute fillet arc center
-        // The arc center is at the intersection of the two lines perpendicular
-        // to the edge lines at the tangent points
-        Vec2 perpCurrent = dirToCurrentTrim.perp();  // perpendicular to current edge
-        Vec2 perpNext = dirToNextTrim.perp();        // perpendicular to next edge
+        // The arc center is at the intersection of perpendiculars at tangent points
+        Vec2 perpCurrent = dirToCurrentTrim.perp();
+        Vec2 perpNext = dirToNextTrim.perp();
 
-        // The center is on the inside of the corner
-        // Direction from corner toward inside (toward center of intersection)
+        // The center is on the inside of the corner (toward intersection center)
         Vec2 dirToCenter = (center - corner).normalized();
-
-        // Pick the perpendicular direction that points toward the center
         Vec2 normalCurrent = perpCurrent.dot(dirToCenter) > 0 ? perpCurrent : perpCurrent * -1;
         Vec2 normalNext = perpNext.dot(dirToCenter) > 0 ? perpNext : perpNext * -1;
 
@@ -238,7 +245,6 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
                                               tangentOut, normalNext);
 
         if (!isValid(arcCenter)) {
-            // Fallback: approximate center as midpoint of tangent points
             arcCenter = {(tangentIn.x + tangentOut.x) / 2, (tangentIn.y + tangentOut.y) / 2};
         }
 
@@ -278,7 +284,18 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         outCorners.push_back(fc);
     }
 
-    // Step 4: Build polygon from edge data and fillet corners
+    // Step 4: Build polygon (CCW outer boundary)
+    //
+    // Polygon structure for N approaches:
+    //   leftTrim(0) → [fillet 0→1] → rightTrim(1)
+    //   → leftTrim(1) → [fillet 1→2] → rightTrim(2)
+    //   → leftTrim(2) → [fillet 2→3] → rightTrim(3)
+    //   → ...
+    //   → leftTrim(N-1) → [fillet N-1→0] → rightTrim(0)
+    //   → [closes back to leftTrim(0)] (crossing road 0)
+    //
+    // Between rightTrim(i+1) and leftTrim(i+1): straight line across road i+1
+    // Between leftTrim(i) and rightTrim(i+1): fillet arc at corner
     std::vector<Point2D> polygon;
 
     for (size_t i = 0; i < edgeData.size(); i++) {
@@ -286,36 +303,25 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         const auto& next = edgeData[(i + 1) % edgeData.size()];
         const auto& fc = outCorners[i];
 
-        // 1. Right edge of current approach at trim line
-        polygon.push_back(current.rightAtTrim);
+        // 1. Left edge of current approach at trim line
+        polygon.push_back(current.leftAtTrim);
 
-        // 2. If we have a valid fillet corner, add: tangentIn → arc → tangentOut
+        // 2. Fillet arc: tangentIn → arc points → tangentOut
         if (isValid(fc.boundaryIntersection) && fc.radius > 0.1) {
-            // Tangent point on current edge (moving from trim toward corner)
             polygon.push_back(fc.tangentIn);
-
-            // Arc points (excluding endpoints which are tangentIn and tangentOut)
             for (size_t j = 1; j < fc.arcPoints.size() - 1; j++) {
                 polygon.push_back(fc.arcPoints[j]);
             }
-
-            // Tangent point on next edge
             polygon.push_back(fc.tangentOut);
         } else if (isValid(fc.boundaryIntersection)) {
             // Sharp corner (no fillet)
             polygon.push_back(fc.boundaryIntersection);
         }
 
-        // 3. Left edge of next approach at trim line
-        polygon.push_back(next.leftAtTrim);
-
-        // 4. Right edge of next approach at trim line (straight across road)
+        // 3. Right edge of next approach at trim line
+        // (The crossing from rightTrim(i+1) to leftTrim(i+1) happens
+        //  at the start of the next iteration when we push leftTrim(i+1))
         polygon.push_back(next.rightAtTrim);
-    }
-
-    // Remove last point if it duplicates the first
-    if (polygon.size() > 1 && polygon.front().distanceTo(polygon.back()) < EPSILON) {
-        polygon.pop_back();
     }
 
     // Clean: remove duplicate consecutive points
@@ -325,6 +331,7 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
             cleaned.push_back(p);
         }
     }
+    // Check first/last duplicate
     if (cleaned.size() > 1 && cleaned.front().distanceTo(cleaned.back()) < EPSILON) {
         cleaned.pop_back();
     }

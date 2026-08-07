@@ -1,50 +1,8 @@
-Fix intersection polygon: build from road boundaries, not centerline
+Fix TypeScript deprecation: moduleResolution 'node' → 'node10'
 
-The intersection polygon was a small "star" shape around the center
-because it was built from centerline-derived points. Now it properly
-extends to the road boundaries.
-
-Root Cause:
-- generateEdgeBasedPolygon() used approach centerline points at trim
-  distance, but didn't properly connect road edges across the
-  intersection or compute boundary intersection corners
-- The polygon only contained points near the center, not at the road
-  edge intersections
-
-Fix — Complete rewrite of generateEdgeBasedPolygon():
-1. For each approach, compute left/right edge points at the trim line
-2. Sort approaches by angle (CCW order around center)
-3. For each pair of adjacent approaches:
-   a. Find corner = intersection of right edge line of current
-      and left edge line of next (the actual boundary intersection)
-   b. Add right edge of current at trim line
-   c. Add fillet arc at corner (or sharp corner if radius too small)
-   d. Add left edge of next at trim line
-   e. Add right edge of next at trim line (straight across the road)
-4. Clean duplicate consecutive points
-
-Fix — Trim distance calculation:
-- Corner radius was clamped to min(maxHalfW, 5.0) — too small
-- Now clamped to clamp(min(halfW1, halfW2), 3.0, 15.0)
-- Added minimum trim distance: maxHalfW + cornerRadius
-- Added tan(halfAngle) clamping for very acute angles
-
-Results (perpendicular 8m roads):
-- Polygon area: 332.8 m² (was ~20-30 m²)
-- Bounding box: ±8m in both directions (was ±2m)
-- Trim distance: 8m from center (was ~4m)
-- Polygon vertices: 36 (proper fillet arcs at each corner)
-
-Enhanced Debug Overlays:
-- Trim lines: red dashed lines across each road at trim distance
-- Road edges through intersection: green (left) + red (right)
-- Polygon vertices: small white dots
-- Triangulation: white wireframe (was magenta)
-- All overlays use stable IDs (rounded center coords)
-
-Tests: 41/41 pass
-- New test: polygon area > 50m² (was failing with old star polygon)
-- New test: polygon extends ±4m from center in all directions
+The 'node' value for moduleResolution is deprecated in TypeScript 5.9.
+Changed to the explicit 'node10' name (same resolution strategy, no
+behavior change) and removed the unnecessary ignoreDeprecations flag.
 
 Generated with Devin (https://devin.ai)
 

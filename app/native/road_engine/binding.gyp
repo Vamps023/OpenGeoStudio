@@ -25,6 +25,23 @@
           "AdditionalOptions": ["/std:c++20"]
         }
       }
+    },
+    {
+      "target_name": "geometry_tests",
+      "type": "executable",
+      "sources": [
+        "../src/road/geometry_segment_tests.cpp"
+      ],
+      "include_dirs": [
+        "../src",
+        "../src/road"
+      ],
+      "msvs_settings": {
+        "VCCLCompilerTool": {
+          "ExceptionHandling": 1,
+          "AdditionalOptions": ["/std:c++20"]
+        }
+      }
     }
   ]
 }
