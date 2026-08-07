@@ -34,6 +34,110 @@ export interface MeshData {
   triangleCount: number;
 }
 
+// ─── Phase 2.8 — RoadBuildResult types ─────────────────────
+
+/** A mesh section with typed arrays, ready for Babylon.js */
+export interface MeshSectionData {
+  material: string;
+  materialType: number;
+  positions: Float32Array;   // x, y, z interleaved
+  normals: Float32Array;     // nx, ny, nz
+  uvs: Float32Array;         // u, v
+  indices: Uint32Array;
+  vertexCount: number;
+  indexCount: number;
+  triangleCount: number;
+}
+
+/** A sampled point on a lane or boundary */
+export interface SamplePointData {
+  position: { x: number; y: number };
+  s: number;
+  heading: number;
+  laneOffset: number;
+}
+
+/** A lane centerline in the lane network */
+export interface LaneCenterlineData {
+  laneId: number;
+  type: number;
+  startS: number;
+  endS: number;
+  length: number;
+  numSamples: number;
+  samples: SamplePointData[];
+}
+
+/** A lane boundary in the lane network */
+export interface LaneBoundaryData {
+  innerLaneId: number;
+  outerLaneId: number;
+  isRoadEdge: boolean;
+  startS: number;
+  endS: number;
+  length: number;
+  markType: number;
+  markColor: string;
+  markWidth: number;
+  numSamples: number;
+  samples: SamplePointData[];
+}
+
+/** The lane network returned by buildRoad() */
+export interface LaneNetworkData {
+  roadId: string;
+  totalLength: number;
+  numLaneSections: number;
+  numCenterlines: number;
+  numBoundaries: number;
+  centerlines: LaneCenterlineData[];
+  boundaries: LaneBoundaryData[];
+}
+
+/** A road marking polyline */
+export interface RoadMarkPolylineData {
+  innerLaneId: number;
+  outerLaneId: number;
+  isRoadEdge: boolean;
+  isCenterLine: boolean;
+  startS: number;
+  endS: number;
+  length: number;
+  color: string;
+  width: number;
+  markType: number;
+  numSamples: number;
+  samples: SamplePointData[];
+}
+
+/** The road mark network returned by buildRoad() */
+export interface RoadMarkNetworkData {
+  roadId: string;
+  numMarkings: number;
+  markings: RoadMarkPolylineData[];
+}
+
+/** Adapter report from the road→RoadV2 conversion */
+export interface BuildAdapterReport {
+  exact: boolean;
+  exactSegments: number;
+  legacySegments: number;
+  unsupportedSegments: number;
+  numSegments: number;
+  totalLength: number;
+  warnings: string[];
+}
+
+/** Result of buildRoad() — the single API for the full lane engine pipeline */
+export interface RoadBuildResult {
+  meshSections: MeshSectionData[];
+  totalVertices: number;
+  totalTriangles: number;
+  lanes: LaneNetworkData;
+  markings: RoadMarkNetworkData;
+  adapter: BuildAdapterReport;
+}
+
 // ─── Global window type augmentation ───────────────────────
 declare global {
   interface Window {
@@ -60,6 +164,8 @@ declare global {
         sampleCenterlineV2(road: unknown, numSamples?: number): Promise<unknown>;
         getAdapterReport(road: unknown): Promise<unknown>;
         convertFromV2(road: unknown): Promise<unknown>;
+        // Phase 2.8 — Full lane engine pipeline
+        buildRoad(road: unknown): Promise<unknown>;
       };
     };
   }
@@ -171,6 +277,8 @@ export interface RoadEngineAPI {
   sampleCenterlineV2(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>>;
   getAdapterReport(road: Road, refLat: number, refLon: number): Promise<AdapterReportResult>;
   convertFromV2(road: Road, refLat: number, refLon: number): Promise<unknown>;
+  /** Phase 2.8 — Full lane engine pipeline */
+  buildRoad(road: Road, refLat: number, refLon: number): Promise<RoadBuildResult>;
   /** Whether the C++ native engine is available */
   isNative(): boolean;
 }
@@ -336,6 +444,12 @@ class NativeRoadEngine implements RoadEngineAPI {
     const cppRoad = toCppRoad(road, refLat, refLon);
     return this.api.convertFromV2(cppRoad);
   }
+
+  // ─── Phase 2.8 — Full lane engine pipeline ───────────────
+  async buildRoad(road: Road, refLat: number, refLon: number): Promise<RoadBuildResult> {
+    const cppRoad = toCppRoad(road, refLat, refLon);
+    return this.api.buildRoad(cppRoad) as Promise<RoadBuildResult>;
+  }
 }
 
 // ─── Lazy singleton ────────────────────────────────────────
@@ -407,4 +521,7 @@ export const roadEngine = {
     getRoadEngine().createBezier(sx, sy, hox, hoy, ex, ey, hix, hiy, params),
   createClothoidSpline: (points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown) =>
     getRoadEngine().createClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params),
+  // Phase 2.8 — Full lane engine pipeline
+  buildRoad: (road: Road, refLat: number, refLon: number) =>
+    getRoadEngine().buildRoad(road, refLat, refLon),
 };

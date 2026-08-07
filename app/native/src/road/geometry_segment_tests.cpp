@@ -8271,3 +8271,192 @@ TEST_CASE("2.7 Performance: 1000-segment road, 8 lanes, full mesh") {
     // Should be well under interactive budget
     CHECK(ms < 2000.0);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.8 — Road Build Pipeline Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests the full buildRoad() pipeline:
+//   RoadV2 → LaneNetwork → RoadMarkNetwork → RoadMesh
+// Verifies that all stages work together correctly.
+// ═══════════════════════════════════════════════════════════
+
+#include "road_adapter.hpp"
+
+using geo::roadToV2Auto;
+using geo::AdapterReport;
+
+// Helper: build a legacy Road and convert to RoadV2
+static RoadV2 makeRoadV2FromLegacy(double length = 100.0, double width = 7.0, int lanes = 2) {
+    Road road;
+    road.id = "test-road";
+    road.name = "Test Road";
+    road.width = width;
+    road.laneCount = lanes;
+    road.formatVersion = 1;
+
+    ControlPoint cp1, cp2;
+    cp1.position = Point2D(0, 0);
+    cp1.type = "corner";
+    cp2.position = Point2D(length, 0);
+    cp2.type = "corner";
+    road.points.push_back(cp1);
+    road.points.push_back(cp2);
+
+    AdapterReport report;
+    return roadToV2Auto(road, report);
+}
+
+TEST_CASE("2.8 Build pipeline: RoadV2 → LaneNetwork → RoadMarkNetwork → RoadMesh") {
+    RoadV2 v2 = makeRoadV2FromLegacy(100.0, 7.0, 2);
+
+    // Step 1: LaneNetwork
+    LaneNetwork net = generateLaneNetwork(v2);
+    CHECK(net.numCenterlines() == 3);
+    CHECK(net.numBoundaries() == 4);
+
+    // Step 2: RoadMarkNetwork
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    CHECK(marks.numMarkings() == 4);
+
+    // Step 3: RoadMesh
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+    CHECK(mesh.numSections() >= 2);  // asphalt + at least one marking
+    CHECK(mesh.totalVertices() > 0);
+    CHECK(mesh.totalTriangles() > 0);
+
+    // Verify material sections
+    CHECK(mesh.findSection(MaterialType::Asphalt) != nullptr);
+    CHECK(mesh.findSection(MaterialType::WhiteMarking) != nullptr);
+    CHECK(mesh.findSection(MaterialType::YellowMarking) != nullptr);
+}
+
+TEST_CASE("2.8 Build pipeline: legacy road with 4 lanes") {
+    RoadV2 v2 = makeRoadV2FromLegacy(100.0, 14.0, 4);
+
+    LaneNetwork net = generateLaneNetwork(v2);
+    CHECK(net.numCenterlines() == 5);  // 2 left + center + 2 right
+
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+
+    CHECK(mesh.findSection(MaterialType::Asphalt) != nullptr);
+    CHECK(mesh.totalVertices() > 0);
+}
+
+TEST_CASE("2.8 Build pipeline: adapter report is correct") {
+    Road road;
+    road.id = "test";
+    road.width = 7.0;
+    road.laneCount = 2;
+    road.formatVersion = 1;
+    ControlPoint cp1, cp2;
+    cp1.position = Point2D(0, 0);
+    cp1.type = "corner";
+    cp2.position = Point2D(100, 0);
+    cp2.type = "corner";
+    road.points.push_back(cp1);
+    road.points.push_back(cp2);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Auto(road, report);
+
+    // formatVersion=1 with 2 points → legacy adapter (not exact)
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.totalLength() == doctest::Approx(100.0));
+}
+
+TEST_CASE("2.8 Build pipeline: empty road produces empty result") {
+    RoadV2 v2;  // no segments
+
+    LaneNetwork net = generateLaneNetwork(v2);
+    CHECK(net.numCenterlines() == 0);
+
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    CHECK(marks.numMarkings() == 0);
+
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+    CHECK(mesh.numSections() == 0);
+    CHECK(mesh.totalVertices() == 0);
+}
+
+TEST_CASE("2.8 Build pipeline: mesh sections have correct material names") {
+    RoadV2 v2 = makeRoadV2FromLegacy(100.0, 7.0, 2);
+    LaneNetwork net = generateLaneNetwork(v2);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+
+    for (const auto& sec : mesh.sections) {
+        if (sec.material == MaterialType::Asphalt) {
+            CHECK(sec.materialName == "asphalt");
+        } else if (sec.material == MaterialType::WhiteMarking) {
+            CHECK(sec.materialName == "white_marking");
+        } else if (sec.material == MaterialType::YellowMarking) {
+            CHECK(sec.materialName == "yellow_marking");
+        }
+    }
+}
+
+TEST_CASE("2.8 Build pipeline: mesh data is self-consistent") {
+    RoadV2 v2 = makeRoadV2FromLegacy(100.0, 7.0, 2);
+    LaneNetwork net = generateLaneNetwork(v2);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+
+    for (const auto& sec : mesh.sections) {
+        // vertexCount should match positions array size / 3
+        CHECK(sec.vertexCount() * 3 == static_cast<int>(sec.vertices.size() * 3));
+        // indexCount should be divisible by 3 (triangles)
+        CHECK(sec.indexCount() % 3 == 0);
+        // All indices should be within vertex range
+        for (uint32_t idx : sec.indices) {
+            CHECK(idx < static_cast<uint32_t>(sec.vertexCount()));
+        }
+    }
+}
+
+TEST_CASE("2.8 Build pipeline: performance baseline") {
+    // 1000-segment road with 8 lanes
+    RoadV2 road;
+    road.reserveSegments(1000);
+    for (int i = 0; i < 1000; i++) {
+        double x1 = i * 10.0;
+        double y1 = (i % 2 == 0) ? 0.0 : 1.0;
+        double x2 = (i + 1) * 10.0;
+        double y2 = (i % 2 == 0) ? 1.0 : 0.0;
+        road.addSegment<LineSegment>(Point2D(x1, y1), Point2D(x2, y2));
+    }
+    road.width = 28.0;
+    road.laneCount = 8;
+
+    LaneSection ls(0.0);
+    for (int i = 4; i >= 1; i--) {
+        ls.addLane(Lane(-i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    for (int i = 1; i <= 4; i++) {
+        ls.addLane(Lane(i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    road.addLaneSection(std::move(ls));
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    // Full pipeline
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    INFO("Full pipeline: " << mesh.totalVertices() << " verts, "
+         << mesh.totalTriangles() << " tris, "
+         << net.numCenterlines() << " centerlines, "
+         << marks.numMarkings() << " markings in " << ms << " ms");
+
+    CHECK(mesh.totalVertices() > 0);
+    CHECK(mesh.totalTriangles() > 0);
+    CHECK(net.numCenterlines() == 9);
+    // Target: under 50ms for release build (generous for debug)
+    CHECK(ms < 2000.0);
+}

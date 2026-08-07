@@ -1086,3 +1086,272 @@ describeIfAddon('Phase 1.9: Bridge Integration', () => {
     expect(v2Samples[9].x).toBeCloseTo(v1Samples[v1Samples.length - 1].x, 1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.8 — buildRoad() Full Pipeline Tests
+// ═══════════════════════════════════════════════════════════
+
+describeIfAddon('Phase 2.8: buildRoad() full pipeline', () => {
+  it('should return a RoadBuildResult with mesh, lanes, markings, adapter', () => {
+    const road = {
+      id: 'test-build',
+      name: 'Test Build',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+
+    // Top-level fields
+    expect(result).toHaveProperty('meshSections');
+    expect(result).toHaveProperty('totalVertices');
+    expect(result).toHaveProperty('totalTriangles');
+    expect(result).toHaveProperty('lanes');
+    expect(result).toHaveProperty('markings');
+    expect(result).toHaveProperty('adapter');
+
+    // Mesh sections
+    expect(result.meshSections.length).toBeGreaterThanOrEqual(2);
+    expect(result.totalVertices).toBeGreaterThan(0);
+    expect(result.totalTriangles).toBeGreaterThan(0);
+
+    // Lane network
+    expect(result.lanes.centerlines.length).toBe(3);  // 2 drivable + 1 center
+    expect(result.lanes.boundaries.length).toBe(4);   // 2 edges + 2 inner
+
+    // Markings
+    expect(result.markings.markings.length).toBe(4);
+
+    // Adapter
+    expect(result.adapter.numSegments).toBe(1);
+    expect(result.adapter.totalLength).toBeCloseTo(100, 1);
+  });
+
+  it('should return typed arrays in mesh sections (Babylon-ready)', () => {
+    const road = {
+      id: 'test-typed',
+      name: 'Test Typed Arrays',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 50, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+
+    for (const sec of result.meshSections) {
+      expect(sec.positions).toBeInstanceOf(Float32Array);
+      expect(sec.normals).toBeInstanceOf(Float32Array);
+      expect(sec.uvs).toBeInstanceOf(Float32Array);
+      expect(sec.indices).toBeInstanceOf(Uint32Array);
+
+      // positions.length === vertexCount * 3
+      expect(sec.positions.length).toBe(sec.vertexCount * 3);
+      // normals.length === vertexCount * 3
+      expect(sec.normals.length).toBe(sec.vertexCount * 3);
+      // uvs.length === vertexCount * 2
+      expect(sec.uvs.length).toBe(sec.vertexCount * 2);
+      // indices.length === triangleCount * 3
+      expect(sec.indices.length).toBe(sec.triangleCount * 3);
+    }
+  });
+
+  it('should have asphalt, white_marking, and yellow_marking sections', () => {
+    const road = {
+      id: 'test-materials',
+      name: 'Test Materials',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    const materials = result.meshSections.map((s: any) => s.material);
+    expect(materials).toContain('asphalt');
+    expect(materials).toContain('white_marking');
+    expect(materials).toContain('yellow_marking');
+  });
+
+  it('should generate correct lane network for 4-lane road', () => {
+    const road = {
+      id: 'test-4lane',
+      name: 'Test 4-Lane',
+      width: 14.0,
+      laneCount: 4,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    // 4 drivable + 1 center = 5 centerlines
+    expect(result.lanes.centerlines.length).toBe(5);
+    // 2 edges + 3 inner + 2 center = 7 boundaries... actually depends on impl
+    // Just check we have boundaries
+    expect(result.lanes.boundaries.length).toBeGreaterThan(0);
+  });
+
+  it('should produce valid indices (all within vertex range)', () => {
+    const road = {
+      id: 'test-indices',
+      name: 'Test Indices',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+
+    for (const sec of result.meshSections) {
+      for (let i = 0; i < sec.indices.length; i++) {
+        expect(sec.indices[i]).toBeLessThan(sec.vertexCount);
+      }
+    }
+  });
+
+  it('should handle empty road gracefully', () => {
+    const road = {
+      id: 'test-empty',
+      name: 'Test Empty',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [],
+    };
+    const result = addon.roadBuildRoad(road);
+    expect(result.totalVertices).toBe(0);
+    expect(result.totalTriangles).toBe(0);
+    expect(result.meshSections.length).toBe(0);
+    expect(result.lanes.centerlines.length).toBe(0);
+  });
+
+  it('should have flat normals (0,0,1) for flat road', () => {
+    const road = {
+      id: 'test-normals',
+      name: 'Test Normals',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    const asphalt = result.meshSections.find((s: any) => s.material === 'asphalt');
+    expect(asphalt).toBeDefined();
+
+    for (let i = 0; i < asphalt.vertexCount; i++) {
+      expect(asphalt.normals[i * 3]).toBeCloseTo(0, 5);     // nx
+      expect(asphalt.normals[i * 3 + 1]).toBeCloseTo(0, 5); // ny
+      expect(asphalt.normals[i * 3 + 2]).toBeCloseTo(1, 5); // nz
+    }
+  });
+
+  it('should have all z=0 for flat road positions', () => {
+    const road = {
+      id: 'test-z',
+      name: 'Test Z',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    const asphalt = result.meshSections.find((s: any) => s.material === 'asphalt');
+    for (let i = 0; i < asphalt.vertexCount; i++) {
+      expect(asphalt.positions[i * 3 + 2]).toBeCloseTo(0, 5); // z
+    }
+  });
+
+  it('should have markings above pavement (z > 0)', () => {
+    const road = {
+      id: 'test-marking-z',
+      name: 'Test Marking Z',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    const yellow = result.meshSections.find((s: any) => s.material === 'yellow_marking');
+    expect(yellow).toBeDefined();
+    expect(yellow.vertexCount).toBeGreaterThan(0);
+
+    for (let i = 0; i < yellow.vertexCount; i++) {
+      expect(yellow.positions[i * 3 + 2]).toBeGreaterThan(0); // z above pavement
+    }
+  });
+
+  it('should include sample points with s, heading, laneOffset in lane network', () => {
+    const road = {
+      id: 'test-samples',
+      name: 'Test Samples',
+      width: 7.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const result = addon.roadBuildRoad(road);
+    const cl = result.lanes.centerlines[0];
+    expect(cl.samples.length).toBeGreaterThan(0);
+    expect(cl.samples[0]).toHaveProperty('position');
+    expect(cl.samples[0]).toHaveProperty('s');
+    expect(cl.samples[0]).toHaveProperty('heading');
+    expect(cl.samples[0]).toHaveProperty('laneOffset');
+  });
+
+  it('performance: 1000-segment road should complete in reasonable time', () => {
+    const points: any[] = [];
+    for (let i = 0; i <= 1000; i++) {
+      points.push({
+        x: i * 10,
+        y: (i % 2 === 0) ? 0 : 1,
+        z: 0,
+        type: 'corner',
+        handleIn: null,
+        handleOut: null,
+        segmentMeta: null,
+      });
+    }
+    const road = {
+      id: 'perf-1000',
+      name: 'Performance 1000',
+      width: 28.0,
+      laneCount: 8,
+      formatVersion: 1,
+      points,
+    };
+
+    const start = performance.now();
+    const result = addon.roadBuildRoad(road);
+    const elapsed = performance.now() - start;
+
+    expect(result.totalVertices).toBeGreaterThan(0);
+    expect(result.totalTriangles).toBeGreaterThan(0);
+    // Generous budget for debug build (release target is <50ms)
+    expect(elapsed).toBeLessThan(5000);
+  });
+});

@@ -31,6 +31,7 @@ import {
   ROAD_SAMPLE_CENTERLINE_V2,
   ROAD_GET_ADAPTER_REPORT,
   ROAD_CONVERT_FROM_V2,
+  ROAD_BUILD_ROAD,
 } from '../../shared/ipcChannels-electron';
 
 // ─── Native Addon Interface ────────────────────────────────
@@ -74,6 +75,8 @@ export interface RoadEngineAddon {
   roadSampleCenterlineV2(road: unknown, numSamples?: number): unknown;
   roadGetAdapterReport(road: unknown): unknown;
   roadConvertFromV2(road: unknown): unknown;
+  // Phase 2.8 — Full lane engine pipeline
+  roadBuildRoad(road: unknown): unknown;
 }
 
 // ─── Lazy-loaded addon singleton ───────────────────────────
@@ -257,5 +260,12 @@ export async function registerRoadEngineHandlers(): Promise<void> {
     console.log(tag, 'convertFromV2()');
     if (!addon) throw new Error('Road engine native addon not available');
     return addon.roadConvertFromV2(road);
+  });
+
+  // ─── Phase 2.8 — Full lane engine pipeline ──────────────
+  ipcMain.handle(ROAD_BUILD_ROAD, async (_event, road) => {
+    console.log(tag, 'buildRoad()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadBuildRoad(road);
   });
 }

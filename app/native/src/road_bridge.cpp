@@ -8,6 +8,9 @@
 #include "road/opendrive.hpp"
 #include "road/road_tools.hpp"
 #include "road/road_adapter.hpp"
+#include "road/lane_network.hpp"
+#include "road/road_mark_generator.hpp"
+#include "road/road_mesh_generator.hpp"
 #include <sstream>
 #include <iostream>
 
@@ -827,6 +830,220 @@ static Napi::Value RoadConvertFromV2(const Napi::CallbackInfo& info) {
     return roadToJs(env, restored);
 }
 
+// ─── Phase 2.8 — RoadBuildResult: full pipeline in one call ───
+
+// Serialize a MeshSection to a JS object with typed arrays
+static Napi::Object meshSectionToJs(Napi::Env env, const geo::MeshSection& section) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("material", Napi::String::New(env, section.materialName));
+    obj.Set("materialType", Napi::Number::New(env, static_cast<int>(section.material)));
+    obj.Set("vertexCount", Napi::Number::New(env, section.vertexCount()));
+    obj.Set("indexCount", Napi::Number::New(env, section.indexCount()));
+    obj.Set("triangleCount", Napi::Number::New(env, section.triangleCount()));
+
+    // Positions: Float32Array (x, y, z interleaved)
+    int vCount = section.vertexCount();
+    auto positions = Napi::Float32Array::New(env, vCount * 3);
+    auto normals = Napi::Float32Array::New(env, vCount * 3);
+    auto uvs = Napi::Float32Array::New(env, vCount * 2);
+    for (int i = 0; i < vCount; i++) {
+        positions[i * 3]     = static_cast<float>(section.vertices[i].position.x);
+        positions[i * 3 + 1] = static_cast<float>(section.vertices[i].position.y);
+        positions[i * 3 + 2] = static_cast<float>(section.vertices[i].position.z);
+        normals[i * 3]     = static_cast<float>(section.vertices[i].normal.x);
+        normals[i * 3 + 1] = static_cast<float>(section.vertices[i].normal.y);
+        normals[i * 3 + 2] = static_cast<float>(section.vertices[i].normal.z);
+        uvs[i * 2]     = static_cast<float>(section.vertices[i].uv.x);
+        uvs[i * 2 + 1] = static_cast<float>(section.vertices[i].uv.y);
+    }
+    obj.Set("positions", positions);
+    obj.Set("normals", normals);
+    obj.Set("uvs", uvs);
+
+    // Indices: Uint32Array
+    int iCount = section.indexCount();
+    auto indices = Napi::Uint32Array::New(env, iCount);
+    for (int i = 0; i < iCount; i++) {
+        indices[i] = section.indices[i];
+    }
+    obj.Set("indices", indices);
+
+    return obj;
+}
+
+// Serialize a SamplePoint to a JS object
+static Napi::Object samplePointToJs(Napi::Env env, const geo::SamplePoint& sp) {
+    auto obj = Napi::Object::New(env);
+    auto pos = Napi::Object::New(env);
+    pos.Set("x", Napi::Number::New(env, sp.position.x));
+    pos.Set("y", Napi::Number::New(env, sp.position.y));
+    obj.Set("position", pos);
+    obj.Set("s", Napi::Number::New(env, sp.s));
+    obj.Set("heading", Napi::Number::New(env, sp.heading));
+    obj.Set("laneOffset", Napi::Number::New(env, sp.laneOffset));
+    return obj;
+}
+
+// Serialize a LaneCenterline to a JS object
+static Napi::Object centerlineToJs(Napi::Env env, const geo::LaneCenterline& cl) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("laneId", Napi::Number::New(env, cl.laneId));
+    obj.Set("type", Napi::Number::New(env, static_cast<int>(cl.type)));
+    obj.Set("startS", Napi::Number::New(env, cl.startS));
+    obj.Set("endS", Napi::Number::New(env, cl.endS));
+    obj.Set("length", Napi::Number::New(env, cl.length));
+    obj.Set("numSamples", Napi::Number::New(env, cl.numSamples()));
+
+    auto samples = Napi::Array::New(env, cl.samples.size());
+    for (size_t i = 0; i < cl.samples.size(); i++) {
+        samples.Set(i, samplePointToJs(env, cl.samples[i]));
+    }
+    obj.Set("samples", samples);
+    return obj;
+}
+
+// Serialize a LaneBoundary to a JS object
+static Napi::Object boundaryToJs(Napi::Env env, const geo::LaneBoundary& b) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("innerLaneId", Napi::Number::New(env, b.innerLaneId));
+    obj.Set("outerLaneId", Napi::Number::New(env, b.outerLaneId));
+    obj.Set("isRoadEdge", Napi::Boolean::New(env, b.isRoadEdge));
+    obj.Set("startS", Napi::Number::New(env, b.startS));
+    obj.Set("endS", Napi::Number::New(env, b.endS));
+    obj.Set("length", Napi::Number::New(env, b.length));
+    obj.Set("markType", Napi::Number::New(env, static_cast<int>(b.markType)));
+    obj.Set("markColor", Napi::String::New(env, b.markColor));
+    obj.Set("markWidth", Napi::Number::New(env, b.markWidth));
+    obj.Set("numSamples", Napi::Number::New(env, b.numSamples()));
+
+    auto samples = Napi::Array::New(env, b.samples.size());
+    for (size_t i = 0; i < b.samples.size(); i++) {
+        samples.Set(i, samplePointToJs(env, b.samples[i]));
+    }
+    obj.Set("samples", samples);
+    return obj;
+}
+
+// Serialize a RoadMarkPolyline to a JS object
+static Napi::Object markPolylineToJs(Napi::Env env, const geo::RoadMarkPolyline& m) {
+    auto obj = Napi::Object::New(env);
+    obj.Set("innerLaneId", Napi::Number::New(env, m.innerLaneId));
+    obj.Set("outerLaneId", Napi::Number::New(env, m.outerLaneId));
+    obj.Set("isRoadEdge", Napi::Boolean::New(env, m.isRoadEdge));
+    obj.Set("isCenterLine", Napi::Boolean::New(env, m.isCenterLine));
+    obj.Set("startS", Napi::Number::New(env, m.startS));
+    obj.Set("endS", Napi::Number::New(env, m.endS));
+    obj.Set("length", Napi::Number::New(env, m.length));
+    obj.Set("color", Napi::String::New(env, m.style.color));
+    obj.Set("width", Napi::Number::New(env, m.style.width));
+    obj.Set("markType", Napi::Number::New(env, static_cast<int>(m.style.type)));
+    obj.Set("numSamples", Napi::Number::New(env, m.numSamples()));
+
+    auto samples = Napi::Array::New(env, m.samples.size());
+    for (size_t i = 0; i < m.samples.size(); i++) {
+        samples.Set(i, samplePointToJs(env, m.samples[i]));
+    }
+    obj.Set("samples", samples);
+    return obj;
+}
+
+// roadBuildRoad(road) → RoadBuildResult
+// Full pipeline: Road → RoadV2 → LaneNetwork → RoadMarkNetwork → RoadMesh
+// Returns everything in one call so the editor doesn't need multiple IPC round-trips.
+static Napi::Value RoadBuildRoad(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (road)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Road road = parseRoad(info[0].As<Napi::Object>());
+
+    // Step 1: Road → RoadV2
+    AdapterReport adapterReport;
+    RoadV2 v2 = roadToV2Auto(road, adapterReport);
+
+    // Step 2: RoadV2 → LaneNetwork
+    LaneNetwork laneNetwork = generateLaneNetwork(v2);
+
+    // Step 3: LaneNetwork → RoadMarkNetwork
+    RoadMarkNetwork markNetwork = generateRoadMarks(laneNetwork);
+
+    // Step 4: LaneNetwork + RoadMarkNetwork → RoadMesh
+    RoadMesh mesh = generateFullRoadMesh(laneNetwork, markNetwork);
+
+    // Serialize result
+    auto result = Napi::Object::New(env);
+
+    // ─── Mesh sections (typed arrays for Babylon.js) ───
+    auto meshSections = Napi::Array::New(env, mesh.sections.size());
+    for (size_t i = 0; i < mesh.sections.size(); i++) {
+        meshSections.Set(i, meshSectionToJs(env, mesh.sections[i]));
+    }
+    result.Set("meshSections", meshSections);
+    result.Set("totalVertices", Napi::Number::New(env, mesh.totalVertices()));
+    result.Set("totalTriangles", Napi::Number::New(env, mesh.totalTriangles()));
+
+    // ─── Lane network (for debug overlays, AI, OpenDRIVE) ───
+    auto lanes = Napi::Object::New(env);
+    lanes.Set("roadId", Napi::String::New(env, laneNetwork.roadId));
+    lanes.Set("totalLength", Napi::Number::New(env, laneNetwork.totalLength));
+    lanes.Set("numLaneSections", Napi::Number::New(env, laneNetwork.numLaneSections));
+    lanes.Set("numCenterlines", Napi::Number::New(env, laneNetwork.numCenterlines()));
+    lanes.Set("numBoundaries", Napi::Number::New(env, laneNetwork.numBoundaries()));
+
+    auto centerlines = Napi::Array::New(env, laneNetwork.centerlines.size());
+    for (size_t i = 0; i < laneNetwork.centerlines.size(); i++) {
+        centerlines.Set(i, centerlineToJs(env, laneNetwork.centerlines[i]));
+    }
+    lanes.Set("centerlines", centerlines);
+
+    auto boundaries = Napi::Array::New(env, laneNetwork.boundaries.size());
+    for (size_t i = 0; i < laneNetwork.boundaries.size(); i++) {
+        boundaries.Set(i, boundaryToJs(env, laneNetwork.boundaries[i]));
+    }
+    lanes.Set("boundaries", boundaries);
+
+    result.Set("lanes", lanes);
+
+    // ─── Road mark network (for marking rendering) ───
+    auto markings = Napi::Object::New(env);
+    markings.Set("roadId", Napi::String::New(env, markNetwork.roadId));
+    markings.Set("numMarkings", Napi::Number::New(env, markNetwork.numMarkings()));
+
+    auto markArr = Napi::Array::New(env, markNetwork.markings.size());
+    for (size_t i = 0; i < markNetwork.markings.size(); i++) {
+        markArr.Set(i, markPolylineToJs(env, markNetwork.markings[i]));
+    }
+    markings.Set("markings", markArr);
+
+    result.Set("markings", markings);
+
+    // ─── Adapter report ───
+    auto adapter = Napi::Object::New(env);
+    adapter.Set("exact", Napi::Boolean::New(env, adapterReport.exact));
+    adapter.Set("exactSegments", Napi::Number::New(env, adapterReport.exactSegments));
+    adapter.Set("legacySegments", Napi::Number::New(env, adapterReport.legacySegments));
+    adapter.Set("unsupportedSegments", Napi::Number::New(env, adapterReport.unsupportedSegments));
+    adapter.Set("numSegments", Napi::Number::New(env, v2.numSegments()));
+    adapter.Set("totalLength", Napi::Number::New(env, v2.totalLength()));
+
+    auto warnings = Napi::Array::New(env, adapterReport.warnings.size());
+    for (size_t i = 0; i < adapterReport.warnings.size(); i++) {
+        warnings.Set(i, Napi::String::New(env, adapterReport.warnings[i]));
+    }
+    adapter.Set("warnings", warnings);
+
+    result.Set("adapter", adapter);
+
+    ROAD_LOG("buildRoad() → " + std::to_string(mesh.totalVertices()) + " verts, " +
+             std::to_string(mesh.totalTriangles()) + " tris, " +
+             std::to_string(laneNetwork.numCenterlines()) + " centerlines, " +
+             std::to_string(markNetwork.numMarkings()) + " markings");
+
+    return result;
+}
+
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
     exports.Set("roadGenerateIntersection", Napi::Function::New(env, RoadGenerateIntersection));
@@ -849,6 +1066,8 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadSampleCenterlineV2", Napi::Function::New(env, RoadSampleCenterlineV2));
     exports.Set("roadGetAdapterReport", Napi::Function::New(env, RoadGetAdapterReport));
     exports.Set("roadConvertFromV2", Napi::Function::New(env, RoadConvertFromV2));
+    // Phase 2.8 — Full pipeline API
+    exports.Set("roadBuildRoad", Napi::Function::New(env, RoadBuildRoad));
     return exports;
 }
 

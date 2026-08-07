@@ -50,6 +50,7 @@ import {
   ROAD_SAMPLE_CENTERLINE_V2,
   ROAD_GET_ADAPTER_REPORT,
   ROAD_CONVERT_FROM_V2,
+  ROAD_BUILD_ROAD,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -136,6 +137,8 @@ export interface ElectronAPI {
     sampleCenterlineV2: (road: unknown, numSamples?: number) => Promise<unknown>;
     getAdapterReport: (road: unknown) => Promise<unknown>;
     convertFromV2: (road: unknown) => Promise<unknown>;
+    // Phase 2.8 — Full lane engine pipeline
+    buildRoad: (road: unknown) => Promise<unknown>;
   };
 }
 
@@ -230,6 +233,9 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(ROAD_GET_ADAPTER_REPORT, road),
     convertFromV2: (road) =>
       ipcRenderer.invoke(ROAD_CONVERT_FROM_V2, road),
+    // Phase 2.8 — Full lane engine pipeline
+    buildRoad: (road) =>
+      ipcRenderer.invoke(ROAD_BUILD_ROAD, road),
   },
 };
 

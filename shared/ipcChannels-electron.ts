@@ -45,6 +45,9 @@ export const ROAD_SAMPLE_CENTERLINE_V2 = 'road:sampleCenterlineV2' as const;
 export const ROAD_GET_ADAPTER_REPORT = 'road:getAdapterReport' as const;
 export const ROAD_CONVERT_FROM_V2 = 'road:convertFromV2' as const;
 
+// Phase 2.8 — Full lane engine pipeline
+export const ROAD_BUILD_ROAD = 'road:buildRoad' as const;
+
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
 export const DIALOG_SELECT_PACKAGE = 'dialog:selectPackage' as const;
