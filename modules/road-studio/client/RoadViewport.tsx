@@ -205,33 +205,54 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         'overlayCam', -Math.PI / 2, 0.01, 500, new Vector3(0, 0, 0), overlayScene
       );
       overlayCam.lowerRadiusLimit = 1;
-      overlayCam.upperRadiusLimit = 50000;
+      overlayCam.upperRadiusLimit = 500000;
+      // Use the same FOV as default (0.8 radians = ~45.8 degrees vertical)
+      overlayCam.fov = 0.8;
 
       // Light
       const overlayHemi = new HemisphericLight('overlayHemi', new Vector3(0, 1, 0), overlayScene);
       overlayHemi.intensity = 0.8;
 
-      // Render loop
+      // Render loop — sync camera with MapLibre every frame
       overlayEngine.runRenderLoop(() => {
-        // Sync camera with MapLibre
-        if (mapRef.current) {
+        if (mapRef.current && mapRef.current.loaded()) {
           const center = mapRef.current.getCenter();
           const zoom = mapRef.current.getZoom();
           const bearing = mapRef.current.getBearing();
           const pitch = mapRef.current.getPitch();
 
-          // Convert map center to local meters
+          // Convert map center to local meters (our coordinate system: X=east, Z=north)
           const local = geoToLocal(center.lat, center.lng, refLatRef.current, refLonRef.current);
 
-          // Approximate scale: at zoom 14, ~10m/pixel, viewport ~1000px = ~10km
-          const scale = 156543.03392 * Math.cos((center.lat * Math.PI) / 180) / Math.pow(2, zoom);
-          const viewportMeters = scale * (overlayCanvas.width / window.devicePixelRatio);
-          const radius = viewportMeters / 2;
+          // Meters per pixel at this zoom and latitude
+          const metersPerPixel = 156543.03392 * Math.cos((center.lat * Math.PI) / 180) / Math.pow(2, zoom);
 
+          // Canvas dimensions in CSS pixels (not device pixels)
+          const cssWidth = overlayCanvas.clientWidth;
+          const cssHeight = overlayCanvas.clientHeight;
+
+          // Visible viewport size in meters
+          const viewportHeightMeters = cssHeight * metersPerPixel;
+          const viewportWidthMeters = cssWidth * metersPerPixel;
+
+          // For ArcRotateCamera: visible height = 2 * radius * tan(fov/2)
+          // So radius = viewportHeightMeters / (2 * tan(fov/2))
+          const fov = overlayCam.fov;
+          const radius = viewportHeightMeters / (2 * Math.tan(fov / 2));
+
+          // Position camera
           overlayCam.target = new Vector3(local.x, 0, local.y);
-          overlayCam.radius = Math.max(10, radius);
+          overlayCam.radius = Math.max(1, radius);
+
+          // Bearing: MapLibre bearing is clockwise, Babylon alpha is counterclockwise
+          // At bearing=0 (north up), alpha = -PI/2 (camera south, looking north)
+          // At bearing=90 (east up), alpha = -PI (camera west, looking east)
           overlayCam.alpha = -Math.PI / 2 - (bearing * Math.PI) / 180;
-          overlayCam.beta = (pitch * Math.PI) / 180 * 0.5; // partial pitch
+
+          // Pitch: MapLibre pitch is 0-60 degrees, Babylon beta is 0 (top) to PI/2 (horizon)
+          // At pitch=0 (top down), beta = 0.001
+          // At pitch=60, beta = 60 * PI/180
+          overlayCam.beta = Math.max(0.001, (pitch * Math.PI) / 180);
         }
         overlayScene.render();
       });
@@ -325,12 +346,12 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
           'line-color': road.color,
-          'line-width': Math.max(3, road.width),
-          'line-opacity': 0.8,
+          'line-width': 2,
+          'line-opacity': 0.4,
         },
       });
 
-      // Center line (dashed yellow)
+      // Center line (dashed yellow) — thin guide only
       map.addLayer({
         id: `road-center-${road.id}`,
         type: 'line',
@@ -340,6 +361,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           'line-color': '#ffeb3b',
           'line-width': 1,
           'line-dasharray': [2, 2],
+          'line-opacity': 0.5,
         },
       });
     }
