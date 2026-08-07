@@ -1,78 +1,94 @@
-Phase 2.5: Lane Network — persistent lane representation
+Phase 2.6: Road Mark Generator — semantic marking descriptions
 
-Introduces the canonical lane network that all downstream subsystems
-consume. Generated once from RoadV2, shared by markings, mesh, AI,
-OpenDRIVE, and debug overlays.
+Introduces the road mark generation layer that transforms LaneNetwork
+boundaries into structured marking descriptions. No mesh, no rendering
+— only logical marking data with parametric dash representation.
 
-New file: lane_network.hpp
+New file: road_mark_generator.hpp
   Separation of concerns:
-    lane_engine.hpp   = Data model
-    lane_geometry.hpp = Evaluation (single point)
-    lane_sampling.hpp = Sampling (polyline generation)
-    lane_network.hpp  = Persistent lane representation (THIS FILE)
+    lane_engine.hpp         = Data model
+    lane_geometry.hpp       = Evaluation
+    lane_sampling.hpp       = Sampling
+    lane_network.hpp        = Persistent lane network
+    road_mark_generator.hpp = Mark generation (THIS FILE)
 
-  LaneCenterline struct:
-    - laneId, type (Driving/Shoulder/Border)
-    - startS, endS, length
-    - vector<SamplePoint> samples (adaptively sampled)
-    - isDrivable(), isCenter/Left/Right()
-    - positions() convenience accessor
+  DashPattern struct:
+    - dashLength, gapLength, phase
+    - period() = dash + gap
+    - isDashAt(distance) — parametric dash placement
+    - Default: 3m dash, 9m gap (MUTCD broken line)
 
-  LaneBoundary struct:
-    - innerLaneId, outerLaneId (which lanes it separates)
-    - isRoadEdge (true for outer edge of road)
+  RoadMarkStyle struct:
+    - type (LaneRoadMarkType), color, width
+    - dashPattern (for dashed types)
+    - isDashed(), isSolid(), isDouble() queries
+
+  RoadMarkPolyline struct:
+    - style, innerLaneId, outerLaneId
+    - isRoadEdge, isCenterLine flags
     - startS, endS, length
-    - markType, markColor, markWidth (default markings assigned)
-    - vector<SamplePoint> samples
+    - vector<SamplePoint> samples (from LaneBoundary)
     - id() debug string
 
-  LaneNetwork struct:
-    - roadId, totalLength, numLaneSections
-    - vector<LaneCenterline> centerlines
-    - vector<LaneBoundary> boundaries
-    - findCenterline(laneId), findCenterlines(laneId) (multi-section)
-    - findBoundaries(innerId, outerId)
-    - roadEdges(), centerLines()
-    - maxDrivableLanes()
+  RoadMarkNetwork struct:
+    - vector<RoadMarkPolyline> markings
+    - findByType(), centerMarks(), edgeMarks()
+    - dashedMarks(), solidMarks() queries
 
-  generateLaneNetwork(road, params):
-    - Generates all centerlines and boundaries from RoadV2
-    - Handles multi-section roads (separate centerlines per section)
-    - Handles legacy roads (synthesized from width/laneCount)
-    - Uses adaptive sampling from 2.4
-    - Assigns default markings:
-      - Center line (adjacent to lane 0): dashed yellow
-      - Inner lane boundaries: dashed white
-      - Road edges: solid white
+  RoadMarkLibrary:
+    - Maps boundary roles to styles
+    - Default: MUTCD (center=dashed yellow, inner=dashed white, edge=solid white)
+    - european() — white center
+    - none() — no markings
 
-  Multi-section handling:
-    - Each section generates its own set of centerlines/boundaries
-    - Lane 1 in a 2→4 transition produces 2 centerlines
-    - Section s-ranges are [startS_i, startS_{i+1})
-    - Centerlines at section boundaries are position-continuous
+  generateRoadMarks(network, library):
+    - Transforms LaneBoundary → RoadMarkPolyline
+    - One source of truth: LaneNetwork provides geometry, library provides style
+    - Skips None-type markings
+    - No geometry recomputation
 
-Tests (20 new doctest, 407 total, 3662 assertions):
-  Basic generation (4):
-    - 2-lane: 3 centerlines, correct lane IDs, metadata, positions
-  Boundaries (3):
-    - 2-lane: 4 boundaries, correct positions, markings assigned
-    - LaneBoundary::id() string
-  4-lane road (2):
-    - 5 centerlines, 6 boundaries, 2 road edges
-    - All centerline positions verified
+  generateDashedSegments(mark):
+    - Returns (startDist, endDist) pairs for each dash
+    - Parametric — no tiny line segments
+    - Mesh generator (2.7) will tessellate from these
+
+Tests (26 new doctest, 433 total, 3863 assertions):
+  DashPattern (3):
+    - Default 3m/9m pattern
+    - isDashAt correctly identifies dash regions
+    - Phase offset shifts pattern
+    - Custom dotted pattern
+  RoadMarkStyle (3):
+    - Dashed/solid/double classification
+  RoadMarkLibrary (3):
+    - Default MUTCD styles
+    - European style (white center)
+    - none() disables all
+  2-lane road (2):
+    - 1 center dashed yellow, 2 edge solid white
+    - Marking positions match boundary positions
+  4-lane road (1):
+    - Center yellow, inner dashed white, edge solid
+  Lane transition (1):
+    - Markings continue across 2→4 section change
+    - Center marks position-continuous at boundary
   Multi-section (2):
-    - 2→4 lane transition: 8 centerlines, lane 1 has 2
-    - Centerline continuous across section boundary
+    - Custom library applies to all sections
+    - none() library produces no markings
   Legacy (1):
-    - Synthesized lane network works correctly
-  Queries (4):
-    - findBoundaries, roadEdges, centerLines, maxDrivableLanes
+    - Synthesized road generates markings
+  generateDashedSegments (3):
+    - Correct dash count for 100m line
+    - Solid line returns empty
+    - Respects custom dash pattern
+  Queries (3):
+    - findByType, dashedMarks/solidMarks, id() string
+  No mesh (1):
+    - RoadMarkPolyline contains only SamplePoints
+  Edge case (1):
+    - Empty network produces no markings
   Arc road (1):
-    - Network generates correctly with curvature
-  Edge cases (1):
-    - Empty road produces empty network
-  Performance (1):
-    - 1000-segment, 8 lanes, full network generation
+    - Markings follow curvature, dashed segments work
 
-No rendering, no markings decoration, no mesh. Those are 2.6+.
+No triangles, no UVs, no render buffers. Those are 2.7.
 All 130 vitest tests pass (no regression).

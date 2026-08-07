@@ -7199,3 +7199,513 @@ TEST_CASE("2.5 Performance: 1000-segment road, 8 lanes, full network") {
     // Should be well under interactive budget
     CHECK(ms < 1000.0);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.6 — Road Mark Generator Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for DashPattern, RoadMarkStyle, RoadMarkPolyline,
+// RoadMarkNetwork, RoadMarkLibrary, generateRoadMarks(),
+// and generateDashedSegments().
+//
+// Verifies that LaneNetwork is transformed into semantic marking
+// descriptions without any mesh generation.
+// ═══════════════════════════════════════════════════════════
+
+#include "road_mark_generator.hpp"
+
+using geo::DashPattern;
+using geo::RoadMarkStyle;
+using geo::RoadMarkPolyline;
+using geo::RoadMarkNetwork;
+using geo::RoadMarkLibrary;
+using geo::generateRoadMarks;
+using geo::generateDashedSegments;
+
+// ═══════════════════════════════════════════════════════════
+// DashPattern Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 DashPattern: default is 3m dash, 9m gap") {
+    DashPattern dp;
+    CHECK(dp.dashLength == doctest::Approx(3.0));
+    CHECK(dp.gapLength == doctest::Approx(9.0));
+    CHECK(dp.period() == doctest::Approx(12.0));
+}
+
+TEST_CASE("2.6 DashPattern: isDashAt correctly identifies dash regions") {
+    DashPattern dp(3.0, 9.0);  // 3m dash, 9m gap, period=12
+
+    CHECK(dp.isDashAt(0.0) == true);    // start of dash
+    CHECK(dp.isDashAt(2.9) == true);    // end of dash
+    CHECK(dp.isDashAt(3.0) == false);   // start of gap
+    CHECK(dp.isDashAt(11.9) == false);  // end of gap
+    CHECK(dp.isDashAt(12.0) == true);   // next dash starts
+    CHECK(dp.isDashAt(14.9) == true);   // middle of next dash
+    CHECK(dp.isDashAt(24.0) == true);   // third dash
+}
+
+TEST_CASE("2.6 DashPattern: phase offsets the pattern") {
+    DashPattern dp(3.0, 9.0, 5.0);  // phase=5 → first dash at 5-8
+
+    CHECK(dp.isDashAt(0.0) == false);   // in gap before phase
+    CHECK(dp.isDashAt(4.9) == false);   // still gap
+    CHECK(dp.isDashAt(5.0) == true);    // dash starts
+    CHECK(dp.isDashAt(7.9) == true);    // near end of dash
+    CHECK(dp.isDashAt(8.0) == false);   // gap starts
+    CHECK(dp.isDashAt(8.1) == false);   // gap
+}
+
+TEST_CASE("2.6 DashPattern: custom pattern") {
+    DashPattern dp(0.1, 0.1);  // dotted: 0.1m dash, 0.1m gap
+
+    CHECK(dp.period() == doctest::Approx(0.2));
+    CHECK(dp.isDashAt(0.0) == true);
+    CHECK(dp.isDashAt(0.1) == false);
+    CHECK(dp.isDashAt(0.2) == true);
+}
+
+// ═══════════════════════════════════════════════════════════
+// RoadMarkStyle Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 RoadMarkStyle: dashed type isDashed()") {
+    RoadMarkStyle s;
+    s.type = LaneRoadMarkType::Dashed;
+    CHECK(s.isDashed() == true);
+    CHECK(s.isSolid() == false);
+}
+
+TEST_CASE("2.6 RoadMarkStyle: solid type isSolid()") {
+    RoadMarkStyle s;
+    s.type = LaneRoadMarkType::Solid;
+    CHECK(s.isSolid() == true);
+    CHECK(s.isDashed() == false);
+}
+
+TEST_CASE("2.6 RoadMarkStyle: double solid isDouble()") {
+    RoadMarkStyle s;
+    s.type = LaneRoadMarkType::SolidSolid;
+    CHECK(s.isDouble() == true);
+    CHECK(s.isSolid() == true);
+}
+
+// ═══════════════════════════════════════════════════════════
+// RoadMarkLibrary Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 RoadMarkLibrary: default MUTCD styles") {
+    RoadMarkLibrary lib;
+
+    CHECK(lib.centerStyle.color == "yellow");
+    CHECK(lib.centerStyle.isDashed() == true);
+
+    CHECK(lib.innerStyle.color == "white");
+    CHECK(lib.innerStyle.isDashed() == true);
+
+    CHECK(lib.edgeStyle.color == "white");
+    CHECK(lib.edgeStyle.isSolid() == true);
+}
+
+TEST_CASE("2.6 RoadMarkLibrary: European style has white center") {
+    RoadMarkLibrary lib = RoadMarkLibrary::european();
+
+    CHECK(lib.centerStyle.color == "white");
+    CHECK(lib.edgeStyle.color == "white");
+}
+
+TEST_CASE("2.6 RoadMarkLibrary: none() disables all markings") {
+    RoadMarkLibrary lib = RoadMarkLibrary::none();
+
+    CHECK(lib.centerStyle.type == LaneRoadMarkType::None);
+    CHECK(lib.innerStyle.type == LaneRoadMarkType::None);
+    CHECK(lib.edgeStyle.type == LaneRoadMarkType::None);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 2-Lane Road Mark Generation
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 2-lane road: one center dashed yellow, two edge solid white") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // 2-lane road has 4 boundaries:
+    //   (0,1) center right, (0,-1) center left, (1,0) right edge, (-1,0) left edge
+    CHECK(marks.numMarkings() == 4);
+
+    // 2 center marks (left and right side of center)
+    auto centerMarks = marks.centerMarks();
+    CHECK(centerMarks.size() == 2);
+    for (const auto* m : centerMarks) {
+        CHECK(m->style.color == "yellow");
+        CHECK(m->style.isDashed() == true);
+        CHECK(m->isCenterLine == true);
+    }
+
+    // 2 edge marks
+    auto edgeMarks = marks.edgeMarks();
+    CHECK(edgeMarks.size() == 2);
+    for (const auto* m : edgeMarks) {
+        CHECK(m->style.color == "white");
+        CHECK(m->style.isSolid() == true);
+        CHECK(m->isRoadEdge == true);
+    }
+}
+
+TEST_CASE("2.6 2-lane road: marking positions match boundary positions") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // Center mark should be at y=0
+    auto centerMarks = marks.centerMarks();
+    for (const auto* m : centerMarks) {
+        for (const auto& s : m->samples) {
+            CHECK(s.position.y == doctest::Approx(0.0));
+        }
+    }
+
+    // Edge marks should be at y=±3.5
+    auto edgeMarks = marks.edgeMarks();
+    for (const auto* m : edgeMarks) {
+        // Right edge at y=-3.5, left edge at y=+3.5
+        double y = m->samples[0].position.y;
+        CHECK(std::abs(y) == doctest::Approx(3.5));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 4-Lane Road Mark Generation
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 4-lane road: center yellow, inner dashed white, edge solid") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // 4-lane road boundaries:
+    //   Right: (0,1), (1,2), (2,edge) = 3
+    //   Left:  (0,-1), (-1,-2), (-2,edge) = 3
+    //   Total: 6 markings
+    CHECK(marks.numMarkings() == 6);
+
+    // 2 center marks (yellow dashed)
+    CHECK(marks.centerMarks().size() == 2);
+
+    // 2 edge marks (solid white)
+    CHECK(marks.edgeMarks().size() == 2);
+
+    // 2 inner marks (dashed white) = total - center - edge
+    int innerCount = marks.numMarkings() - marks.centerMarks().size() - marks.edgeMarks().size();
+    CHECK(innerCount == 2);
+
+    // Verify inner marks are white dashed
+    for (const auto& m : marks.markings) {
+        if (!m.isCenterLine && !m.isRoadEdge) {
+            CHECK(m.style.color == "white");
+            CHECK(m.style.isDashed() == true);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Lane Transition Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 Lane transition: markings continue across 2→4 section change") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // Section 1: 4 boundaries → 4 markings
+    // Section 2: 6 boundaries → 6 markings
+    // Total: 10 markings
+    CHECK(marks.numMarkings() == 10);
+
+    // Center marks: 2 per section = 4
+    CHECK(marks.centerMarks().size() == 4);
+
+    // Edge marks: 2 per section = 4
+    CHECK(marks.edgeMarks().size() == 4);
+
+    // Center marks should be continuous across boundary
+    auto centerMarks = marks.centerMarks();
+    // Find the two center marks on the right side (innerLaneId=0, outerLaneId=1)
+    std::vector<const RoadMarkPolyline*> rightCenter;
+    for (const auto* m : centerMarks) {
+        if (m->innerLaneId == 0 && m->outerLaneId == 1) {
+            rightCenter.push_back(m);
+        }
+    }
+    CHECK(rightCenter.size() == 2);  // one per section
+
+    // End of first should match start of second
+    Point2D end1 = rightCenter[0]->samples.back().position;
+    Point2D start2 = rightCenter[1]->samples.front().position;
+    CHECK(end1.x == doctest::Approx(start2.x));
+    CHECK(end1.y == doctest::Approx(start2.y));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Section with Different Styles
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 Multi-section: custom library applies to all sections") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Use European style (white center)
+    RoadMarkLibrary lib = RoadMarkLibrary::european();
+    RoadMarkNetwork marks = generateRoadMarks(net, lib);
+
+    // All center marks should be white
+    for (const auto* m : marks.centerMarks()) {
+        CHECK(m->style.color == "white");
+    }
+}
+
+TEST_CASE("2.6 Multi-section: none() library produces no markings") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+
+    RoadMarkLibrary lib = RoadMarkLibrary::none();
+    RoadMarkNetwork marks = generateRoadMarks(net, lib);
+
+    CHECK(marks.numMarkings() == 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Legacy Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 Legacy: synthesized road generates markings") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+    // No explicit LaneSection
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    CHECK(marks.numMarkings() == 4);  // 2 center + 2 edge
+
+    // Center marks at y=0
+    for (const auto* m : marks.centerMarks()) {
+        CHECK(m->samples[0].position.y == doctest::Approx(0.0));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// generateDashedSegments Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 generateDashedSegments: correct dash segments for 100m line") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // Find a dashed center mark
+    auto centerMarks = marks.centerMarks();
+    REQUIRE(!centerMarks.empty());
+
+    const RoadMarkPolyline* mark = centerMarks[0];
+    auto segments = generateDashedSegments(*mark);
+
+    // 100m / 12m period = ~8 dashes
+    CHECK(segments.size() >= 7);
+    CHECK(segments.size() <= 9);
+
+    // Each segment should be 3m long (or less at the end)
+    for (size_t i = 0; i < segments.size(); i++) {
+        double len = segments[i].second - segments[i].first;
+        CHECK(len <= 3.0 + 0.001);
+        CHECK(len > 0.0);
+    }
+
+    // First segment starts at 0 (phase=0)
+    CHECK(segments[0].first == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.6 generateDashedSegments: solid line returns single segment") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // Find a solid edge mark
+    auto edgeMarks = marks.edgeMarks();
+    REQUIRE(!edgeMarks.empty());
+
+    const RoadMarkPolyline* mark = edgeMarks[0];
+    auto segments = generateDashedSegments(*mark);
+
+    // Solid line → degenerate: single segment covering full length
+    // (but generateDashedSegments only processes dashed types)
+    // For solid, it returns empty since isDashed() is false
+    CHECK(segments.empty());
+}
+
+TEST_CASE("2.6 generateDashedSegments: respects dash pattern") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Custom library with short dashes
+    RoadMarkLibrary lib;
+    lib.centerStyle.dashPattern = DashPattern(1.0, 1.0);  // 1m dash, 1m gap
+
+    RoadMarkNetwork marks = generateRoadMarks(net, lib);
+
+    auto centerMarks = marks.centerMarks();
+    REQUIRE(!centerMarks.empty());
+
+    auto segments = generateDashedSegments(*centerMarks[0]);
+
+    // 100m / 2m period = 50 dashes
+    CHECK(segments.size() >= 45);
+    CHECK(segments.size() <= 55);
+
+    // Each dash should be 1m
+    for (const auto& seg : segments) {
+        double len = seg.second - seg.first;
+        CHECK(len == doctest::Approx(1.0).epsilon(0.01));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// RoadMarkNetwork Query Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 RoadMarkNetwork: findByType returns correct marks") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    auto dashed = marks.findByType(LaneRoadMarkType::Dashed);
+    CHECK(dashed.size() == 2);  // 2 center marks
+
+    auto solid = marks.findByType(LaneRoadMarkType::Solid);
+    CHECK(solid.size() == 2);  // 2 edge marks
+}
+
+TEST_CASE("2.6 RoadMarkNetwork: dashedMarks and solidMarks queries") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    CHECK(marks.dashedMarks().size() == 2);
+    CHECK(marks.solidMarks().size() == 2);
+}
+
+TEST_CASE("2.6 RoadMarkPolyline: id() string is correct") {
+    RoadMarkPolyline m;
+    m.innerLaneId = 0;
+    m.outerLaneId = 1;
+    m.style.color = "yellow";
+    CHECK(m.id() == "mark(0,1,yellow)");
+}
+
+// ═══════════════════════════════════════════════════════════
+// No Mesh Verification
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 No mesh: RoadMarkPolyline contains only SamplePoints") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    // Verify markings contain position data, not mesh data
+    for (const auto& m : marks.markings) {
+        // Should have samples (positions)
+        CHECK(m.numSamples() >= 2);
+
+        // Should NOT have indices, vertices, UVs, or normals
+        // (these don't exist in the struct — verified by compilation)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Edge Cases
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 Edge case: empty network produces no markings") {
+    LaneNetwork net;  // empty
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    CHECK(marks.numMarkings() == 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Arc Road Mark Generation
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.6 Arc road: markings follow curvature") {
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    CHECK(marks.numMarkings() == 4);
+
+    // Center marks should have more samples due to curvature
+    auto centerMarks = marks.centerMarks();
+    for (const auto* m : centerMarks) {
+        CHECK(m->numSamples() >= 3);  // arc needs more than 2
+    }
+
+    // Dashed segments should still work on curved markings
+    auto segments = generateDashedSegments(*centerMarks[0]);
+    CHECK(segments.size() >= 5);
+}
