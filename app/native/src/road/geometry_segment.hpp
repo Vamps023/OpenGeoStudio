@@ -45,6 +45,26 @@ enum class GeometryType {
 // - length() returns total arc length
 // - clone() returns a deep copy (for undo/redo snapshot compatibility)
 //
+// ─── Curvature sign convention ─────────────────────────────
+// Positive curvature = left turn (CCW), matching OpenDRIVE.
+// Negative curvature = right turn (CW).
+// This applies to ArcSegment (constant curvature) and SpiralSegment
+// (linearly varying curvature). LineSegment curvature is always 0.
+// BezierSegment reports signed curvature from the parametric formula.
+//
+// Parameterization (Line/Arc/Spiral):
+//   All three store: startPoint, startHeading, [curvature...], length.
+//   evaluateDS integrates heading from startHeading over arc-length:
+//     heading(s) = startHeading + ∫₀ˢ κ(u) du
+//     position(s) = startPoint + ∫₀ˢ [cos(heading(u)), sin(heading(u))] du
+//   Line:  κ(s) = 0           → heading constant, position linear
+//   Arc:   κ(s) = κ (constant) → heading linear, position circular
+//   Spiral: κ(s) = κ₀ + (κ₁-κ₀)·s/L → heading quadratic, position Fresnel
+//
+//   Bezier is the exception (Q2): stores absolute P0–P3 control points,
+//   not start+heading+length. It satisfies the same evaluateDS contract
+//   but uses de Casteljau + arc-length lookup table internally.
+//
 class GeometrySegment {
 public:
     virtual ~GeometrySegment() = default;
@@ -165,6 +185,104 @@ public:
 
     std::unique_ptr<GeometrySegment> clone() const override {
         return std::make_unique<LineSegment>(*this);
+    }
+};
+
+// ─── Arc Segment ───────────────────────────────────────────
+//
+// Circular arc with constant curvature.
+//
+// Storage (OpenDRIVE-style): startPoint, startHeading, curvature, arcLength.
+//   - Positive curvature = left turn (CCW)
+//   - Negative curvature = right turn (CW)
+//   - curvature = 0 is invalid (use LineSegment instead)
+//
+// Derived accessors (computed from stored fields, not a second source of truth):
+//   - radius() = 1 / |curvature|
+//   - center() = startPoint + normalLeft * radius, where normalLeft is
+//     90° CCW from startHeading, sign-adjusted for curvature direction
+//
+// evaluateDS(s):
+//   heading(s) = startHeading + curvature * s
+//   The arc sweeps angle = curvature * arcLength total.
+//   Position is computed by integrating along the circle:
+//     For a circle of radius R centered at C, starting at angle θ₀:
+//       angle(s) = θ₀ + curvature * s
+//       x(s) = C.x + R * cos(angle(s))
+//       y(s) = C.y + R * sin(angle(s))
+//
+class ArcSegment : public GeometrySegment {
+public:
+    Point2D startPoint_;
+    double startHeading_;
+    double curvature_;   // signed: + = left/CCW, - = right/CW
+    double arcLength_;
+
+    ArcSegment() = default;
+    ArcSegment(const Point2D& start, double heading, double curvature, double length)
+        : startPoint_(start), startHeading_(heading), curvature_(curvature), arcLength_(length) {}
+
+    // ─── Derived accessors (geometric view, not stored) ───
+
+    // Radius (always positive)
+    double radius() const {
+        return std::abs(1.0 / curvature_);
+    }
+
+    // Arc center (computed from start point, heading, and curvature)
+    // For left turn (κ>0): center is to the left of the start heading
+    // For right turn (κ<0): center is to the right of the start heading
+    Point2D center() const {
+        double r = 1.0 / curvature_;  // signed radius (negative for right turn)
+        // Left normal of start heading: (-sin(h), cos(h))
+        // Center = start + leftNormal * r
+        // For κ>0 (left turn): r>0, center is left ✓
+        // For κ<0 (right turn): r<0, center is right ✓ (leftNormal * negative = right)
+        double nx = -std::sin(startHeading_);
+        double ny = std::cos(startHeading_);
+        return {startPoint_.x + nx * r, startPoint_.y + ny * r};
+    }
+
+    // Total sweep angle (radians) — signed, same sign as curvature
+    double sweepAngle() const {
+        return curvature_ * arcLength_;
+    }
+
+    // ─── Core interface ───
+
+    void evaluateDS(double s, double& x, double& y, double& heading) const override {
+        // Clamp s to valid range
+        if (s < 0.0) s = 0.0;
+        if (s > arcLength_) s = arcLength_;
+
+        heading = startHeading_ + curvature_ * s;
+
+        // Compute position on circle
+        // Start angle from center to startPoint:
+        //   For left turn (κ>0): startAngle = startHeading - π/2
+        //   For right turn (κ<0): startAngle = startHeading + π/2
+        // Unified: startAngle = startHeading - sign(κ) * π/2
+        // But using the center() approach is cleaner:
+        Point2D c = center();
+        double r = radius();
+        // Angle from center to start point
+        double startAngleFromCenter = std::atan2(startPoint_.y - c.y, startPoint_.x - c.x);
+        // Current angle: startAngle + (curvature * s) — same sign as curvature
+        // For left turn (κ>0): angle increases (CCW) ✓
+        // For right turn (κ<0): angle decreases (CW) ✓
+        double angle = startAngleFromCenter + curvature_ * s;
+        x = c.x + r * std::cos(angle);
+        y = c.y + r * std::sin(angle);
+    }
+
+    double curvatureDS(double /*s*/) const override { return curvature_; }
+
+    double length() const override { return arcLength_; }
+
+    GeometryType type() const override { return GeometryType::Arc; }
+
+    std::unique_ptr<GeometrySegment> clone() const override {
+        return std::make_unique<ArcSegment>(*this);
     }
 };
 

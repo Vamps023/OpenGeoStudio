@@ -1,8 +1,43 @@
-Fix TypeScript deprecation: moduleResolution 'node' → 'node10'
+Phase 1.1-1.2: GeometrySegment base + LineSegment + doctest
 
-The 'node' value for moduleResolution is deprecated in TypeScript 5.9.
-Changed to the explicit 'node10' name (same resolution strategy, no
-behavior change) and removed the unnecessary ignoreDeprecations flag.
+First step of the road engine rewrite (Phase 1 of
+docs/ROAD_ENGINE_NEW_ARCHITECTURE.md). This is purely additive —
+no existing files are modified, the legacy ControlPoint[] model
+is untouched.
+
+New files:
+- geometry_segment.hpp: GeometrySegment abstract base class with
+  evaluateDS/curvatureDS/length/type/clone interface, plus
+  LineSegment implementation. Includes convenience methods
+  (positionAt, tangentAt, normalAt, headingAt, startPoint,
+  endPoint, sampleUniform, sampleAdaptive).
+- geometry_segment_tests.cpp: 22 doctest unit tests for
+  LineSegment (59 assertions) covering construction, evaluateDS
+  at s=0/midpoint/end, heading constancy, curvature=0, length,
+  clamping, zero-length segments, tangent/normal vectors,
+  uniform sampling, clone independence.
+- doctest.h: doctest v2.4.12 header-only test framework (Q5
+  decision: C++ tests for pure geometry math, vitest for
+  integration/IPC tests).
+
+Key design decisions (from docs/ROAD_ENGINE_MIGRATION_PLAN.md):
+- unique_ptr<GeometrySegment> with virtual clone() for deep-copy
+  (undo/redo compatibility — Q1)
+- Absolute coordinates in segments (Q2)
+- s is arc-length in meters [0, length()]
+- clone() required from day 1 (avoid undo/redo breakage later)
+
+Build system:
+- binding.gyp: added geometry_tests executable target alongside
+  the existing road_engine_native addon target
+
+Test results:
+- C++ doctest: 22/22 passed (59 assertions)
+- vitest: 41/41 passed (no regression)
+- TypeScript: clean compile (tsc + vite)
+
+Also updates docs/ROAD_ENGINE_MIGRATION_PLAN.md with finalized
+Q1-Q5 decisions and the doctest test split.
 
 Generated with Devin (https://devin.ai)
 
