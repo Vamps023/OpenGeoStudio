@@ -31,7 +31,7 @@ import {
 } from '../shared/types';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
-  MeshBuilder, StandardMaterial, Color3, Mesh, LinesMesh, Texture,
+  MeshBuilder, StandardMaterial, Color3, Color4, Mesh, LinesMesh, Texture,
   PointerEventTypes, PointerInfo,
 } from '@babylonjs/core';
 
@@ -173,6 +173,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
     });
 
+    // Update overlay when map moves
+    map.on('move', () => {
+      // Camera sync happens in render loop automatically
+    });
+    map.on('load', () => {
+      updateOverlayRoads();
+    });
+
     mapRef.current = map;
 
     // ─── 3D Road Overlay (Babylon.js on top of MapLibre) ─────
@@ -186,8 +194,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         alpha: true, // transparent background
       });
       const overlayScene = new Scene(overlayEngine);
-      overlayScene.clearColor = new Color3(0, 0, 0);
-      (overlayScene as any)._clearColor.alpha = 0; // fully transparent
+      // Use Color4 with alpha=0 for fully transparent background
+      overlayScene.clearColor = new Color4(0, 0, 0, 0);
 
       overlayEngineRef.current = overlayEngine;
       overlaySceneRef.current = overlayScene;
@@ -228,13 +236,21 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         overlayScene.render();
       });
 
-      // Resize handler
+      // Resize handler — also observe the container element
       const onOverlayResize = () => overlayEngine.resize();
       window.addEventListener('resize', onOverlayResize);
+
+      // ResizeObserver for the map container (handles layout changes)
+      const resizeObserver = new ResizeObserver(() => {
+        overlayEngine.resize();
+      });
+      if (mapContainerRef.current) {
+        resizeObserver.observe(mapContainerRef.current);
+      }
     }
 
-    // Update overlay roads
-    updateOverlayRoads();
+    // Update overlay roads after a short delay (let canvas initialize)
+    setTimeout(() => updateOverlayRoads(), 100);
 
     return () => {
       map.remove();
@@ -595,6 +611,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       road_1lane: '/assets/scaner-roads/textures/ROAD_1_NoMark_NEW_1voie.png',
       cobblestone: '/assets/scaner-roads/textures/urban_cobblestone.png',
       pavement: '/assets/scaner-roads/textures/pavement.png',
+      sidewalk: '/assets/scaner-roads/textures/sidewalk.png',
     };
     const url = textureMap[name];
     if (!url) return null;
@@ -704,6 +721,91 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         }
       }
 
+      // ─── Curbs (raised edges on both sides) ─────────────────
+      if (road.profile?.hasCurb) {
+        const curbWidth = 0.3; // 30cm curb
+        const curbHeight = 0.15; // 15cm raised
+        for (const side of [-1, 1]) {
+          const curbLeft: Vector3[] = [];
+          const curbRight: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i];
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+            else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len;
+            const ny = tx / len;
+            const innerOffset = halfWidth * side;
+            const outerOffset = (halfWidth + curbWidth) * side;
+            curbLeft.push(new Vector3(s.x + nx * innerOffset, s.z + curbHeight, s.y + ny * innerOffset));
+            curbRight.push(new Vector3(s.x + nx * outerOffset, s.z + curbHeight, s.y + ny * outerOffset));
+          }
+          const curbMesh = MeshBuilder.CreateRibbon(`overlay_curb_${road.id}_${side}`, {
+            pathArray: [curbLeft, curbRight],
+            closeArray: false,
+            closePath: false,
+          }, scene);
+          const curbMat = new StandardMaterial(`overlay_curbMat_${road.id}_${side}`, scene);
+          const curbTex = getTexture('pavement', scene);
+          if (curbTex) {
+            curbMat.diffuseTexture = curbTex;
+            curbMat.diffuseColor = new Color3(0.8, 0.8, 0.8);
+          } else {
+            curbMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+          }
+          curbMat.specularColor = new Color3(0, 0, 0);
+          curbMesh.material = curbMat;
+          curbMesh.isPickable = false;
+          overlayRoadMeshesRef.current.set(`overlay_curb_${road.id}_${side}`, curbMesh);
+        }
+      }
+
+      // ─── Sidewalks (wider walking surface outside curbs) ────
+      if (road.profile?.hasSidewalk) {
+        const sidewalkWidth = 2.0; // 2m wide sidewalk
+        const sidewalkHeight = 0.15; // same level as curb
+        const curbWidth = road.profile?.hasCurb ? 0.3 : 0;
+        for (const side of [-1, 1]) {
+          const swLeft: Vector3[] = [];
+          const swRight: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i];
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+            else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len;
+            const ny = tx / len;
+            const innerOffset = (halfWidth + curbWidth) * side;
+            const outerOffset = (halfWidth + curbWidth + sidewalkWidth) * side;
+            swLeft.push(new Vector3(s.x + nx * innerOffset, s.z + sidewalkHeight, s.y + ny * innerOffset));
+            swRight.push(new Vector3(s.x + nx * outerOffset, s.z + sidewalkHeight, s.y + ny * outerOffset));
+          }
+          const swMesh = MeshBuilder.CreateRibbon(`overlay_sw_${road.id}_${side}`, {
+            pathArray: [swLeft, swRight],
+            closeArray: false,
+            closePath: false,
+          }, scene);
+          const swMat = new StandardMaterial(`overlay_swMat_${road.id}_${side}`, scene);
+          const swTex = getTexture('cobblestone', scene);
+          if (swTex) {
+            swMat.diffuseTexture = swTex;
+            swMat.diffuseColor = new Color3(0.9, 0.9, 0.9);
+            swTex.uScale = road.points.length * 2;
+            swTex.vScale = 2;
+          } else {
+            swMat.diffuseColor = new Color3(0.7, 0.7, 0.7);
+          }
+          swMat.specularColor = new Color3(0, 0, 0);
+          swMesh.material = swMat;
+          swMesh.isPickable = false;
+          overlayRoadMeshesRef.current.set(`overlay_sw_${road.id}_${side}`, swMesh);
+        }
+      }
+
       // Control point markers (small spheres)
       for (let i = 0; i < road.points.length; i++) {
         const p = road.points[i];
@@ -789,6 +891,71 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const centerLine = MeshBuilder.CreateLines(`center_${road.id}`, { points: centerPoints }, scene);
         centerLine.color = new Color3(1, 0.9, 0.3);
         centerLine.isPickable = false;
+      }
+
+      // ─── Curbs in 3D view ──────────────────────────────────
+      if (road.profile?.hasCurb) {
+        const curbWidth = 0.3;
+        const curbHeight = 0.15;
+        for (const side of [-1, 1]) {
+          const cL: Vector3[] = [];
+          const cR: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i];
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+            else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len;
+            const ny = tx / len;
+            cL.push(new Vector3(s.x + nx * halfWidth * side, s.z + curbHeight, s.y + ny * halfWidth * side));
+            cR.push(new Vector3(s.x + nx * (halfWidth + curbWidth) * side, s.z + curbHeight, s.y + ny * (halfWidth + curbWidth) * side));
+          }
+          const curbMesh = MeshBuilder.CreateRibbon(`curb_${road.id}_${side}`, { pathArray: [cL, cR] }, scene);
+          const curbMat = new StandardMaterial(`curbMat_${road.id}_${side}`, scene);
+          curbMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+          curbMat.specularColor = new Color3(0, 0, 0);
+          curbMesh.material = curbMat;
+          curbMesh.isPickable = false;
+          roadMeshesRef.current.set(`curb_${road.id}_${side}`, curbMesh);
+        }
+      }
+
+      // ─── Sidewalks in 3D view ──────────────────────────────
+      if (road.profile?.hasSidewalk) {
+        const swWidth = 2.0;
+        const swHeight = 0.15;
+        const curbW = road.profile?.hasCurb ? 0.3 : 0;
+        for (const side of [-1, 1]) {
+          const sL: Vector3[] = [];
+          const sR: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i];
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+            else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len;
+            const ny = tx / len;
+            sL.push(new Vector3(s.x + nx * (halfWidth + curbW) * side, s.z + swHeight, s.y + ny * (halfWidth + curbW) * side));
+            sR.push(new Vector3(s.x + nx * (halfWidth + curbW + swWidth) * side, s.z + swHeight, s.y + ny * (halfWidth + curbW + swWidth) * side));
+          }
+          const swMesh = MeshBuilder.CreateRibbon(`sw_${road.id}_${side}`, { pathArray: [sL, sR] }, scene);
+          const swMat = new StandardMaterial(`swMat_${road.id}_${side}`, scene);
+          const swTex = getTexture('cobblestone', scene);
+          if (swTex) {
+            swMat.diffuseTexture = swTex;
+            swMat.diffuseColor = new Color3(0.9, 0.9, 0.9);
+          } else {
+            swMat.diffuseColor = new Color3(0.7, 0.7, 0.7);
+          }
+          swMat.specularColor = new Color3(0, 0, 0);
+          swMesh.material = swMat;
+          swMesh.isPickable = false;
+          roadMeshesRef.current.set(`sw_${road.id}_${side}`, swMesh);
+        }
       }
 
       createControlPointMeshes(road, refLat, refLon, scene, selection);
