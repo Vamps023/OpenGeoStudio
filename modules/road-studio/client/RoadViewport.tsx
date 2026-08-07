@@ -140,6 +140,31 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     });
 
     map.on('click', (e) => {
+      // Shift+click = road selection for intersection creation
+      if (e.originalEvent.shiftKey) {
+        // Query features at click point to find road surface layers
+        const features = map.queryRenderedFeatures(e.point, {
+          layers: roadsRef.current.map((r) => `rd-surface-${r.id}`).filter((id) => map.getLayer(id)),
+        });
+        if (features.length > 0) {
+          const roadId = features[0].properties.roadId;
+          if (roadId) {
+            store.toggleRoadSelection(roadId);
+          }
+        }
+        return;
+      }
+
+      // Check if clicking on a control point (cp-dot layer)
+      if (map.getLayer('cp-dot')) {
+        const cpFeatures = map.queryRenderedFeatures(e.point, { layers: ['cp-dot'] });
+        if (cpFeatures.length > 0) {
+          const { roadId, pointIndex } = cpFeatures[0].properties;
+          store.setSelection({ roadId, pointIndices: [pointIndex], handle: null });
+          return;
+        }
+      }
+
       const tool = toolRef.current;
       if (tool !== 'line' && tool !== 'pen') return;
 
@@ -166,6 +191,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         store.pushHistory('Add control point');
         store.addControlPoint(drawingId, finalLat, finalLon);
       }
+    });
+
+    // Cursor: pointer when hovering over a road surface or control point
+    map.on('mousemove', (e) => {
+      const roadLayers = roadsRef.current.map((r) => `rd-surface-${r.id}`).filter((id) => map.getLayer(id));
+      const cpLayers = map.getLayer('cp-dot') ? ['cp-dot'] : [];
+      const features = map.queryRenderedFeatures(e.point, { layers: [...roadLayers, ...cpLayers] });
+      map.getCanvas().style.cursor = features.length > 0 ? 'pointer' : '';
     });
 
     mapRef.current = map;
@@ -337,22 +370,9 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       });
 
       // Shift+click on road surface = toggle road selection (for intersection)
-      map.on('click', `rd-surface-${road.id}`, (e: any) => {
-        if (e.originalEvent.shiftKey) {
-          e.originalEvent.stopPropagation();
-          const feature = e.features?.[0];
-          if (feature) {
-            const rid = feature.properties.roadId;
-            store.toggleRoadSelection(rid);
-          }
-        }
-      });
-      map.on('mouseenter', `rd-surface-${road.id}`, () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', `rd-surface-${road.id}`, () => {
-        map.getCanvas().style.cursor = '';
-      });
+      // NOTE: Handler is registered globally once (in map init), not per-road.
+      // We use queryRenderedFeatures to find which road was clicked.
+      // Cursor hover handled globally too.
 
       // ─── Layer 4: Road outline (thin line on edges) ────────────
       const outlineSrcId = `rd-outline-src-${road.id}`;
@@ -679,17 +699,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         },
       });
 
-      map.on('click', 'cp-dot', (e: any) => {
-        e.originalEvent.stopPropagation();
-        const feature = e.features?.[0];
-        if (feature) {
-          const { roadId, pointIndex } = feature.properties;
-          store.setSelection({ roadId, pointIndices: [pointIndex], handle: null });
-        }
-      });
-
-      map.on('mouseenter', 'cp-dot', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'cp-dot', () => { map.getCanvas().style.cursor = ''; });
+      // NOTE: cp-dot click handler is registered globally in map init.
     }
   }
 
