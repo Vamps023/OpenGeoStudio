@@ -12,6 +12,7 @@ import {
   Check, Mountain, Grid3x3, Magnet, Square, Box,
 } from 'lucide-react';
 import { useRoadStudioStore } from './store/roadStudioStore';
+import { ROAD_PROFILES } from '../shared/types';
 
 const ToolButton: React.FC<{
   active: boolean;
@@ -71,6 +72,7 @@ export const RoadToolbar: React.FC = () => {
   const setPointType = useRoadStudioStore((s) => s.setPointType);
   const viewMode = useRoadStudioStore((s) => s.viewMode);
   const setViewMode = useRoadStudioStore((s) => s.setViewMode);
+  const setRoadProfile = useRoadStudioStore((s) => s.setRoadProfile);
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -199,6 +201,31 @@ export const RoadToolbar: React.FC = () => {
           >
             {selectedPoint.type === 'smooth' ? 'Smooth' : 'Corner'}
           </button>
+        </>
+      )}
+
+      {/* ─── Road Profile (SCANeR-style) ──────── */}
+      {selectedRoad && (
+        <>
+          <div className="w-px h-6 bg-edge mx-1" />
+          <div className="flex items-center gap-1.5 px-2 h-8 rounded-md bg-surface-elevated">
+            <span className="text-2xs text-fg-muted">Profile</span>
+            <select
+              value={selectedRoad.profile?.type || 'city_2x1'}
+              onChange={(e) => {
+                const profileType = e.target.value as any;
+                const profile = { ...ROAD_PROFILES[profileType] };
+                if (profile) setRoadProfile(selectedRoad.id, profile);
+              }}
+              className="bg-transparent text-xs text-fg-primary outline-none cursor-pointer"
+            >
+              <option value="city_2x1" className="bg-surface-base">City 2×1</option>
+              <option value="city_2x2" className="bg-surface-base">City 2×2</option>
+              <option value="country_2x1" className="bg-surface-base">Country 2×1</option>
+              <option value="highway_2x3" className="bg-surface-base">Highway 2×3</option>
+              <option value="custom" className="bg-surface-base">Custom</option>
+            </select>
+          </div>
         </>
       )}
 

@@ -22,14 +22,16 @@ import { useRoadStudioStore } from './store/roadStudioStore';
 import {
   type Road,
   type ControlPoint,
+  type RoadProfile,
   geoToLocal,
   localToGeo,
   sampleRoad,
   generateId,
+  ROAD_PROFILES,
 } from '../shared/types';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
-  MeshBuilder, StandardMaterial, Color3, Mesh, LinesMesh,
+  MeshBuilder, StandardMaterial, Color3, Mesh, LinesMesh, Texture,
   PointerEventTypes, PointerInfo,
 } from '@babylonjs/core';
 
@@ -41,6 +43,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   // ─── Refs for both views ────────────────────────────────────
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null); // 3D overlay on top of map
   const mapRef = useRef<maplibregl.Map | null>(null);
   const engineRef = useRef<Engine | null>(null);
   const sceneRef = useRef<Scene | null>(null);
@@ -49,6 +52,12 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   const roadMeshesRef = useRef<Map<string, Mesh>>(new Map());
   const pointMeshesRef = useRef<Map<string, Mesh>>(new Map());
   const handleLinesRef = useRef<Map<string, LinesMesh>>(new Map());
+
+  // Overlay engine/scene (for 3D roads on top of MapLibre)
+  const overlayEngineRef = useRef<Engine | null>(null);
+  const overlaySceneRef = useRef<Scene | null>(null);
+  const overlayRoadMeshesRef = useRef<Map<string, Mesh>>(new Map());
+  const textureCacheRef = useRef<Map<string, Texture>>(new Map());
 
   // Store refs (for use inside event handlers)
   const toolRef = useRef<string>('select');
@@ -166,16 +175,86 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
     mapRef.current = map;
 
+    // ─── 3D Road Overlay (Babylon.js on top of MapLibre) ─────
+    // Transparent canvas that renders 3D roads with elevation
+    // synced to the MapLibre camera position
+    if (overlayCanvasRef.current && !overlayEngineRef.current) {
+      const overlayCanvas = overlayCanvasRef.current;
+      const overlayEngine = new Engine(overlayCanvas, true, {
+        preserveDrawingBuffer: true,
+        stencil: true,
+        alpha: true, // transparent background
+      });
+      const overlayScene = new Scene(overlayEngine);
+      overlayScene.clearColor = new Color3(0, 0, 0);
+      (overlayScene as any)._clearColor.alpha = 0; // fully transparent
+
+      overlayEngineRef.current = overlayEngine;
+      overlaySceneRef.current = overlayScene;
+
+      // Camera — will be synced with MapLibre
+      const overlayCam = new ArcRotateCamera(
+        'overlayCam', -Math.PI / 2, 0.01, 500, new Vector3(0, 0, 0), overlayScene
+      );
+      overlayCam.lowerRadiusLimit = 1;
+      overlayCam.upperRadiusLimit = 50000;
+
+      // Light
+      const overlayHemi = new HemisphericLight('overlayHemi', new Vector3(0, 1, 0), overlayScene);
+      overlayHemi.intensity = 0.8;
+
+      // Render loop
+      overlayEngine.runRenderLoop(() => {
+        // Sync camera with MapLibre
+        if (mapRef.current) {
+          const center = mapRef.current.getCenter();
+          const zoom = mapRef.current.getZoom();
+          const bearing = mapRef.current.getBearing();
+          const pitch = mapRef.current.getPitch();
+
+          // Convert map center to local meters
+          const local = geoToLocal(center.lat, center.lng, refLatRef.current, refLonRef.current);
+
+          // Approximate scale: at zoom 14, ~10m/pixel, viewport ~1000px = ~10km
+          const scale = 156543.03392 * Math.cos((center.lat * Math.PI) / 180) / Math.pow(2, zoom);
+          const viewportMeters = scale * (overlayCanvas.width / window.devicePixelRatio);
+          const radius = viewportMeters / 2;
+
+          overlayCam.target = new Vector3(local.x, 0, local.y);
+          overlayCam.radius = Math.max(10, radius);
+          overlayCam.alpha = -Math.PI / 2 - (bearing * Math.PI) / 180;
+          overlayCam.beta = (pitch * Math.PI) / 180 * 0.5; // partial pitch
+        }
+        overlayScene.render();
+      });
+
+      // Resize handler
+      const onOverlayResize = () => overlayEngine.resize();
+      window.addEventListener('resize', onOverlayResize);
+    }
+
+    // Update overlay roads
+    updateOverlayRoads();
+
     return () => {
       map.remove();
       mapRef.current = null;
+      // Dispose overlay
+      if (overlayEngineRef.current) {
+        overlayEngineRef.current.dispose();
+        overlayEngineRef.current = null;
+        overlaySceneRef.current = null;
+        overlayRoadMeshesRef.current.clear();
+        textureCacheRef.current.clear();
+      }
     };
   }, [viewMode]);
 
-  // Update map roads when store changes (in top mode)
+  // Update map roads + overlay when store changes (in top mode)
   useEffect(() => {
     if (viewMode === 'top' && mapRef.current) {
       updateMapRoads(mapRef.current);
+      updateOverlayRoads();
     }
   }, [store.roads, store.selection, viewMode]);
 
@@ -496,8 +575,152 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   function updateAllViews() {
     if (viewMode === 'top' && mapRef.current) {
       updateMapRoads(mapRef.current);
+      updateOverlayRoads();
     } else if (viewMode === 'perspective') {
       update3DMeshes();
+    }
+  }
+
+  // ─── Get or create a cached texture ────────────────────────
+  function getTexture(name: string, scene: Scene): Texture | null {
+    if (textureCacheRef.current.has(name)) {
+      return textureCacheRef.current.get(name)!;
+    }
+    const textureMap: Record<string, string> = {
+      asphalt: '/assets/scaner-roads/pbr/asphalt_diff.png',
+      marking: '/assets/scaner-roads/pbr/marking_diff.png',
+      macadam: '/assets/scaner-roads/textures/macadam.png',
+      bitume: '/assets/scaner-roads/textures/131_bitume.png',
+      road_2lane: '/assets/scaner-roads/textures/ROAD_1_NoMark_NEW_2voies.png',
+      road_1lane: '/assets/scaner-roads/textures/ROAD_1_NoMark_NEW_1voie.png',
+      cobblestone: '/assets/scaner-roads/textures/urban_cobblestone.png',
+      pavement: '/assets/scaner-roads/textures/pavement.png',
+    };
+    const url = textureMap[name];
+    if (!url) return null;
+    const tex = new Texture(url, scene, false, true);
+    textureCacheRef.current.set(name, tex);
+    return tex;
+  }
+
+  // ─── Update 3D road overlay (on top of MapLibre) ───────────
+  function updateOverlayRoads() {
+    const scene = overlaySceneRef.current;
+    if (!scene) return;
+
+    // Clear old meshes
+    overlayRoadMeshesRef.current.forEach((m) => m.dispose());
+    overlayRoadMeshesRef.current.clear();
+
+    const roads = roadsRef.current;
+    const refLat = refLatRef.current;
+    const refLon = refLonRef.current;
+
+    for (const road of roads) {
+      if (road.points.length < 2) continue;
+
+      const samples = sampleRoad(road, refLat, refLon, 16);
+      if (samples.length < 2) continue;
+
+      const halfWidth = road.width / 2;
+      const pathLeft: Vector3[] = [];
+      const pathRight: Vector3[] = [];
+
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        let tx: number, ty: number;
+        if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+        else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+        else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1;
+        const nx = -ty / len;
+        const ny = tx / len;
+        pathLeft.push(new Vector3(s.x + nx * halfWidth, s.z, s.y + ny * halfWidth));
+        pathRight.push(new Vector3(s.x - nx * halfWidth, s.z, s.y - ny * halfWidth));
+      }
+
+      // Road surface mesh
+      const roadMesh = MeshBuilder.CreateRibbon(`overlay_road_${road.id}`, {
+        pathArray: [pathLeft, pathRight],
+        closeArray: false,
+        closePath: false,
+        sideOrientation: Mesh.DOUBLESIDE,
+      }, scene);
+
+      const roadMat = new StandardMaterial(`overlay_roadMat_${road.id}`, scene);
+
+      // Apply SCANeR texture based on road profile
+      const surfaceName = road.profile?.surfaceTexture || 'asphalt';
+      const tex = getTexture(surfaceName, scene);
+      if (tex) {
+        roadMat.diffuseTexture = tex;
+        roadMat.diffuseColor = new Color3(1, 1, 1);
+        // Repeat texture along the road
+        tex.uScale = road.points.length * 2;
+        tex.vScale = 1;
+      } else {
+        roadMat.diffuseColor = Color3.FromHexString(road.color);
+      }
+      roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
+      roadMat.alpha = 0.95;
+      roadMesh.material = roadMat;
+      roadMesh.isPickable = false;
+      overlayRoadMeshesRef.current.set(road.id, roadMesh);
+
+      // Center line (lane marking)
+      const centerPoints: Vector3[] = samples.map((s) => new Vector3(s.x, s.z + 0.1, s.y));
+      if (centerPoints.length >= 2) {
+        const centerLine = MeshBuilder.CreateLines(`overlay_center_${road.id}`, {
+          points: centerPoints,
+        }, scene);
+        centerLine.color = new Color3(1, 0.9, 0.3);
+        centerLine.isPickable = false;
+        overlayRoadMeshesRef.current.set(`overlay_center_${road.id}`, centerLine);
+      }
+
+      // Lane divider lines (if multi-lane)
+      if (road.laneCount > 1) {
+        const laneOffset = halfWidth - (halfWidth * 2 / road.laneCount);
+        for (let lane = 1; lane < road.laneCount; lane++) {
+          const offset = -halfWidth + (halfWidth * 2 / road.laneCount) * lane;
+          const dividerPoints: Vector3[] = [];
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i];
+            let tx: number, ty: number;
+            if (i === 0) { tx = samples[1].x - s.x; ty = samples[1].y - s.y; }
+            else if (i === samples.length - 1) { tx = s.x - samples[i - 1].x; ty = s.y - samples[i - 1].y; }
+            else { tx = samples[i + 1].x - samples[i - 1].x; ty = samples[i + 1].y - samples[i - 1].y; }
+            const len = Math.sqrt(tx * tx + ty * ty) || 1;
+            const nx = -ty / len;
+            const ny = tx / len;
+            dividerPoints.push(new Vector3(s.x + nx * offset, s.z + 0.08, s.y + ny * offset));
+          }
+          const dividerLine = MeshBuilder.CreateLines(`overlay_divider_${road.id}_${lane}`, {
+            points: dividerPoints,
+          }, scene);
+          dividerLine.color = new Color3(1, 1, 1);
+          dividerLine.isPickable = false;
+          overlayRoadMeshesRef.current.set(`overlay_divider_${road.id}_${lane}`, dividerLine);
+        }
+      }
+
+      // Control point markers (small spheres)
+      for (let i = 0; i < road.points.length; i++) {
+        const p = road.points[i];
+        const local = geoToLocal(p.lat, p.lon, refLat, refLon);
+        const cpMesh = MeshBuilder.CreateSphere(`overlay_cp_${road.id}_${i}`, {
+          diameter: Math.max(2, road.width * 0.3),
+          segments: 8,
+        }, scene);
+        cpMesh.position = new Vector3(local.x, p.z + 0.5, local.y);
+        const cpMat = new StandardMaterial(`overlay_cpMat_${road.id}_${i}`, scene);
+        cpMat.diffuseColor = new Color3(1, 0.7, 0.1);
+        cpMat.emissiveColor = new Color3(0.3, 0.2, 0);
+        cpMat.specularColor = new Color3(0, 0, 0);
+        cpMesh.material = cpMat;
+        cpMesh.isPickable = false;
+        overlayRoadMeshesRef.current.set(`overlay_cp_${road.id}_${i}`, cpMesh);
+      }
     }
   }
 
@@ -545,7 +768,17 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
       const roadMesh = MeshBuilder.CreateRibbon(`road_${road.id}`, { pathArray: [pathLeft, pathRight] }, scene);
       const roadMat = new StandardMaterial(`roadMat_${road.id}`, scene);
-      roadMat.diffuseColor = Color3.FromHexString(road.color);
+      // Apply SCANeR texture based on road profile
+      const surfaceName = road.profile?.surfaceTexture || 'asphalt';
+      const tex = getTexture(surfaceName, scene);
+      if (tex) {
+        roadMat.diffuseTexture = tex;
+        roadMat.diffuseColor = new Color3(1, 1, 1);
+        tex.uScale = road.points.length * 2;
+        tex.vScale = 1;
+      } else {
+        roadMat.diffuseColor = Color3.FromHexString(road.color);
+      }
       roadMat.specularColor = new Color3(0.1, 0.1, 0.1);
       roadMesh.material = roadMat;
       roadMesh.isPickable = false;
@@ -623,12 +856,27 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   // ─── Render ────────────────────────────────────────────────
   return (
     <div className={className} style={{ position: 'relative', width: '100%', height: '100%' }}>
-      {/* Top view — MapLibre */}
+      {/* Top view — MapLibre base map */}
       {viewMode === 'top' && (
-        <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+        <>
+          <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+          {/* 3D road overlay — transparent Babylon canvas on top of map */}
+          <canvas
+            ref={overlayCanvasRef}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none', // let clicks pass through to map
+              outline: 'none',
+            }}
+          />
+        </>
       )}
 
-      {/* 3D view — Babylon.js */}
+      {/* 3D view — Babylon.js perspective */}
       {viewMode === 'perspective' && (
         <canvas
           ref={canvasRef}
