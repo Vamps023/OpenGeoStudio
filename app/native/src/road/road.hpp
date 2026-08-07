@@ -93,6 +93,24 @@ struct Crosswalk {
 };
 
 // ─── Generated Intersection ────────────────────────────────
+struct FilletCorner {
+    Point2D boundaryIntersection;  // where two road edge lines cross
+    Point2D tangentIn;             // fillet start point (on edge line)
+    Point2D tangentOut;            // fillet end point (on edge line)
+    Point2D arcCenter;             // center of fillet arc
+    double radius;                 // fillet radius
+    std::vector<Point2D> arcPoints; // sampled arc points
+    int approachInIdx;             // index into approaches
+    int approachOutIdx;            // index into approaches
+};
+
+struct TrimLine {
+    Point2D leftEnd;    // left edge point at trim line
+    Point2D rightEnd;   // right edge point at trim line
+    Point2D centerPt;   // centerline point at trim line
+    int approachIdx;
+};
+
 struct GeneratedIntersection {
     Point2D center;
     std::vector<Point2D> polygon;          // intersection boundary
@@ -100,6 +118,15 @@ struct GeneratedIntersection {
     std::vector<LaneConnection> laneConnections;
     std::vector<StopLine> stopLines;
     std::vector<Crosswalk> crosswalks;
+
+    // ─── Construction debug data ───────────────────────────
+    std::vector<FilletCorner> corners;     // fillet corners with arc data
+    std::vector<TrimLine> trimLines;       // trim lines for each approach
+    std::vector<Point2D> boundaryIntersections;  // all edge-line intersection points
+    double cornerRadius = 0;               // corner radius used
+    double trimDistance1 = 0;              // trim distance for road 1
+    double trimDistance2 = 0;              // trim distance for road 2
+    double intersectionAngle = 0;          // angle between roads (radians)
 };
 
 // ─── Circle Arc ────────────────────────────────────────────

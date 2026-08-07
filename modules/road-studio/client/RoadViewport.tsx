@@ -1456,37 +1456,22 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         // Intersection polygon (magenta fill + outline)
         if (dbg.intersectionPolygon && gen.polygon.length >= 3) {
           addDbgPolygon(`ix-poly-${ixId}`, gen.polygon, '#ff00ff', 0.2);
+          // Polygon vertices (small white dots with numbering)
+          addDbgCircles(`ix-verts-${ixId}`, gen.polygon, '#ffffff', 3);
         }
 
-        // Trim points (large red circles at approach start/end)
-        if (dbg.trimPoints) {
-          const trimPts: Array<{ x: number; y: number }> = [];
-          for (const approach of gen.approaches) {
-            if (approach.centerline.length >= 2) {
-              // Start = trim line, End = near center
-              trimPts.push(approach.centerline[0]);
-            }
+        // Trim lines (red lines across each road at trim distance)
+        if (dbg.trimPoints && gen.trimLines) {
+          for (const tl of gen.trimLines) {
+            const leftGeo = localToGeo(tl.leftEnd.x, tl.leftEnd.y, refLat, refLon);
+            const rightGeo = localToGeo(tl.rightEnd.x, tl.rightEnd.y, refLat, refLon);
+            addDbgLine(`ix-trimline-${ixId}-${tl.approachIdx}`,
+              [[leftGeo.lon, leftGeo.lat], [rightGeo.lon, rightGeo.lat]],
+              '#ff0000', 2, 0.6);
           }
-          addDbgCircles(`ix-trim-${ixId}`, trimPts, '#ff0000', 6);
-        }
-
-        // Trim lines (red dashed lines across each road at trim distance)
-        if (dbg.trimPoints) {
-          for (const approach of gen.approaches) {
-            if (approach.centerline.length >= 2) {
-              const p = approach.centerline[0];
-              const next = approach.centerline[1];
-              const tx = next.x - p.x, ty = next.y - p.y;
-              const len = Math.sqrt(tx * tx + ty * ty) || 1;
-              const nx = -ty / len, ny = tx / len;
-              const halfW = approach.width / 2;
-              const leftGeo = localToGeo(p.x + nx * halfW, p.y + ny * halfW, refLat, refLon);
-              const rightGeo = localToGeo(p.x - nx * halfW, p.y - ny * halfW, refLat, refLon);
-              addDbgLine(`ix-trimline-${ixId}-${approach.direction}`,
-                [[leftGeo.lon, leftGeo.lat], [rightGeo.lon, rightGeo.lat]],
-                '#ff0000', 2, 0.6);
-            }
-          }
+          // Trim center points (large red circles)
+          const trimCenters = gen.trimLines.map((tl) => tl.centerPt);
+          addDbgCircles(`ix-trim-${ixId}`, trimCenters, '#ff0000', 6);
         }
 
         // Road edges through intersection (green = left, red = right)
@@ -1518,25 +1503,49 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           }
         }
 
-        // Tangent points (cyan diamonds at edge intersections)
-        if (dbg.tangentPoints) {
-          const tanPts: Array<{ x: number; y: number }> = [];
-          for (const approach of gen.approaches) {
-            if (approach.centerline.length >= 2) {
-              const p = approach.centerline[0];
-              const next = approach.centerline[1];
-              const tx = next.x - p.x, ty = next.y - p.y;
-              const len = Math.sqrt(tx * tx + ty * ty) || 1;
-              const nx = -ty / len, ny = tx / len;
-              const halfW = approach.width / 2;
-              tanPts.push({ x: p.x + nx * halfW, y: p.y + ny * halfW });
-              tanPts.push({ x: p.x - nx * halfW, y: p.y - ny * halfW });
-            }
-          }
-          addDbgCircles(`ix-tan-${ixId}`, tanPts, '#00ffff', 4);
+        // Boundary intersections (orange X markers)
+        if (dbg.tangentPoints && gen.boundaryIntersections) {
+          addDbgCircles(`ix-bint-${ixId}`, gen.boundaryIntersections, '#ff8800', 6);
         }
 
-        // Fillet arcs (orange) — render approach centerlines
+        // Fillet corners: tangent points, arc centers, arcs, radius lines
+        if (dbg.filletArcs && gen.corners) {
+          for (let ci = 0; ci < gen.corners.length; ci++) {
+            const corner = gen.corners[ci];
+            if (!isFinite(corner.boundaryIntersection.x)) continue;
+
+            // Fillet arc (magenta curve)
+            if (corner.arcPoints && corner.arcPoints.length >= 2) {
+              const arcCoords = corner.arcPoints.map((p) => {
+                const geo = localToGeo(p.x, p.y, refLat, refLon);
+                return [geo.lon, geo.lat] as [number, number];
+              });
+              addDbgLine(`ix-farc-${ixId}-${ci}`, arcCoords, '#ff00ff', 3, 0.8);
+            }
+
+            // Tangent points (cyan diamonds)
+            const tanPts = [corner.tangentIn, corner.tangentOut].filter(p => isFinite(p.x));
+            if (tanPts.length > 0) {
+              addDbgCircles(`ix-tp-${ixId}-${ci}`, tanPts, '#00ffff', 5);
+            }
+
+            // Arc center (orange circle)
+            if (isFinite(corner.arcCenter.x)) {
+              addDbgCircles(`ix-ac-${ixId}-${ci}`, [corner.arcCenter], '#ffaa00', 4);
+            }
+
+            // Radius line (from arc center to tangentIn)
+            if (isFinite(corner.arcCenter.x) && isFinite(corner.tangentIn.x)) {
+              const cGeo = localToGeo(corner.arcCenter.x, corner.arcCenter.y, refLat, refLon);
+              const tGeo = localToGeo(corner.tangentIn.x, corner.tangentIn.y, refLat, refLon);
+              addDbgLine(`ix-rad-${ixId}-${ci}`,
+                [[cGeo.lon, cGeo.lat], [tGeo.lon, tGeo.lat]],
+                '#ffaa00', 1, 0.5);
+            }
+          }
+        }
+
+        // Approach centerlines (orange dashed)
         if (dbg.filletArcs) {
           for (const approach of gen.approaches) {
             if (approach.centerline.length >= 2) {
@@ -1544,7 +1553,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
                 const geo = localToGeo(p.x, p.y, refLat, refLon);
                 return [geo.lon, geo.lat] as [number, number];
               });
-              addDbgLine(`ix-arc-${ixId}-${approach.direction}`, coords, '#ff8800', 2, 0.7);
+              addDbgLine(`ix-cl-${ixId}-${approach.direction}`, coords, '#ff8800', 1, 0.5);
             }
           }
         }
@@ -1561,11 +1570,6 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           if (coords.length >= 2) {
             addDbgLine(`ix-tri-${ixId}`, coords, '#ffffff', 1, 0.4);
           }
-        }
-
-        // Polygon vertices (small white dots)
-        if (dbg.intersectionPolygon && gen.polygon.length >= 3) {
-          addDbgCircles(`ix-verts-${ixId}`, gen.polygon, '#ffffff', 3);
         }
       }
     }

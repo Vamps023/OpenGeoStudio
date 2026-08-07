@@ -328,6 +328,26 @@ export const INTERSECTION_THRESHOLD = 3.0;
 // ─── Generated Intersection Types ──────────────────────────
 
 /** A fully generated intersection with polygon, approaches, and markings */
+/** Fillet corner construction data */
+export interface FilletCorner {
+  boundaryIntersection: Point2D;
+  tangentIn: Point2D;
+  tangentOut: Point2D;
+  arcCenter: Point2D;
+  radius: number;
+  arcPoints: Point2D[];
+  approachInIdx: number;
+  approachOutIdx: number;
+}
+
+/** Trim line construction data */
+export interface TrimLine {
+  leftEnd: Point2D;
+  rightEnd: Point2D;
+  centerPt: Point2D;
+  approachIdx: number;
+}
+
 export interface GeneratedIntersection {
   /** Center point of the intersection (local meters) */
   center: Point2D;
@@ -341,6 +361,20 @@ export interface GeneratedIntersection {
   stopLines: StopLine[];
   /** Crosswalk markings for each approach */
   crosswalks: CrosswalkMarking[];
+  /** Construction debug: fillet corners with arc data */
+  corners?: FilletCorner[];
+  /** Construction debug: trim lines for each approach */
+  trimLines?: TrimLine[];
+  /** Construction debug: all edge-line intersection points */
+  boundaryIntersections?: Point2D[];
+  /** Construction debug: corner radius used */
+  cornerRadius?: number;
+  /** Construction debug: trim distance for road 1 */
+  trimDistance1?: number;
+  /** Construction debug: trim distance for road 2 */
+  trimDistance2?: number;
+  /** Construction debug: angle between roads (radians) */
+  intersectionAngle?: number;
 }
 
 /** A road approaching an intersection */

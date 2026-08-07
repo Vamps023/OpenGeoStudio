@@ -146,6 +146,44 @@ static Napi::Object intersectionToJs(Napi::Env env, const GeneratedIntersection&
     }
     obj.Set("crosswalks", crosswalks);
 
+    // ─── Construction debug data ───────────────────────────
+    obj.Set("cornerRadius", Napi::Number::New(env, ix.cornerRadius));
+    obj.Set("trimDistance1", Napi::Number::New(env, ix.trimDistance1));
+    obj.Set("trimDistance2", Napi::Number::New(env, ix.trimDistance2));
+    obj.Set("intersectionAngle", Napi::Number::New(env, ix.intersectionAngle));
+
+    // Boundary intersections
+    obj.Set("boundaryIntersections", pointsToJs(env, ix.boundaryIntersections));
+
+    // Trim lines
+    auto trimLines = Napi::Array::New(env, ix.trimLines.size());
+    for (size_t i = 0; i < ix.trimLines.size(); i++) {
+        auto tObj = Napi::Object::New(env);
+        tObj.Set("leftEnd", pointToJs(env, ix.trimLines[i].leftEnd));
+        tObj.Set("rightEnd", pointToJs(env, ix.trimLines[i].rightEnd));
+        tObj.Set("centerPt", pointToJs(env, ix.trimLines[i].centerPt));
+        tObj.Set("approachIdx", Napi::Number::New(env, ix.trimLines[i].approachIdx));
+        trimLines.Set(i, tObj);
+    }
+    obj.Set("trimLines", trimLines);
+
+    // Fillet corners
+    auto corners = Napi::Array::New(env, ix.corners.size());
+    for (size_t i = 0; i < ix.corners.size(); i++) {
+        const auto& c = ix.corners[i];
+        auto cObj = Napi::Object::New(env);
+        cObj.Set("boundaryIntersection", pointToJs(env, c.boundaryIntersection));
+        cObj.Set("tangentIn", pointToJs(env, c.tangentIn));
+        cObj.Set("tangentOut", pointToJs(env, c.tangentOut));
+        cObj.Set("arcCenter", pointToJs(env, c.arcCenter));
+        cObj.Set("radius", Napi::Number::New(env, c.radius));
+        cObj.Set("arcPoints", pointsToJs(env, c.arcPoints));
+        cObj.Set("approachInIdx", Napi::Number::New(env, c.approachInIdx));
+        cObj.Set("approachOutIdx", Napi::Number::New(env, c.approachOutIdx));
+        corners.Set(i, cObj);
+    }
+    obj.Set("corners", corners);
+
     return obj;
 }
 
