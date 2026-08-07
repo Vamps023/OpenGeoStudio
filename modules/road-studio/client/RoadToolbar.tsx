@@ -77,6 +77,8 @@ export const RoadToolbar: React.FC = () => {
   const toggleRoadSelection = useRoadStudioStore((s) => s.toggleRoadSelection);
   const clearRoadSelection = useRoadStudioStore((s) => s.clearRoadSelection);
   const detectIntersection = useRoadStudioStore((s) => s.detectIntersection);
+  const roadPickMode = useRoadStudioStore((s) => s.roadPickMode);
+  const setRoadPickMode = useRoadStudioStore((s) => s.setRoadPickMode);
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -235,10 +237,23 @@ export const RoadToolbar: React.FC = () => {
 
       {/* ─── Intersection creation ─────────────── */}
       <div className="ml-auto flex items-center gap-1">
+        {/* Select Road button — activates pick mode (no shift needed) */}
+        <button
+          onClick={() => setRoadPickMode(!roadPickMode)}
+          className={`flex items-center gap-1.5 px-3 h-8 rounded-md text-xs font-medium transition-colors border ${
+            roadPickMode
+              ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
+              : 'text-fg-secondary hover:text-fg-primary hover:bg-surface-elevated border-transparent'
+          }`}
+          title="Click this, then click on roads to select them for intersection"
+        >
+          <GitMerge size={14} />
+          {roadPickMode ? 'Pick Mode ON — click roads' : 'Select Roads'}
+        </button>
+
         {selectedRoadIds.length === 1 && (
           <div className="flex items-center gap-1.5 px-2 h-8 rounded-md bg-accent/10 text-accent border border-accent/30 text-xs">
-            <GitMerge size={14} />
-            <span>Select 2nd road (Shift+Click)</span>
+            <span>1 road selected — pick 2nd</span>
             <button
               onClick={clearRoadSelection}
               className="ml-1 hover:bg-accent/20 rounded p-0.5"

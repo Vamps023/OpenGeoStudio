@@ -18,6 +18,8 @@ interface RoadStudioState {
   selection: Selection;
   /** Multi-selected road IDs (for intersection creation, etc.) */
   selectedRoadIds: string[];
+  /** When true, next click on a road selects it for intersection (no shift needed) */
+  roadPickMode: boolean;
   /** Reference origin (lat/lon) for local coordinate conversion */
   refLat: number;
   refLon: number;
@@ -111,6 +113,9 @@ interface RoadStudioState {
   /** Toggle a road in multi-selection (shift-click) */
   toggleRoadSelection: (roadId: string) => void;
 
+  /** Enable/disable road pick mode (click to select road without shift) */
+  setRoadPickMode: (enabled: boolean) => void;
+
   /** Clear multi-selection */
   clearRoadSelection: () => void;
 
@@ -137,6 +142,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   tool: 'select',
   selection: { roadId: null, pointIndices: [], handle: null },
   selectedRoadIds: [],
+  roadPickMode: false,
   refLat: 18.52,
   refLon: 73.85,
   defaultWidth: 8,
@@ -471,7 +477,9 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     }
   },
 
-  clearRoadSelection: () => set({ selectedRoadIds: [] }),
+  clearRoadSelection: () => set({ selectedRoadIds: [], roadPickMode: false }),
+
+  setRoadPickMode: (enabled) => set({ roadPickMode: enabled }),
 
   createIntersectionAtClosestPoint: (roadId1, roadId2) => {
     const state = get();

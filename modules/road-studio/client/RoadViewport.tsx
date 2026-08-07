@@ -81,6 +81,9 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     handle: 'in' | 'out' | null;
   }>({ mode: 'none', roadId: null, pointIndex: -1, handle: null });
 
+  // Track shift key state globally (more reliable than e.originalEvent.shiftKey in Electron)
+  const shiftDownRef = useRef(false);
+
   const store = useRoadStudioStore();
   const viewMode = store.viewMode;
 
@@ -99,6 +102,22 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { gridSizeRef.current = store.gridSize; }, [store.gridSize]);
   useEffect(() => { snapEnabledRef.current = store.snapEnabled; }, [store.snapEnabled]);
   useEffect(() => { drawingRoadIdRef.current = store.drawingRoadId; }, [store.drawingRoadId]);
+
+  // Track shift key globally — more reliable than e.originalEvent.shiftKey in Electron
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') shiftDownRef.current = true;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') shiftDownRef.current = false;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
 
   // ═══════════════════════════════════════════════════════════
   // TOP VIEW — MapLibre 2D world map with styled roads
@@ -146,8 +165,10 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       // Use latest store state (avoid stale closure)
       const st = useRoadStudioStore.getState();
 
-      // Shift+click = road selection for intersection creation
-      if (e.originalEvent.shiftKey) {
+      // Shift+click OR road pick mode = road selection for intersection creation
+      const isShift = shiftDownRef.current || e.originalEvent.shiftKey || st.roadPickMode;
+      if (isShift) {
+        console.log('[RoadSelect] Detected! Roads:', roadsRef.current.length, 'pickMode:', st.roadPickMode, 'shiftDown:', shiftDownRef.current);
         const clickLat = e.lngLat.lat;
         const clickLon = e.lngLat.lng;
         const refLat = refLatRef.current;
@@ -157,24 +178,27 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const roadLayers = roadsRef.current
           .map((r) => `rd-surface-${r.id}`)
           .filter((id) => map.getLayer(id));
+        console.log('[Shift+Click] Road layers found:', roadLayers.length, roadLayers);
         let selectedRoadId: string | null = null;
 
         if (roadLayers.length > 0) {
           const features = map.queryRenderedFeatures(e.point, { layers: roadLayers });
+          console.log('[Shift+Click] Features hit:', features.length);
           if (features.length > 0) {
             selectedRoadId = features[0].properties.roadId;
+            console.log('[Shift+Click] Selected via features:', selectedRoadId);
           }
         }
 
         // Method 2: Fallback — find closest road by distance to click point
         if (!selectedRoadId) {
           const clickLocal = geoToLocal(clickLat, clickLon, refLat, refLon);
+          console.log('[Shift+Click] Click local:', clickLocal.x.toFixed(1), clickLocal.y.toFixed(1));
           let closestRoadId: string | null = null;
           let closestDist = Infinity;
           for (const road of roadsRef.current) {
             if (road.points.length < 2) continue;
             const samples = sampleRoad(road, refLat, refLon, 24);
-            const halfW = road.width / 2 + 3; // add tolerance
             for (const s of samples) {
               const dx = s.x - clickLocal.x;
               const dy = s.y - clickLocal.y;
@@ -185,14 +209,20 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
               }
             }
           }
-          // Only select if within road width + tolerance
+          console.log('[Shift+Click] Closest road:', closestRoadId, 'dist:', closestDist.toFixed(1) + 'm');
+          // Only select if within 50m
           if (closestRoadId && closestDist < 50) {
             selectedRoadId = closestRoadId;
+            console.log('[Shift+Click] Selected via closest:', selectedRoadId);
           }
         }
 
         if (selectedRoadId) {
+          console.log('[Shift+Click] Toggling selection for:', selectedRoadId);
           st.toggleRoadSelection(selectedRoadId);
+          console.log('[Shift+Click] After toggle, selectedRoadIds:', useRoadStudioStore.getState().selectedRoadIds);
+        } else {
+          console.log('[Shift+Click] No road found near click point');
         }
         return;
       }
@@ -1026,13 +1056,15 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         else if (button === 2) { dragStateRef.current.mode = 'pan'; }
         else if (button === 0) {
           const st3d = useRoadStudioStore.getState();
-          // Shift+click on road mesh = toggle road selection (for intersection)
-          if ((evt as any).shiftKey && roadPick?.hit && roadPick.pickedMesh) {
+          const isShift3d = shiftDownRef.current || (evt as any).shiftKey || st3d.roadPickMode;
+          // Shift+click or pick mode on road mesh = toggle road selection (for intersection)
+          if (isShift3d && roadPick?.hit && roadPick.pickedMesh) {
             const roadName = roadPick.pickedMesh.name; // "road_<id>"
             const roadId = roadName.replace('road_', '');
             st3d.toggleRoadSelection(roadId);
           } else if ((evt as any).shiftKey) {
             // Shift+click but missed road mesh — try closest road by distance
+          } else if (isShift3d) {
             const pickInfo = scene.pick(scene.pointerX, scene.pointerY, (m) => m === ground);
             if (pickInfo?.hit && pickInfo.pickedPoint) {
               const px = pickInfo.pickedPoint.x;
