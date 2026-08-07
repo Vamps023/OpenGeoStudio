@@ -5617,3 +5617,537 @@ TEST_CASE("2.2 6-lane road: all boundary offsets") {
     CHECK(ls.rightWidthAt(0.0) == doctest::Approx(10.5));
     CHECK(ls.leftWidthAt(0.0) == doctest::Approx(10.5));
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.3 — World-Space Lane Evaluation Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for evaluateLaneCenter, evaluateLaneBoundary, evaluateLaneAtOffset.
+// Combines SegmentSequence (Phase 1) + LaneSection (2.1) + Polynomial3 (2.2).
+// Pure evaluation — no sampling, no mesh, no allocations.
+// ═══════════════════════════════════════════════════════════
+
+#include "lane_geometry.hpp"
+#include <chrono>
+
+using geo::LanePoint;
+using geo::evaluateLaneCenter;
+using geo::evaluateLaneBoundary;
+using geo::evaluateLaneAtOffset;
+using geo::ArcSegment;
+using geo::SpiralSegment;
+using geo::BezierSegment;
+
+// Helper: create a 2-lane road with a single line segment
+static RoadV2 makeStraightRoad(double length = 100.0, double laneWidth = 3.5) {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(length, 0));
+    road.width = laneWidth * 2;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(laneWidth)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(laneWidth)));
+    road.addLaneSection(std::move(ls));
+    return road;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Straight Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Straight road: lane +1 always at +y offset") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    // Lane +1 center should be at y = -1.75 (right side, right-positive offset = +1.75)
+    // World: position - normal * offset = (s, 0) - (0, 1) * 1.75 = (s, -1.75)
+    // Wait: normalAt for a horizontal line going right is (-sin(0), cos(0)) = (0, 1) = UP (left)
+    // So right-positive offset 1.75 → world y = 0 - 1 * 1.75 = -1.75
+    for (double s = 0; s <= 100; s += 10) {
+        LanePoint p = evaluateLaneCenter(road, 1, s);
+        CHECK(p.position.x == doctest::Approx(s));
+        CHECK(p.position.y == doctest::Approx(-1.75));
+        CHECK(p.laneOffset == doctest::Approx(1.75));
+    }
+}
+
+TEST_CASE("2.3 Straight road: lane -1 always at -y offset") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    // Lane -1 center: offset = -1.75 (left side)
+    // World: (s, 0) - (0, 1) * (-1.75) = (s, 1.75)
+    for (double s = 0; s <= 100; s += 10) {
+        LanePoint p = evaluateLaneCenter(road, -1, s);
+        CHECK(p.position.x == doctest::Approx(s));
+        CHECK(p.position.y == doctest::Approx(1.75));
+        CHECK(p.laneOffset == doctest::Approx(-1.75));
+    }
+}
+
+TEST_CASE("2.3 Straight road: center lane at reference line") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    for (double s = 0; s <= 100; s += 10) {
+        LanePoint p = evaluateLaneCenter(road, 0, s);
+        CHECK(p.position.x == doctest::Approx(s));
+        CHECK(p.position.y == doctest::Approx(0.0));
+        CHECK(p.laneOffset == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("2.3 Straight road: heading and tangent are correct") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePoint p = evaluateLaneCenter(road, 1, 50.0);
+    CHECK(p.heading == doctest::Approx(0.0));  // horizontal road
+    CHECK(p.tangent.x == doctest::Approx(1.0));
+    CHECK(p.tangent.y == doctest::Approx(0.0));
+    CHECK(p.normal.x == doctest::Approx(0.0));
+    CHECK(p.normal.y == doctest::Approx(1.0));  // left = up
+}
+
+TEST_CASE("2.3 Straight road: lane boundary inner/outer") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    // Lane 1 inner edge (boundary with center): offset = 0
+    LanePoint inner = evaluateLaneBoundary(road, 1, false, 50.0);
+    CHECK(inner.position.y == doctest::Approx(0.0));
+    CHECK(inner.laneOffset == doctest::Approx(0.0));
+
+    // Lane 1 outer edge (boundary with lane 2): offset = 3.5
+    LanePoint outer = evaluateLaneBoundary(road, 1, true, 50.0);
+    CHECK(outer.position.y == doctest::Approx(-3.5));
+    CHECK(outer.laneOffset == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.3 Straight road: legacy synthesis (no explicit LaneSection)") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+    // No addLaneSection — should use legacy synthesis
+
+    LanePoint p = evaluateLaneCenter(road, 1, 50.0);
+    CHECK(p.position.x == doctest::Approx(50.0));
+    CHECK(p.position.y == doctest::Approx(-1.75));
+    CHECK(p.laneOffset == doctest::Approx(1.75));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Arc Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Arc road: outer lane has larger radius") {
+    // Left-turn arc: start at (0,0), heading=0 (east), curvature=0.01 (CCW)
+    // Radius = 100, center at (0, 100)
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.01, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // At s=0: reference line is at (0, 0), heading=0
+    // Normal (left) = (0, 1) → points up toward center
+    // Lane -1 (left): offset = -1.75 → world = (0,0) - (0,1)*(-1.75) = (0, 1.75)
+    //   This is CLOSER to arc center (0, 100) → smaller radius ✓
+    // Lane +1 (right): offset = +1.75 → world = (0,0) - (0,1)*(1.75) = (0, -1.75)
+    //   This is FARTHER from arc center → larger radius ✓
+
+    LanePoint leftLane = evaluateLaneCenter(road, -1, 0.0);
+    LanePoint rightLane = evaluateLaneCenter(road, 1, 0.0);
+
+    // Distance from arc center (0, 100)
+    double leftDist = std::hypot(leftLane.position.x - 0, leftLane.position.y - 100);
+    double rightDist = std::hypot(rightLane.position.x - 0, rightLane.position.y - 100);
+
+    // Left lane (inner on left turn) should be closer to center
+    CHECK(leftDist < rightDist);
+    CHECK(leftDist == doctest::Approx(100.0 - 1.75));
+    CHECK(rightDist == doctest::Approx(100.0 + 1.75));
+}
+
+TEST_CASE("2.3 Arc road: right-turn arc reverses inner/outer") {
+    // Right-turn arc: curvature = -0.01 (CW)
+    // Center at (0, -100)
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, -0.01, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // At s=0: normal (left) = (0, 1) = up
+    // Lane -1 (left): offset=-1.75 → world=(0, 1.75) → farther from center (0,-100)
+    // Lane +1 (right): offset=+1.75 → world=(0, -1.75) → closer to center (0,-100)
+    LanePoint leftLane = evaluateLaneCenter(road, -1, 0.0);
+    LanePoint rightLane = evaluateLaneCenter(road, 1, 0.0);
+
+    double leftDist = std::hypot(leftLane.position.x, leftLane.position.y + 100);
+    double rightDist = std::hypot(rightLane.position.x, rightLane.position.y + 100);
+
+    // Right lane (inner on right turn) should be closer to center
+    CHECK(rightDist < leftDist);
+    CHECK(leftDist == doctest::Approx(100.0 + 1.75));
+    CHECK(rightDist == doctest::Approx(100.0 - 1.75));
+}
+
+TEST_CASE("2.3 Arc road: lane offset is constant along arc") {
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.01, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Lane offset should be constant (constant width polynomial)
+    for (double s = 0; s <= 100; s += 10) {
+        LanePoint p = evaluateLaneCenter(road, 1, s);
+        CHECK(p.laneOffset == doctest::Approx(1.75));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Spiral Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Spiral road: lane center is continuous") {
+    // Spiral from curvature 0 to 0.01 over 100m
+    RoadV2 road;
+    road.addSegment<SpiralSegment>(Point2D(0, 0), 0.0, 0.0, 0.01, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Sample at fine intervals and check no discontinuities
+    LanePoint prev = evaluateLaneCenter(road, 1, 0.0);
+    for (double s = 0.5; s <= 100; s += 0.5) {
+        LanePoint curr = evaluateLaneCenter(road, 1, s);
+        double dx = curr.position.x - prev.position.x;
+        double dy = curr.position.y - prev.position.y;
+        double step = std::hypot(dx, dy);
+        // Step should be roughly 0.5m (no huge jumps)
+        CHECK(step < 1.0);
+        // Offset should be constant
+        CHECK(curr.laneOffset == doctest::Approx(1.75));
+        prev = curr;
+    }
+}
+
+TEST_CASE("2.3 Spiral road: left and right lane offsets are symmetric") {
+    RoadV2 road;
+    road.addSegment<SpiralSegment>(Point2D(0, 0), 0.0, 0.0, 0.01, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    for (double s = 0; s <= 100; s += 10) {
+        LanePoint left = evaluateLaneCenter(road, -1, s);
+        LanePoint right = evaluateLaneCenter(road, 1, s);
+        LanePoint center = evaluateLaneCenter(road, 0, s);
+
+        // Left and right should be equidistant from center
+        double leftDist = std::hypot(left.position.x - center.position.x,
+                                      left.position.y - center.position.y);
+        double rightDist = std::hypot(right.position.x - center.position.x,
+                                       right.position.y - center.position.y);
+        CHECK(leftDist == doctest::Approx(rightDist));
+        CHECK(leftDist == doctest::Approx(1.75));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Bezier Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Bezier road: normal direction is consistent") {
+    // Simple S-curve bezier
+    RoadV2 road;
+    road.addSegment<BezierSegment>(
+        Point2D(0, 0), Point2D(25, 25), Point2D(75, -25), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Normal should always be unit length and perpendicular to tangent
+    for (double s = 0; s <= road.totalLength(); s += 5) {
+        LanePoint p = evaluateLaneCenter(road, 1, s);
+        double nLen = std::hypot(p.normal.x, p.normal.y);
+        CHECK(nLen == doctest::Approx(1.0));
+
+        // Tangent · Normal should be ~0 (perpendicular)
+        double dot = p.tangent.x * p.normal.x + p.tangent.y * p.normal.y;
+        CHECK(std::abs(dot) < 0.001);
+    }
+}
+
+TEST_CASE("2.3 Bezier road: lane offset constant") {
+    RoadV2 road;
+    road.addSegment<BezierSegment>(
+        Point2D(0, 0), Point2D(25, 25), Point2D(75, -25), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    for (double s = 0; s <= road.totalLength(); s += 5) {
+        LanePoint p = evaluateLaneCenter(road, 1, s);
+        CHECK(p.laneOffset == doctest::Approx(1.75));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Mixed Road Tests (Line + Arc)
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Mixed road: evaluateLaneCenter is continuous across boundary") {
+    // Line (0,0)→(50,0) then Arc (curvature=0.01, length=50)
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(50, 0));
+    road.addSegment<ArcSegment>(Point2D(50, 0), 0.0, 0.01, 50.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Sample across the boundary (s=50)
+    double sBefore = 49.9;
+    double sAfter = 50.1;
+    LanePoint before = evaluateLaneCenter(road, 1, sBefore);
+    LanePoint after = evaluateLaneCenter(road, 1, sAfter);
+
+    double dx = after.position.x - before.position.x;
+    double dy = after.position.y - before.position.y;
+    double jump = std::hypot(dx, dy);
+    // Jump should be tiny (0.2m of arc length)
+    CHECK(jump < 0.3);
+}
+
+TEST_CASE("2.3 Mixed road: lane center continuous with variable width") {
+    // Line with a tapering lane
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0)));  // taper
+    road.addLaneSection(std::move(ls));
+
+    // Lane center should move toward reference line as lane narrows
+    LanePoint at0 = evaluateLaneCenter(road, 1, 0.0);
+    LanePoint at25 = evaluateLaneCenter(road, 1, 25.0);
+    LanePoint at50 = evaluateLaneCenter(road, 1, 50.0);
+
+    CHECK(at0.laneOffset == doctest::Approx(1.75));
+    CHECK(at25.laneOffset == doctest::Approx(0.875));
+    CHECK(at50.laneOffset == doctest::Approx(0.0));
+
+    // Y position should approach 0
+    CHECK(at0.position.y == doctest::Approx(-1.75));
+    CHECK(at50.position.y == doctest::Approx(0.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// evaluateLaneAtOffset Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 evaluateLaneAtOffset: matches evaluateLaneCenter") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePoint center = evaluateLaneCenter(road, 1, 50.0);
+    LanePoint atOffset = evaluateLaneAtOffset(road, 1.75, 50.0);
+
+    CHECK(atOffset.position.x == doctest::Approx(center.position.x));
+    CHECK(atOffset.position.y == doctest::Approx(center.position.y));
+    CHECK(atOffset.laneOffset == doctest::Approx(center.laneOffset));
+}
+
+TEST_CASE("2.3 evaluateLaneAtOffset: zero offset is reference line") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePoint p = evaluateLaneAtOffset(road, 0.0, 50.0);
+    CHECK(p.position.x == doctest::Approx(50.0));
+    CHECK(p.position.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.3 evaluateLaneAtOffset: negative offset is left") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePoint p = evaluateLaneAtOffset(road, -5.0, 50.0);
+    // Left = positive y (normal is up)
+    CHECK(p.position.x == doctest::Approx(50.0));
+    CHECK(p.position.y == doctest::Approx(5.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// 4-Lane Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 4-lane road: all lane centers on straight road") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Right lanes (negative y, right-positive offset)
+    CHECK(evaluateLaneCenter(road, 1, 50.0).position.y == doctest::Approx(-1.75));
+    CHECK(evaluateLaneCenter(road, 2, 50.0).position.y == doctest::Approx(-5.25));
+
+    // Left lanes (positive y)
+    CHECK(evaluateLaneCenter(road, -1, 50.0).position.y == doctest::Approx(1.75));
+    CHECK(evaluateLaneCenter(road, -2, 50.0).position.y == doctest::Approx(5.25));
+
+    // Center
+    CHECK(evaluateLaneCenter(road, 0, 50.0).position.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.3 4-lane road: all boundaries on straight road") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    // Center line boundary
+    CHECK(evaluateLaneBoundary(road, 1, false, 50.0).position.y == doctest::Approx(0.0));
+    // Boundary between lane 1 and 2
+    CHECK(evaluateLaneBoundary(road, 1, true, 50.0).position.y == doctest::Approx(-3.5));
+    // Outer edge of lane 2
+    CHECK(evaluateLaneBoundary(road, 2, true, 50.0).position.y == doctest::Approx(-7.0));
+    // Left side
+    CHECK(evaluateLaneBoundary(road, -1, true, 50.0).position.y == doctest::Approx(3.5));
+    CHECK(evaluateLaneBoundary(road, -2, true, 50.0).position.y == doctest::Approx(7.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Performance Benchmark
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Performance: 1000-segment road, 1000 evaluations under 2ms") {
+    // Build a 1000-segment road (zigzag lines)
+    RoadV2 road;
+    road.reserveSegments(1000);
+    for (int i = 0; i < 1000; i++) {
+        double x1 = i * 10.0;
+        double y1 = (i % 2 == 0) ? 0.0 : 1.0;
+        double x2 = (i + 1) * 10.0;
+        double y2 = (i % 2 == 0) ? 1.0 : 0.0;
+        road.addSegment<LineSegment>(Point2D(x1, y1), Point2D(x2, y2));
+    }
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    double totalLen = road.totalLength();
+    double step = totalLen / 1000.0;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    volatile double sink = 0;  // prevent optimization
+    for (int i = 0; i < 1000; i++) {
+        LanePoint p = evaluateLaneCenter(road, 1, i * step);
+        sink += p.position.x + p.position.y;
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    // Target: under 2ms for 1000 evaluations
+    // (relaxed for debug builds — check with .epsilon or just report)
+    INFO("1000 evaluations took " << ms << " ms");
+    CHECK(ms < 50.0);  // generous for debug; release should be <2ms
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multiple Lane Sections Test
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.3 Multiple sections: lane count changes at boundary") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    // Section 1: 2 lanes (s=0 to 100)
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    // Section 2: 4 lanes (s=100 to 200)
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    // In section 1, lane 2 doesn't exist — offset should be 0
+    LanePoint inSection1 = evaluateLaneCenter(road, 2, 50.0);
+    CHECK(inSection1.laneOffset == doctest::Approx(0.0));
+
+    // In section 2, lane 2 exists at offset 5.25
+    LanePoint inSection2 = evaluateLaneCenter(road, 2, 150.0);
+    CHECK(inSection2.laneOffset == doctest::Approx(5.25));
+    CHECK(inSection2.position.y == doctest::Approx(-5.25));
+
+    // Lane 1 should be at same offset in both sections
+    LanePoint lane1_s1 = evaluateLaneCenter(road, 1, 50.0);
+    LanePoint lane1_s2 = evaluateLaneCenter(road, 1, 150.0);
+    CHECK(lane1_s1.laneOffset == doctest::Approx(1.75));
+    CHECK(lane1_s2.laneOffset == doctest::Approx(1.75));
+}

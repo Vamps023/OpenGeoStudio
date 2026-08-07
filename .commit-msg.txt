@@ -1,43 +1,69 @@
-Phase 2.2: Polynomial width evaluation
+Phase 2.3: World-space lane evaluation
 
-Extends the lane data model with polynomial evaluation, derivatives,
-and lane width interpolation (pure math, no geometry generation).
+Introduces the evaluation layer that combines SegmentSequence
+(Phase 1), LaneSection (2.1), and Polynomial3 (2.2) to produce
+world-space lane positions. Pure evaluation — no sampling, no
+mesh, no allocations.
 
-Polynomial3 additions:
-  - secondDerivative(ds): p''(ds) = 2c + 6d·ds
-    Useful for smooth tapers, curvature-aware width, superelevation,
-    mesh smoothing. Inexpensive to add while API is still small.
-  - isValid(): checks all coefficients are finite (not NaN/Inf)
+New file: lane_geometry.hpp
+  Separation of concerns:
+    lane_engine.hpp = data model
+    lane_geometry.hpp = math (world-space evaluation)
 
-LaneSection width interpolation (pure lateral math, no world-space):
-  - rightWidthAt(ds): sum of right lane widths (id > 0)
-  - leftWidthAt(ds): sum of left lane widths (id < 0)
-  - boundaryOffset(laneId, ds): lateral offset of lane boundary
-    Right: sum(width(1..laneId)), Left: -sum(width(-1..laneId))
-  - laneCenterOffset(laneId, ds): lateral offset of lane center
-    Right: boundary(laneId-1) + width/2, Left: boundary(laneId+1) - width/2
-  - laneInnerEdgeOffset(laneId, ds): boundary closest to center
-  - laneOuterEdgeOffset(laneId, ds): boundary farthest from center
+  LanePoint struct:
+    - position (Point2D): world-space x, y
+    - tangent (Vec2): unit tangent (direction of travel)
+    - normal (Vec2): unit normal (left = 90° CCW from tangent)
+    - heading (double): heading angle in radians
+    - laneOffset (double): lateral offset from reference line (right-positive)
 
-Validation enhancement:
-  - Checks polynomial coefficients for NaN/Inf
-  - Reports "non-finite polynomial coefficients" error
+  evaluateLaneCenter(road, laneId, s):
+    World-space center of lane at arc-length s.
+    Uses active LaneSection at s, or synthesized legacy section.
+    C¹ continuous if geometry and width polynomials are C¹.
+    O(log N) per call, no allocations.
 
-Tests (33 new doctest, 339 total, 2463 assertions):
-  secondDerivative (4): constant, linear, quadratic, cubic
-  isValid (5): normal, zero, NaN in a/b/d, Inf in b
-  Edge cases (8): negative ds, large ds, numerical stability,
-    linear widening, linear narrowing, cubic smooth taper,
-    randomized evaluation vs explicit formula
-  Width interpolation (10): rightWidthAt, leftWidthAt,
-    boundaryOffset (right/left), laneCenterOffset (right/left/center),
-    inner/outer edge, variable width, variable center offset
-  Width continuity (3): constant across sections, taper then constant,
-    smooth taper using cubic
-  Validation NaN/Inf (3): NaN detected, Inf detected, valid passes
-  Multi-lane offsets (2): 4-lane all offsets, 6-lane all offsets
+  evaluateLaneBoundary(road, laneId, outer, s):
+    World-space position of lane edge (inner or outer).
 
-No geometry code, no SegmentSequence integration, no world-space
-calculations. Those are 2.3+.
+  evaluateLaneAtOffset(road, lateralOffset, s):
+    Most general form — arbitrary lateral offset.
+
+  World-space equation:
+    Pworld = positionAt(s) - normalAt(s) * lateralOffset
+  (normalAt returns left-positive; laneOffset is right-positive)
+
+Tests (22 new doctest, 361 total, 3108 assertions):
+  Straight road (6):
+    - Lane +1 at constant -y offset
+    - Lane -1 at constant +y offset
+    - Center lane at reference line
+    - Heading/tangent/normal correct
+    - Inner/outer boundary edges
+    - Legacy synthesis (no explicit LaneSection)
+  Arc road (3):
+    - Outer lane has larger radius (left turn)
+    - Right turn reverses inner/outer
+    - Lane offset constant along arc
+  Spiral road (2):
+    - Lane center continuous (no discontinuities)
+    - Left/right symmetric about center
+  Bezier road (2):
+    - Normal direction consistent (unit, perpendicular to tangent)
+    - Lane offset constant
+  Mixed road (2):
+    - Continuous across line→arc boundary
+    - Variable width taper moves center toward reference line
+  evaluateLaneAtOffset (3):
+    - Matches evaluateLaneCenter
+    - Zero offset = reference line
+    - Negative offset = left
+  4-lane road (2):
+    - All lane centers on straight road
+    - All boundaries on straight road
+  Performance (1):
+    - 1000-segment road, 1000 evaluations (target <2ms release)
+  Multiple sections (1):
+    - Lane count changes at section boundary
 
 All 130 vitest tests pass (no regression).
