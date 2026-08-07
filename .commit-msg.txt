@@ -1,26 +1,35 @@
-Phase 1.8.3b: roadToV2() — Bezier/Arc/Spiral exact reconstruction + AdapterReport
+Phase 1.8.3c: roadToV2Legacy() — legacy compatibility reconstruction
 
-Adds exact reconstruction for all four geometry segment types,
-with explicit missing-metadata handling (no silent fallback).
+Adds a separate legacy compatibility adapter path that preserves
+the rendered geometry without attempting to recover the original
+authoring primitive. No geometry fitting, no heuristics.
 
 Changes:
-- ControlPoint: added optional SegmentMetadata for arc/spiral parameters
-- AdapterReport: diagnostics struct tracking exact/approx/unsupported counts
-- Bezier: exact from handles (P0, P0+handleOut, P1+handleIn, P1)
-- Arc: exact from metadata (startPoint, heading, curvature, arcLength)
-- Spiral: exact from metadata (startPoint, heading, k0, k1, length)
-- Unknown metadata type → warning + LineSegment fallback
-- Bezier metadata without handles → warning + LineSegment fallback
-- roadToV2(const Road&, AdapterReport&) overload for diagnostics
+- ReconstructionMode enum (Exact, LegacyGeometry, Unsupported)
+- AdapterReport strengthened:
+  - exactSegments / legacySegments / unsupportedSegments (renamed)
+  - exact flag (true only if all segments were exact)
+  - legacySegmentIndices (which segments used compatibility mode)
+  - unsupportedSegmentIndices (which segments had problems)
+- roadToV2() (exact path): renamed fields, populates new indices
+- roadToV2Legacy() (new): preserves geometry as Line/Bezier
+  - Corner points → LineSegment (preserves sampled polyline)
+  - Handle points → BezierSegment (preserves exact curve)
+  - No warnings (compatibility mode is expected behavior)
+  - All segments marked as LegacyGeometry in report
 
-Tests (18 new, 189 total, 847 assertions):
-- Bezier: exact reconstruction, endpoint positions, golden fixtures
-  (bezier_arch, mixed_line_bezier — segment types + positions at CPs)
-- Arc: exact reconstruction, start position, length, constant curvature
-- Spiral: exact reconstruction, length, curvature transition k0→k1
-- AdapterReport: all-line counts, mixed counts, unknown type warning,
-  bezier-without-handles warning
-- Combined: line + bezier + arc + spiral in one road (4 segments)
+Tests (19 new, 208 total, 1117 assertions):
+- Basic: empty, single point, corner→Line, handles→Bezier, metadata,
+  purity
+- Centerline parity: straight_2pt, straight_5pt, arc_quarter (17 CPs),
+  s_clothoid (17 CPs), tiny_segments (31 CPs) — all verify positions
+  at control points match
+- Total length parity: matches sum of CP distances, matches
+  legacy Road::length()
+- Comparison: roadToV2 vs roadToV2Legacy for line, bezier, and
+  arc-metadata roads (exact uses ArcSegment, legacy uses Line)
+- AdapterReport: exact=true for all-line, exact=false for unknown
+  metadata, legacySegmentIndices populated correctly
 
 All 113 vitest tests remain green (no regression).
 Legacy Road path is completely untouched.

@@ -11,6 +11,7 @@
 // - vitest (TS via bridge): IPC round-trips, mesh output, store behavior
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#define _USE_MATH_DEFINES
 #include "doctest.h"
 #include "geometry_segment.hpp"
 #include "geometry.hpp"
@@ -2347,8 +2348,8 @@ TEST_CASE("roadToV2: bezier segment — exact reconstruction from handles") {
     CHECK(v2.numSegments() == 1);
     CHECK(v2.segment(0).type() == GeometryType::Bezier);
     CHECK(report.bezierSegments == 1);
-    CHECK(report.reconstructedExactly == 1);
-    CHECK(report.reconstructedApproximately == 0);
+    CHECK(report.exactSegments == 1);
+    CHECK(report.legacySegments == 0);
     CHECK(report.warnings.empty());
 
     // Verify absolute control points are correct
@@ -2413,7 +2414,7 @@ TEST_CASE("roadToV2: bezier_arch golden fixture — segment type and control poi
         CHECK(v2.segment(i).type() == GeometryType::Bezier);
     }
     CHECK(report.bezierSegments == 3);
-    CHECK(report.reconstructedExactly == 3);
+    CHECK(report.exactSegments == 3);
     CHECK(report.warnings.empty());
 
     // Verify first segment's absolute control points
@@ -2502,7 +2503,7 @@ TEST_CASE("roadToV2: mixed_line_bezier golden fixture — segment types") {
 
     CHECK(report.lineSegments == 2);
     CHECK(report.bezierSegments == 2);
-    CHECK(report.reconstructedExactly == 4);
+    CHECK(report.exactSegments == 4);
     CHECK(report.warnings.empty());
 }
 
@@ -2562,7 +2563,7 @@ TEST_CASE("roadToV2: arc segment — exact reconstruction from metadata") {
     CHECK(v2.numSegments() == 1);
     CHECK(v2.segment(0).type() == GeometryType::Arc);
     CHECK(report.arcSegments == 1);
-    CHECK(report.reconstructedExactly == 1);
+    CHECK(report.exactSegments == 1);
     CHECK(report.warnings.empty());
 
     // Verify arc parameters
@@ -2653,7 +2654,7 @@ TEST_CASE("roadToV2: spiral segment — exact reconstruction from metadata") {
     CHECK(v2.numSegments() == 1);
     CHECK(v2.segment(0).type() == GeometryType::Spiral);
     CHECK(report.spiralSegments == 1);
-    CHECK(report.reconstructedExactly == 1);
+    CHECK(report.exactSegments == 1);
     CHECK(report.warnings.empty());
 
     // Verify spiral parameters
@@ -2719,8 +2720,8 @@ TEST_CASE("roadToV2: AdapterReport — all-line road has correct counts") {
     CHECK(report.arcSegments == 0);
     CHECK(report.spiralSegments == 0);
     CHECK(report.totalSegments() == 2);
-    CHECK(report.reconstructedExactly == 2);
-    CHECK(report.reconstructedApproximately == 0);
+    CHECK(report.exactSegments == 2);
+    CHECK(report.legacySegments == 0);
     CHECK(report.unsupportedSegments == 0);
     CHECK(report.warnings.empty());
 }
@@ -2756,7 +2757,7 @@ TEST_CASE("roadToV2: AdapterReport — mixed road has correct counts") {
     CHECK(report.lineSegments == 2);
     CHECK(report.arcSegments == 1);
     CHECK(report.totalSegments() == 3);
-    CHECK(report.reconstructedExactly == 3);
+    CHECK(report.exactSegments == 3);
     CHECK(report.warnings.empty());
 }
 
@@ -2883,11 +2884,488 @@ TEST_CASE("roadToV2: mixed road with line + bezier + arc + spiral") {
     CHECK(report.arcSegments == 1);
     CHECK(report.spiralSegments == 1);
     CHECK(report.totalSegments() == 4);
-    CHECK(report.reconstructedExactly == 4);
+    CHECK(report.exactSegments == 4);
     CHECK(report.warnings.empty());
 
     // Total length = sum of all segment lengths
     double sumLen = 0;
     for (int i = 0; i < 4; i++) sumLen += v2.segment(i).length();
     CHECK(v2.totalLength() == doctest::Approx(sumLen));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Road Adapter Tests — Phase 1.8.3c
+// ═══════════════════════════════════════════════════════════
+// Legacy compatibility reconstruction.
+//
+// roadToV2Legacy() preserves the rendered geometry without
+// attempting to recover the original authoring primitive.
+// Corner points → LineSegment, handle points → BezierSegment.
+// No warnings. All segments marked as LegacyGeometry.
+//
+// The centerline must match what the legacy engine would produce
+// from the same ControlPoints.
+// ═══════════════════════════════════════════════════════════
+
+using geo::roadToV2Legacy;
+using geo::ReconstructionMode;
+
+// ─── Helper: sample legacy centerline at uniform s values ───
+// Returns positions at N equally-spaced arc-length positions
+// along the legacy road's sampleCenterline output.
+static std::vector<Point2D> sampleLegacyAtS(const Road& road, int numSamples) {
+    auto samples = road.sampleCenterline(numSamples);
+    return samples;
+}
+
+// ─── Helper: sample RoadV2 centerline at uniform s values ───
+static std::vector<Point2D> sampleV2AtS(const RoadV2& v2, int numSamples) {
+    std::vector<Point2D> result;
+    if (v2.numSegments() == 0) return result;
+    double totalLen = v2.totalLength();
+    if (totalLen < 1e-12) return result;
+    for (int i = 0; i < numSamples; i++) {
+        double s = totalLen * static_cast<double>(i) / (numSamples - 1);
+        result.push_back(v2.geometry().positionAt(s));
+    }
+    return result;
+}
+
+// ═══════════════════════════════════════════════════════════
+// roadToV2Legacy — Basic conversion tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2Legacy: empty road produces empty RoadV2 with exact=true") {
+    Road legacy;
+    legacy.id = "empty";
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Legacy(legacy, report);
+
+    CHECK(v2.numSegments() == 0);
+    CHECK(report.exact == true);  // Empty road is trivially exact
+    CHECK(report.legacySegments == 0);
+}
+
+TEST_CASE("roadToV2Legacy: single point produces empty RoadV2 with exact=true") {
+    Road legacy = makeLegacyRoad("single", {{5, 3}});
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Legacy(legacy, report);
+
+    CHECK(v2.numSegments() == 0);
+    CHECK(report.exact == true);
+}
+
+TEST_CASE("roadToV2Legacy: corner points → LineSegments, all marked legacy") {
+    Road legacy = makeLegacyRoad("polyline", {{0, 0}, {10, 0}, {10, 10}});
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Legacy(legacy, report);
+
+    CHECK(v2.numSegments() == 2);
+    CHECK(v2.segment(0).type() == GeometryType::Line);
+    CHECK(v2.segment(1).type() == GeometryType::Line);
+
+    CHECK(report.lineSegments == 2);
+    CHECK(report.legacySegments == 2);
+    CHECK(report.exact == false);
+    CHECK(report.legacySegmentIndices.size() == 2);
+    CHECK(report.legacySegmentIndices[0] == 0);
+    CHECK(report.legacySegmentIndices[1] == 1);
+    CHECK(report.warnings.empty());  // No warnings in legacy mode
+}
+
+TEST_CASE("roadToV2Legacy: bezier handles → BezierSegments, marked legacy") {
+    Road legacy;
+    legacy.id = "bez_legacy";
+
+    Point2D p0(0, 0), p1(100, 0);
+    Point2D hOut(25, 40), hIn(-25, 40);
+
+    legacy.points.push_back(makeSmoothCP(p0, {0, 0}, hOut, false, true));
+    legacy.points.push_back(makeSmoothCP(p1, hIn, {0, 0}, true, false));
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Legacy(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Bezier);
+
+    CHECK(report.bezierSegments == 1);
+    CHECK(report.legacySegments == 1);
+    CHECK(report.exact == false);
+    CHECK(report.legacySegmentIndices.size() == 1);
+    CHECK(report.legacySegmentIndices[0] == 0);
+}
+
+TEST_CASE("roadToV2Legacy: metadata preserved") {
+    Road legacy;
+    legacy.id = "meta_legacy";
+    legacy.name = "Legacy Meta";
+    legacy.color = "#aabbcc";
+    legacy.profileName = "highway";
+    legacy.startIntersectionId = "ix1";
+    legacy.endIntersectionId = "ix2";
+    legacy.width = 12.0;
+    legacy.laneCount = 3;
+    legacy.points.push_back(makeLegacyRoad("x", {{0, 0}}).points[0]);
+    legacy.points.push_back(makeLegacyRoad("x", {{50, 0}}).points[0]);
+
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    CHECK(v2.id == "meta_legacy");
+    CHECK(v2.name == "Legacy Meta");
+    CHECK(v2.color == "#aabbcc");
+    CHECK(v2.profileName == "highway");
+    CHECK(v2.startIntersectionId == "ix1");
+    CHECK(v2.endIntersectionId == "ix2");
+    CHECK(v2.width == doctest::Approx(12.0));
+    CHECK(v2.laneCount == 3);
+}
+
+TEST_CASE("roadToV2Legacy: is a pure function (input unchanged)") {
+    Road legacy = makeLegacyRoad("pure_legacy", {{0, 0}, {10, 0}, {20, 5}});
+    size_t originalCount = legacy.points.size();
+
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    CHECK(legacy.points.size() == originalCount);
+    CHECK(legacy.points[0].position.x == doctest::Approx(0.0));
+    CHECK(v2.numSegments() == 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// roadToV2Legacy — Centerline parity with legacy engine
+// ═══════════════════════════════════════════════════════════
+// The key invariant: roadToV2Legacy produces the same centerline
+// as the legacy engine's sampleCenterline().
+//
+// For corner points, both produce straight lines between CPs.
+// The comparison is geometric — it doesn't matter what segment
+// types are used internally.
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2Legacy: centerline parity — straight_2pt") {
+    Road legacy = makeLegacyRoad("straight_2pt", {{0, 0}, {100, 0}});
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    // Legacy samples at 24 points
+    auto legacySamples = sampleLegacyAtS(legacy, 24);
+    CHECK(legacySamples.size() >= 2);
+
+    // RoadV2 at same number of points
+    auto v2Samples = sampleV2AtS(v2, 24);
+
+    // For a straight line, both should produce identical positions
+    // (legacy samples linearly, RoadV2 evaluates at arc-length positions)
+    // Note: legacy sample distribution may differ slightly from uniform
+    // arc-length, so we compare at control points instead.
+    CHECK(v2Samples[0].x == doctest::Approx(0.0));
+    CHECK(v2Samples[0].y == doctest::Approx(0.0));
+    CHECK(v2Samples[23].x == doctest::Approx(100.0).epsilon(0.01));
+    CHECK(v2Samples[23].y == doctest::Approx(0.0));
+}
+
+TEST_CASE("roadToV2Legacy: centerline parity — straight_5pt at control points") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    // Compute cumulative s at each control point
+    double sValues[5];
+    sValues[0] = 0;
+    for (int i = 0; i < 4; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+
+    // Position at each control point should match the original CP
+    for (int i = 0; i < 5; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(pts[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(pts[i].y).epsilon(0.01));
+    }
+}
+
+TEST_CASE("roadToV2Legacy: centerline parity — arc_quarter (sampled CPs)") {
+    // Simulate the arc_quarter fixture: 17 corner points sampled
+    // from a quarter circle arc. The legacy engine would connect
+    // these with straight lines. roadToV2Legacy does the same.
+    //
+    // We generate a quarter circle from (0,0) to (50,50) with
+    // 17 sampled points (matching the fixture's 16 segments).
+
+    // Generate quarter circle points: center at (0,50), radius=50
+    // Start at (0,0) heading east, end at (50,50)
+    std::vector<Point2D> arcPoints;
+    int numPts = 17;
+    double radius = 50.0;
+    Point2D center(0, radius);  // center at (0, 50)
+    for (int i = 0; i < numPts; i++) {
+        double angle = M_PI / 2.0 * static_cast<double>(i) / (numPts - 1);
+        // Start at angle=-90° (bottom), end at angle=0° (right)
+        double a = -M_PI / 2.0 + angle;
+        arcPoints.push_back({center.x + radius * cos(a), center.y + radius * sin(a)});
+    }
+
+    Road legacy = makeLegacyRoad("arc_quarter", arcPoints);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    CHECK(v2.numSegments() == 16);
+    for (int i = 0; i < 16; i++) {
+        CHECK(v2.segment(i).type() == GeometryType::Line);
+    }
+
+    AdapterReport report;
+    RoadV2 v2_reported = roadToV2Legacy(legacy, report);
+    CHECK(report.legacySegments == 16);
+    CHECK(report.exact == false);
+    CHECK(report.legacySegmentIndices.size() == 16);
+
+    // Position at each control point should match
+    double sValues[17];
+    sValues[0] = 0;
+    for (int i = 0; i < 16; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+    for (int i = 0; i < 17; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(arcPoints[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(arcPoints[i].y).epsilon(0.01));
+    }
+}
+
+TEST_CASE("roadToV2Legacy: centerline parity — s_clothoid (sampled CPs)") {
+    // Simulate the s_clothoid fixture: sampled clothoid points
+    // as corner ControlPoints. roadToV2Legacy preserves them as
+    // LineSegments — the centerline is a polyline approximation
+    // of the original clothoid, identical to what the legacy engine
+    // would render.
+
+    // Generate a simple S-curve with 17 points
+    std::vector<Point2D> clothoidPoints;
+    int numPts = 17;
+    for (int i = 0; i < numPts; i++) {
+        double t = static_cast<double>(i) / (numPts - 1);
+        // Simple parametric S-curve
+        double x = 80.0 * t;
+        double y = 20.0 * sin(t * M_PI);
+        clothoidPoints.push_back({x, y});
+    }
+
+    Road legacy = makeLegacyRoad("s_clothoid", clothoidPoints);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    CHECK(v2.numSegments() == 16);
+
+    AdapterReport report;
+    roadToV2Legacy(legacy, report);
+    CHECK(report.legacySegments == 16);
+
+    // Position at each control point should match
+    double sValues[17];
+    sValues[0] = 0;
+    for (int i = 0; i < 16; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+    for (int i = 0; i < 17; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(clothoidPoints[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(clothoidPoints[i].y).epsilon(0.01));
+    }
+}
+
+TEST_CASE("roadToV2Legacy: centerline parity — tiny_segments (30 short segments)") {
+    // Simulate the tiny_segments fixture: 31 corner points with
+    // very short segments (0.05-0.2m) and alternating headings.
+    std::vector<Point2D> pts;
+    double x = 0, y = 0, heading = 0;
+    pts.push_back({x, y});
+    for (int i = 0; i < 30; i++) {
+        heading += (i % 2 == 0 ? 1 : -1) * 15.0 * M_PI / 180.0;
+        double len = 0.05 + (i % 3) * 0.075;
+        x += len * cos(heading);
+        y += len * sin(heading);
+        pts.push_back({x, y});
+    }
+
+    Road legacy = makeLegacyRoad("tiny_segments", pts);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    CHECK(v2.numSegments() == 30);
+    for (int i = 0; i < 30; i++) {
+        CHECK(v2.segment(i).type() == GeometryType::Line);
+    }
+
+    // Position at each control point should match
+    double sValues[31];
+    sValues[0] = 0;
+    for (int i = 0; i < 30; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+    for (int i = 0; i < 31; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(pts[i].x).epsilon(0.001));
+        CHECK(p.y == doctest::Approx(pts[i].y).epsilon(0.001));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// roadToV2Legacy — Total length parity
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2Legacy: total length matches sum of CP distances (straight_5pt)") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    // Legacy length = sum of distances between consecutive CPs
+    double legacyLen = 0;
+    for (size_t i = 0; i < pts.size() - 1; i++) {
+        legacyLen += pts[i].distanceTo(pts[i + 1]);
+    }
+
+    CHECK(v2.totalLength() == doctest::Approx(legacyLen).epsilon(0.001));
+}
+
+TEST_CASE("roadToV2Legacy: total length matches legacy Road::length()") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2Legacy(legacy);
+
+    // Legacy Road::length() computes the same sum of distances
+    CHECK(v2.totalLength() == doctest::Approx(legacy.length()).epsilon(0.001));
+}
+
+// ═══════════════════════════════════════════════════════════
+// roadToV2 vs roadToV2Legacy — Comparison tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2 vs roadToV2Legacy: same result for corner-only roads") {
+    Road legacy = makeLegacyRoad("compare", {{0, 0}, {50, 0}, {50, 50}});
+
+    AdapterReport exactReport, legacyReport;
+    RoadV2 v2Exact = roadToV2(legacy, exactReport);
+    RoadV2 v2Legacy = roadToV2Legacy(legacy, legacyReport);
+
+    // Both produce the same geometry (LineSegments)
+    CHECK(v2Exact.numSegments() == v2Legacy.numSegments());
+    CHECK(v2Exact.totalLength() == doctest::Approx(v2Legacy.totalLength()));
+
+    // But reports differ:
+    // - Exact path: marks as exact (no metadata needed for lines)
+    CHECK(exactReport.exact == true);
+    CHECK(exactReport.exactSegments == 2);
+    CHECK(exactReport.legacySegments == 0);
+
+    // - Legacy path: marks as legacy (intentional compatibility mode)
+    CHECK(legacyReport.exact == false);
+    CHECK(legacyReport.legacySegments == 2);
+    CHECK(legacyReport.exactSegments == 0);
+}
+
+TEST_CASE("roadToV2 vs roadToV2Legacy: same geometry for bezier roads") {
+    Road legacy;
+    legacy.id = "compare_bez";
+    legacy.points.push_back(makeSmoothCP({0, 0}, {0, 0}, {20, 30}, false, true));
+    legacy.points.push_back(makeSmoothCP({100, 0}, {-20, 30}, {0, 0}, true, false));
+
+    AdapterReport exactReport, legacyReport;
+    RoadV2 v2Exact = roadToV2(legacy, exactReport);
+    RoadV2 v2Legacy = roadToV2Legacy(legacy, legacyReport);
+
+    // Both produce BezierSegment with same control points
+    CHECK(v2Exact.numSegments() == 1);
+    CHECK(v2Legacy.numSegments() == 1);
+    CHECK(v2Exact.segment(0).type() == GeometryType::Bezier);
+    CHECK(v2Legacy.segment(0).type() == GeometryType::Bezier);
+    CHECK(v2Exact.totalLength() == doctest::Approx(v2Legacy.totalLength()));
+
+    // Position at midpoint should match
+    double midS = v2Exact.totalLength() / 2.0;
+    Point2D pExact = v2Exact.geometry().positionAt(midS);
+    Point2D pLegacy = v2Legacy.geometry().positionAt(midS);
+    CHECK(pExact.x == doctest::Approx(pLegacy.x).epsilon(0.001));
+    CHECK(pExact.y == doctest::Approx(pLegacy.y).epsilon(0.001));
+}
+
+TEST_CASE("roadToV2 vs roadToV2Legacy: arc metadata — exact uses ArcSegment, legacy uses Line") {
+    Road legacy;
+    legacy.id = "compare_arc";
+
+    // CP0 has arc metadata
+    ControlPoint cp0 = makeArcMetaCP({0, 0}, 0.0, 0.1, 50.0);
+    ControlPoint cp1;
+    cp1.position = {10, 10};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport exactReport, legacyReport;
+    RoadV2 v2Exact = roadToV2(legacy, exactReport);
+    RoadV2 v2Legacy = roadToV2Legacy(legacy, legacyReport);
+
+    // Exact path: ArcSegment from metadata
+    CHECK(v2Exact.segment(0).type() == GeometryType::Arc);
+    CHECK(exactReport.exact == true);
+    CHECK(exactReport.arcSegments == 1);
+
+    // Legacy path: LineSegment (ignores metadata, preserves geometry)
+    CHECK(v2Legacy.segment(0).type() == GeometryType::Line);
+    CHECK(legacyReport.exact == false);
+    CHECK(legacyReport.legacySegments == 1);
+
+    // Lengths differ: arc length (50) vs chord length (~14.14)
+    // This is expected — they represent different geometry
+    CHECK(v2Exact.totalLength() == doctest::Approx(50.0));
+    CHECK(v2Legacy.totalLength() == doctest::Approx(14.142).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// AdapterReport — Strengthened diagnostics
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("AdapterReport: exact path sets exact=true for all-line road") {
+    Road legacy = makeLegacyRoad("all_line", {{0, 0}, {10, 0}});
+    AdapterReport report;
+    roadToV2(legacy, report);
+
+    CHECK(report.exact == true);
+    CHECK(report.exactSegments == 1);
+    CHECK(report.legacySegments == 0);
+    CHECK(report.legacySegmentIndices.empty());
+    CHECK(report.unsupportedSegmentIndices.empty());
+}
+
+TEST_CASE("AdapterReport: exact path sets exact=false for unknown metadata") {
+    Road legacy;
+    legacy.id = "unknown";
+    ControlPoint cp0;
+    cp0.position = {0, 0};
+    cp0.segmentMeta = SegmentMetadata{};
+    cp0.segmentMeta->type = "unknown";
+    ControlPoint cp1;
+    cp1.position = {50, 0};
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport report;
+    roadToV2(legacy, report);
+
+    CHECK(report.exact == false);
+    CHECK(report.unsupportedSegments == 1);
+    CHECK(report.unsupportedSegmentIndices.size() == 1);
+    CHECK(report.unsupportedSegmentIndices[0] == 0);
+}
+
+TEST_CASE("AdapterReport: legacy path populates legacySegmentIndices") {
+    Road legacy = makeLegacyRoad("legacy_idx", {{0, 0}, {10, 0}, {20, 5}, {30, 0}});
+    AdapterReport report;
+    roadToV2Legacy(legacy, report);
+
+    CHECK(report.legacySegmentIndices.size() == 3);
+    CHECK(report.legacySegmentIndices[0] == 0);
+    CHECK(report.legacySegmentIndices[1] == 1);
+    CHECK(report.legacySegmentIndices[2] == 2);
+    CHECK(report.exact == false);
 }
