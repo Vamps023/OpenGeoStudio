@@ -27,6 +27,22 @@ export interface ControlPoint {
   handleOut: Vec2 | null;
   /** Smooth points have handles, corner points do not */
   type: 'smooth' | 'corner';
+  /** Optional segment metadata for exact geometry reconstruction (Phase 1.8.3d) */
+  segmentMeta?: SegmentMetadata | null;
+}
+
+/** Segment metadata for exact reconstruction of non-Bezier geometry (Phase 1.8.3d) */
+export interface SegmentMetadata {
+  kind: 'line' | 'bezier' | 'arc' | 'spiral';
+  version: number;
+  startHeading: number;
+  /** Arc parameters (kind = 'arc') */
+  curvature: number;
+  arcLength: number;
+  /** Spiral parameters (kind = 'spiral') */
+  curvatureStart: number;
+  curvatureEnd: number;
+  segmentLength: number;
 }
 
 /** 2D vector in lat/lon space (used for bezier handle offsets) */
@@ -52,6 +68,8 @@ export interface Road {
   startIntersectionId: string | null;
   /** Intersection node at the end of the road (null if none) */
   endIntersectionId: string | null;
+  /** Schema version (1=legacy, 2=with segmentMeta). Optional for backward compat. */
+  formatVersion?: number;
 }
 
 /** An intersection node — where two or more roads meet (SCANeR-style) */

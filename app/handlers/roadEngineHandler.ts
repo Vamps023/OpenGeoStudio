@@ -28,6 +28,9 @@ import {
   ROAD_CREATE_POLYLINE,
   ROAD_CREATE_BEZIER,
   ROAD_CREATE_CLOTHOID_SPLINE,
+  ROAD_SAMPLE_CENTERLINE_V2,
+  ROAD_GET_ADAPTER_REPORT,
+  ROAD_CONVERT_FROM_V2,
 } from '../../shared/ipcChannels-electron';
 
 // ─── Native Addon Interface ────────────────────────────────
@@ -67,6 +70,10 @@ export interface RoadEngineAddon {
   roadCreatePolyline(points: unknown[], filletR?: number, filletSegs?: number, params?: unknown): unknown;
   roadCreateBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): unknown;
   roadCreateClothoidSpline(points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): unknown;
+  // Phase 1.9 — RoadV2 bridge integration
+  roadSampleCenterlineV2(road: unknown, numSamples?: number): unknown;
+  roadGetAdapterReport(road: unknown): unknown;
+  roadConvertFromV2(road: unknown): unknown;
 }
 
 // ─── Lazy-loaded addon singleton ───────────────────────────
@@ -231,5 +238,24 @@ export async function registerRoadEngineHandlers(): Promise<void> {
     console.log(tag, 'createClothoidSpline() — points:', points?.length);
     if (!addon) throw new Error('Road engine native addon not available');
     return addon.roadCreateClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params);
+  });
+
+  // ─── Phase 1.9 — RoadV2 bridge integration ───────────────
+  ipcMain.handle(ROAD_SAMPLE_CENTERLINE_V2, async (_event, road, numSamples) => {
+    console.log(tag, 'sampleCenterlineV2()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadSampleCenterlineV2(road, numSamples);
+  });
+
+  ipcMain.handle(ROAD_GET_ADAPTER_REPORT, async (_event, road) => {
+    console.log(tag, 'getAdapterReport()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadGetAdapterReport(road);
+  });
+
+  ipcMain.handle(ROAD_CONVERT_FROM_V2, async (_event, road) => {
+    console.log(tag, 'convertFromV2()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadConvertFromV2(road);
   });
 }

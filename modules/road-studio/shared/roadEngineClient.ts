@@ -56,19 +56,41 @@ declare global {
         createPolyline(points: unknown[], filletR?: number, filletSegs?: number, params?: unknown): Promise<unknown>;
         createBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): Promise<unknown>;
         createClothoidSpline(points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown>;
+        // Phase 1.9 — RoadV2 bridge integration
+        sampleCenterlineV2(road: unknown, numSamples?: number): Promise<unknown>;
+        getAdapterReport(road: unknown): Promise<unknown>;
+        convertFromV2(road: unknown): Promise<unknown>;
       };
     };
   }
 }
 
 // ─── Road format conversion (TS lat/lon → C++ local x/y) ──
+
+/** Segment metadata for exact geometry reconstruction (Phase 1.8.3d) */
+export interface CppSegmentMetadata {
+  kind: 'line' | 'bezier' | 'arc' | 'spiral';
+  version: number;
+  startHeading: number;
+  /** Arc parameters */
+  curvature: number;
+  arcLength: number;
+  /** Spiral parameters */
+  curvatureStart: number;
+  curvatureEnd: number;
+  segmentLength: number;
+}
+
 interface CppControlPoint {
   x: number;
   y: number;
   z: number;
   type: string;
+  id?: string;
   handleIn: { x: number; y: number } | null;
   handleOut: { x: number; y: number } | null;
+  /** Optional segment metadata for exact reconstruction */
+  segmentMeta: CppSegmentMetadata | null;
 }
 
 interface CppRoad {
@@ -76,6 +98,8 @@ interface CppRoad {
   name: string;
   width: number;
   laneCount: number;
+  /** Schema version (1=legacy, 2=with segmentMeta) */
+  formatVersion?: number;
   points: CppControlPoint[];
 }
 
@@ -86,6 +110,7 @@ export function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
     name: road.name,
     width: road.width,
     laneCount: road.laneCount,
+    formatVersion: road.formatVersion ?? 1,
     points: road.points.map((cp) => {
       const local = tsGeoToLocal(cp.lat, cp.lon, refLat, refLon);
       const cppCp: CppControlPoint = {
@@ -93,8 +118,10 @@ export function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
         y: local.y,
         z: cp.z,
         type: cp.type,
+        id: cp.id,
         handleIn: null,
         handleOut: null,
+        segmentMeta: cp.segmentMeta ?? null,
       };
       if (cp.handleIn) {
         const hLocal = tsGeoToLocal(cp.lat + cp.handleIn.lat, cp.lon + cp.handleIn.lon, refLat, refLon);
@@ -140,8 +167,27 @@ export interface RoadEngineAPI {
   createPolyline(points: Array<{ x: number; y: number }>, filletR?: number, filletSegs?: number, params?: unknown): Promise<unknown>;
   createBezier(sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown): Promise<unknown>;
   createClothoidSpline(points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown>;
+  /** Phase 1.9 — RoadV2 bridge integration */
+  sampleCenterlineV2(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>>;
+  getAdapterReport(road: Road, refLat: number, refLon: number): Promise<AdapterReportResult>;
+  convertFromV2(road: Road, refLat: number, refLon: number): Promise<unknown>;
   /** Whether the C++ native engine is available */
   isNative(): boolean;
+}
+
+/** Adapter report from the C++ bridge */
+export interface AdapterReportResult {
+  exact: boolean;
+  exactSegments: number;
+  legacySegments: number;
+  unsupportedSegments: number;
+  lineSegments: number;
+  bezierSegments: number;
+  arcSegments: number;
+  spiralSegments: number;
+  numSegments: number;
+  totalLength: number;
+  warnings: string[];
 }
 
 // ─── C++ Native Engine (the only implementation) ───────────
@@ -257,6 +303,38 @@ class NativeRoadEngine implements RoadEngineAPI {
   }
   async createClothoidSpline(points: Array<{ x: number; y: number }>, stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown): Promise<unknown> {
     return this.api.createClothoidSpline(points, stx, sty, etx, ety, segsPerSpan, params);
+  }
+
+  // ─── Phase 1.9 — RoadV2 bridge integration ───────────────
+  async sampleCenterlineV2(road: Road, refLat: number, refLon: number, numSamples?: number): Promise<Array<{ x: number; y: number; z: number }>> {
+    const cppRoad = toCppRoad(road, refLat, refLon);
+    const result = await this.api.sampleCenterlineV2(cppRoad, numSamples);
+    const samples = result as Array<{ x: number; y: number }>;
+    // Interpolate z from road's control points (same as sampleCenterline)
+    return samples.map((s) => {
+      let z = 0;
+      if (road.points.length > 0) {
+        let bestDist = Infinity;
+        let bestZ = road.points[0].z;
+        for (const cp of road.points) {
+          const cpLocal = tsGeoToLocal(cp.lat, cp.lon, refLat, refLon);
+          const d = Math.sqrt((s.x - cpLocal.x) ** 2 + (s.y - cpLocal.y) ** 2);
+          if (d < bestDist) { bestDist = d; bestZ = cp.z; }
+        }
+        z = bestZ;
+      }
+      return { x: s.x, y: s.y, z };
+    });
+  }
+
+  async getAdapterReport(road: Road, refLat: number, refLon: number): Promise<AdapterReportResult> {
+    const cppRoad = toCppRoad(road, refLat, refLon);
+    return this.api.getAdapterReport(cppRoad) as Promise<AdapterReportResult>;
+  }
+
+  async convertFromV2(road: Road, refLat: number, refLon: number): Promise<unknown> {
+    const cppRoad = toCppRoad(road, refLat, refLon);
+    return this.api.convertFromV2(cppRoad);
   }
 }
 

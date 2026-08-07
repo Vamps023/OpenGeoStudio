@@ -47,6 +47,9 @@ import {
   ROAD_CREATE_POLYLINE,
   ROAD_CREATE_BEZIER,
   ROAD_CREATE_CLOTHOID_SPLINE,
+  ROAD_SAMPLE_CENTERLINE_V2,
+  ROAD_GET_ADAPTER_REPORT,
+  ROAD_CONVERT_FROM_V2,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -129,6 +132,10 @@ export interface ElectronAPI {
     createPolyline: (points: unknown[], filletR?: number, filletSegs?: number, params?: unknown) => Promise<unknown>;
     createBezier: (sx: number, sy: number, hox: number, hoy: number, ex: number, ey: number, hix: number, hiy: number, params?: unknown) => Promise<unknown>;
     createClothoidSpline: (points: unknown[], stx: number, sty: number, etx: number, ety: number, segsPerSpan?: number, params?: unknown) => Promise<unknown>;
+    // Phase 1.9 — RoadV2 bridge integration
+    sampleCenterlineV2: (road: unknown, numSamples?: number) => Promise<unknown>;
+    getAdapterReport: (road: unknown) => Promise<unknown>;
+    convertFromV2: (road: unknown) => Promise<unknown>;
   };
 }
 
@@ -216,6 +223,13 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(ROAD_CREATE_BEZIER, sx, sy, hox, hoy, ex, ey, hix, hiy, params),
     createClothoidSpline: (points, stx, sty, etx, ety, segsPerSpan, params) =>
       ipcRenderer.invoke(ROAD_CREATE_CLOTHOID_SPLINE, points, stx, sty, etx, ety, segsPerSpan, params),
+    // Phase 1.9 — RoadV2 bridge integration
+    sampleCenterlineV2: (road, numSamples) =>
+      ipcRenderer.invoke(ROAD_SAMPLE_CENTERLINE_V2, road, numSamples),
+    getAdapterReport: (road) =>
+      ipcRenderer.invoke(ROAD_GET_ADAPTER_REPORT, road),
+    convertFromV2: (road) =>
+      ipcRenderer.invoke(ROAD_CONVERT_FROM_V2, road),
   },
 };
 

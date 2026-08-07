@@ -21,7 +21,7 @@ const describeIfAddon = addon ? describe : describe.skip;
 describeIfAddon('C++ Road Geometry Engine', () => {
   it('should return version string', () => {
     const version = addon.roadGetVersion();
-    expect(version).toBe('1.0.0-road-engine');
+    expect(version).toBe('2.0.0-road-engine');
   });
 
   it('should convert geo to local coordinates', () => {
@@ -798,5 +798,291 @@ describeIfAddon('C++ Geometry Algorithm Unit Tests', () => {
     // Last vertex v should be 100/10 = 10
     const lastV = mesh.uvs[mesh.uvs.length - 1];
     expect(lastV).toBeCloseTo(10, 1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Phase 1.9 — Bridge Integration Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests the new RoadV2 bridge functions:
+//   roadSampleCenterlineV2 — uses roadToV2Auto() internally
+//   roadGetAdapterReport   — diagnostics from the conversion
+//   roadConvertFromV2      — round-trip: Road → RoadV2 → Road
+//
+// Also tests segmentMeta serialization through the bridge.
+// ═══════════════════════════════════════════════════════════
+
+describeIfAddon('Phase 1.9: Bridge Integration', () => {
+  it('should return version 2.0.0', () => {
+    const version = addon.roadGetVersion();
+    expect(version).toBe('2.0.0-road-engine');
+  });
+
+  it('sampleCenterlineV2: should sample a simple line road', () => {
+    const road = {
+      id: 'test_v2_line',
+      name: 'Test V2 Line',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const samples = addon.roadSampleCenterlineV2(road, 10);
+    expect(samples.length).toBe(10);
+    expect(samples[0].x).toBeCloseTo(0, 1);
+    expect(samples[9].x).toBeCloseTo(100, 1);
+    expect(samples[0].y).toBeCloseTo(0, 1);
+    expect(samples[9].y).toBeCloseTo(0, 1);
+  });
+
+  it('sampleCenterlineV2: should sample a bezier road', () => {
+    const road = {
+      id: 'test_v2_bez',
+      name: 'Test V2 Bezier',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'smooth', handleIn: null, handleOut: { x: 25, y: 40 }, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'smooth', handleIn: { x: -25, y: 40 }, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const samples = addon.roadSampleCenterlineV2(road, 20);
+    expect(samples.length).toBe(20);
+    // Endpoints
+    expect(samples[0].x).toBeCloseTo(0, 1);
+    expect(samples[19].x).toBeCloseTo(100, 1);
+    // Midpoint should be above y=0 (arch shape)
+    expect(samples[10].y).toBeGreaterThan(5);
+  });
+
+  it('sampleCenterlineV2: legacy road (formatVersion=1) uses legacy path', () => {
+    const road = {
+      id: 'test_v2_legacy',
+      name: 'Test V2 Legacy',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 50, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const samples = addon.roadSampleCenterlineV2(road, 10);
+    expect(samples.length).toBe(10);
+    expect(samples[0].x).toBeCloseTo(0, 1);
+    expect(samples[9].x).toBeCloseTo(100, 1);
+  });
+
+  it('sampleCenterlineV2: road without formatVersion defaults to legacy', () => {
+    const road = {
+      id: 'test_v2_nofmt',
+      width: 8.0,
+      laneCount: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 100, y: 0, z: 0, type: 'corner' },
+      ],
+    };
+    const samples = addon.roadSampleCenterlineV2(road, 5);
+    expect(samples.length).toBe(5);
+    expect(samples[0].x).toBeCloseTo(0, 1);
+    expect(samples[4].x).toBeCloseTo(100, 1);
+  });
+
+  it('getAdapterReport: exact path for formatVersion=2 line road', () => {
+    const road = {
+      id: 'report_exact',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const report = addon.roadGetAdapterReport(road);
+    expect(report.exact).toBe(true);
+    expect(report.lineSegments).toBe(1);
+    expect(report.legacySegments).toBe(0);
+    expect(report.numSegments).toBe(1);
+    expect(report.totalLength).toBeCloseTo(100, 1);
+    expect(report.warnings.length).toBe(0);
+  });
+
+  it('getAdapterReport: legacy path for formatVersion=1', () => {
+    const road = {
+      id: 'report_legacy',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 1,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner' },
+        { x: 50, y: 0, z: 0, type: 'corner' },
+        { x: 100, y: 0, z: 0, type: 'corner' },
+      ],
+    };
+    const report = addon.roadGetAdapterReport(road);
+    expect(report.exact).toBe(false);
+    expect(report.legacySegments).toBe(2);
+    expect(report.numSegments).toBe(2);
+  });
+
+  it('getAdapterReport: arc metadata produces arcSegments=1', () => {
+    // Use the createCircleArc tool which now emits metadata
+    const arcRoad = addon.roadCreateCircleArc(0, 0, 1, 0, 50, 50, 8);
+    expect(arcRoad.formatVersion).toBe(2);
+    expect(arcRoad.points[0].segmentMeta).not.toBeNull();
+    expect(arcRoad.points[0].segmentMeta.kind).toBe('arc');
+
+    const report = addon.roadGetAdapterReport(arcRoad);
+    expect(report.exact).toBe(true);
+    expect(report.arcSegments).toBe(1);
+    expect(report.numSegments).toBe(1);
+    expect(report.warnings.length).toBe(0);
+  });
+
+  it('getAdapterReport: clothoid metadata produces spiralSegments=1', () => {
+    const clothRoad = addon.roadCreateClothoidArc(0, 0, 1, 0, 80, 20, 0.8, 0.6, 8);
+    expect(clothRoad.formatVersion).toBe(2);
+    expect(clothRoad.points[0].segmentMeta).not.toBeNull();
+    expect(clothRoad.points[0].segmentMeta.kind).toBe('spiral');
+
+    const report = addon.roadGetAdapterReport(clothRoad);
+    expect(report.exact).toBe(true);
+    expect(report.spiralSegments).toBe(1);
+    expect(report.numSegments).toBe(1);
+  });
+
+  it('convertFromV2: round-trip line road preserves metadata', () => {
+    const road = {
+      id: 'rt_bridge_line',
+      name: 'Round Trip Bridge Line',
+      width: 10.0,
+      laneCount: 4,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const restored = addon.roadConvertFromV2(road);
+    expect(restored.id).toBe('rt_bridge_line');
+    expect(restored.name).toBe('Round Trip Bridge Line');
+    expect(restored.width).toBe(10.0);
+    expect(restored.laneCount).toBe(4);
+    expect(restored.formatVersion).toBe(2);
+    expect(restored.points.length).toBe(2);
+    expect(restored.points[0].x).toBeCloseTo(0, 1);
+    expect(restored.points[1].x).toBeCloseTo(100, 1);
+  });
+
+  it('convertFromV2: round-trip bezier road preserves handles', () => {
+    const road = {
+      id: 'rt_bridge_bez',
+      name: 'Round Trip Bridge Bezier',
+      width: 6.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'smooth', handleIn: null, handleOut: { x: 25, y: 40 }, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'smooth', handleIn: { x: -25, y: 40 }, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const restored = addon.roadConvertFromV2(road);
+    expect(restored.points.length).toBe(2);
+    expect(restored.points[0].handleOut).not.toBeNull();
+    expect(restored.points[0].handleOut.x).toBeCloseTo(25, 1);
+    expect(restored.points[0].handleOut.y).toBeCloseTo(40, 1);
+    expect(restored.points[1].handleIn).not.toBeNull();
+    expect(restored.points[1].handleIn.x).toBeCloseTo(-25, 1);
+    expect(restored.points[1].handleIn.y).toBeCloseTo(40, 1);
+  });
+
+  it('convertFromV2: round-trip arc road preserves segmentMeta', () => {
+    // Create an arc road using the tool (which emits metadata)
+    const arcRoad = addon.roadCreateCircleArc(0, 0, 1, 0, 50, 50, 8);
+    const restored = addon.roadConvertFromV2(arcRoad);
+
+    // Should have segmentMeta on first CP
+    expect(restored.points[0].segmentMeta).not.toBeNull();
+    expect(restored.points[0].segmentMeta.kind).toBe('arc');
+    expect(restored.points[0].segmentMeta.curvature).toBeCloseTo(
+      arcRoad.points[0].segmentMeta.curvature, 4
+    );
+    expect(restored.points[0].segmentMeta.arcLength).toBeCloseTo(
+      arcRoad.points[0].segmentMeta.arcLength, 1
+    );
+  });
+
+  it('convertFromV2: round-trip produces same centerline', () => {
+    const road = {
+      id: 'rt_centerline',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'smooth', handleIn: null, handleOut: { x: 25, y: 40 }, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'smooth', handleIn: { x: -25, y: 40 }, handleOut: null, segmentMeta: null },
+      ],
+    };
+
+    const samples1 = addon.roadSampleCenterlineV2(road, 20);
+    const restored = addon.roadConvertFromV2(road);
+    const samples2 = addon.roadSampleCenterlineV2(restored, 20);
+
+    expect(samples1.length).toBe(samples2.length);
+    for (let i = 0; i < samples1.length; i++) {
+      expect(samples1[i].x).toBeCloseTo(samples2[i].x, 2);
+      expect(samples1[i].y).toBeCloseTo(samples2[i].y, 2);
+    }
+  });
+
+  it('segmentMeta serialization: createCircleArc emits metadata through bridge', () => {
+    const road = addon.roadCreateCircleArc(0, 0, 1, 0, 50, 50, 8);
+    expect(road.formatVersion).toBe(2);
+    expect(road.points[0].segmentMeta).not.toBeNull();
+    expect(road.points[0].segmentMeta.kind).toBe('arc');
+    expect(road.points[0].segmentMeta.curvature).not.toBe(0);
+    expect(road.points[0].segmentMeta.arcLength).toBeGreaterThan(0);
+    expect(road.points[0].segmentMeta.startHeading).toBeCloseTo(0, 4);
+    // Subsequent CPs should not have metadata
+    expect(road.points[1].segmentMeta).toBeNull();
+  });
+
+  it('segmentMeta serialization: createClothoidArc emits metadata through bridge', () => {
+    const road = addon.roadCreateClothoidArc(0, 0, 1, 0, 80, 20, 0.8, 0.6, 8);
+    expect(road.formatVersion).toBe(2);
+    expect(road.points[0].segmentMeta).not.toBeNull();
+    expect(road.points[0].segmentMeta.kind).toBe('spiral');
+    expect(road.points[0].segmentMeta.segmentLength).toBeGreaterThan(0);
+  });
+
+  it('segmentMeta serialization: createSegment sets formatVersion=2', () => {
+    const road = addon.roadCreateSegment(0, 0, 100, 0);
+    expect(road.formatVersion).toBe(2);
+  });
+
+  it('sampleCenterlineV2 vs sampleCenterline: same endpoints for line road', () => {
+    const road = {
+      id: 'compare',
+      width: 8.0,
+      laneCount: 2,
+      formatVersion: 2,
+      points: [
+        { x: 0, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+        { x: 100, y: 0, z: 0, type: 'corner', handleIn: null, handleOut: null, segmentMeta: null },
+      ],
+    };
+    const v1Samples = addon.roadSampleCenterline(road, 10);
+    const v2Samples = addon.roadSampleCenterlineV2(road, 10);
+    // Endpoints should match
+    expect(v2Samples[0].x).toBeCloseTo(v1Samples[0].x, 1);
+    expect(v2Samples[9].x).toBeCloseTo(v1Samples[v1Samples.length - 1].x, 1);
   });
 });

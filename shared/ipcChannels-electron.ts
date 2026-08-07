@@ -40,6 +40,11 @@ export const ROAD_CREATE_POLYLINE = 'road:createPolyline' as const;
 export const ROAD_CREATE_BEZIER = 'road:createBezier' as const;
 export const ROAD_CREATE_CLOTHOID_SPLINE = 'road:createClothoidSpline' as const;
 
+// Phase 1.9 — RoadV2 bridge integration
+export const ROAD_SAMPLE_CENTERLINE_V2 = 'road:sampleCenterlineV2' as const;
+export const ROAD_GET_ADAPTER_REPORT = 'road:getAdapterReport' as const;
+export const ROAD_CONVERT_FROM_V2 = 'road:convertFromV2' as const;
+
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
 export const DIALOG_SELECT_PACKAGE = 'dialog:selectPackage' as const;

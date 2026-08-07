@@ -7,6 +7,7 @@
 #include "road/mesh.hpp"
 #include "road/opendrive.hpp"
 #include "road/road_tools.hpp"
+#include "road/road_adapter.hpp"
 #include <sstream>
 #include <iostream>
 
@@ -101,6 +102,7 @@ static Road parseRoad(const Napi::Object& obj) {
     road.name = obj.Has("name") ? obj.Get("name").As<Napi::String>().Utf8Value() : "Road";
     road.width = obj.Has("width") ? obj.Get("width").As<Napi::Number>().DoubleValue() : 8.0;
     road.laneCount = obj.Has("laneCount") ? obj.Get("laneCount").As<Napi::Number>().Int32Value() : 2;
+    road.formatVersion = obj.Has("formatVersion") ? obj.Get("formatVersion").As<Napi::Number>().Int32Value() : 1;
 
     auto ptsArr = obj.Get("points").As<Napi::Array>();
     for (uint32_t i = 0; i < ptsArr.Length(); i++) {
@@ -263,6 +265,7 @@ static Napi::Object roadToJs(Napi::Env env, const Road& road) {
     obj.Set("name", Napi::String::New(env, road.name));
     obj.Set("width", Napi::Number::New(env, road.width));
     obj.Set("laneCount", Napi::Number::New(env, road.laneCount));
+    obj.Set("formatVersion", Napi::Number::New(env, road.formatVersion));
 
     auto ptsArr = Napi::Array::New(env, road.points.size());
     for (size_t i = 0; i < road.points.size(); i++) {
@@ -336,7 +339,7 @@ static RoadToolParams parseToolParams(const Napi::Value& val) {
 // roadGetVersion() → string
 static Napi::Value RoadGetVersion(const Napi::CallbackInfo& info) {
     ROAD_LOG("roadGetVersion() called");
-    return Napi::String::New(info.Env(), "1.0.0-road-engine");
+    return Napi::String::New(info.Env(), "2.0.0-road-engine");
 }
 
 // roadGenerateIntersection(road1, road2, refLat, refLon) → GeneratedIntersection
@@ -712,6 +715,118 @@ static Napi::Value RoadCreateClothoidSpline(const Napi::CallbackInfo& info) {
     return roadToJs(env, road);
 }
 
+// ═══════════════════════════════════════════════════════════
+// Phase 1.9 — Bridge Integration for RoadV2
+// ═══════════════════════════════════════════════════════════
+//
+// The bridge now supports the RoadV2 pipeline internally. The TS side
+// doesn't need to know which adapter path is used — the bridge dispatches
+// based on formatVersion:
+//   formatVersion >= 2 → roadToV2() (exact path)
+//   formatVersion < 2  → roadToV2Legacy() (legacy compatibility)
+//
+// New IPC methods:
+//   roadSampleCenterlineV2(road, numSamples?) → Point2D[]
+//     Uses roadToV2Auto() internally, samples the RoadV2 centerline.
+//     This is the preferred sampling method for new code.
+//
+//   roadConvertFromV2(road) → Road
+//     Converts a legacy Road to RoadV2 and back (round-trip).
+//     Useful for testing and for future migration scenarios.
+//
+
+// roadSampleCenterlineV2(road, numSamples?) → Point2D[]
+// Uses roadToV2Auto() to convert, then samples the RoadV2 centerline.
+static Napi::Value RoadSampleCenterlineV2(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (road)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Road road = parseRoad(info[0].As<Napi::Object>());
+    int numSamples = (info.Length() >= 2 && info[1].IsNumber())
+        ? info[1].As<Napi::Number>().Int32Value() : 24;
+
+    // Convert to RoadV2 using auto-dispatch (formatVersion-aware)
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Auto(road, report);
+
+    if (v2.numSegments() == 0) {
+        return Napi::Array::New(env, 0);
+    }
+
+    // Sample the RoadV2 centerline at uniform arc-length intervals
+    double totalLen = v2.totalLength();
+    auto samples = Napi::Array::New(env, numSamples);
+    for (int i = 0; i < numSamples; i++) {
+        double s = totalLen * static_cast<double>(i) / (numSamples - 1);
+        Point2D p = v2.geometry().positionAt(s);
+        auto ptObj = Napi::Object::New(env);
+        ptObj.Set("x", Napi::Number::New(env, p.x));
+        ptObj.Set("y", Napi::Number::New(env, p.y));
+        samples.Set(i, ptObj);
+    }
+    return samples;
+}
+
+// roadGetAdapterReport(road) → { exact, exactSegments, legacySegments, ... }
+// Returns diagnostics from the roadToV2Auto() conversion.
+static Napi::Value RoadGetAdapterReport(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (road)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Road road = parseRoad(info[0].As<Napi::Object>());
+    AdapterReport report;
+    RoadV2 v2 = roadToV2Auto(road, report);
+
+    auto obj = Napi::Object::New(env);
+    obj.Set("exact", Napi::Boolean::New(env, report.exact));
+    obj.Set("exactSegments", Napi::Number::New(env, report.exactSegments));
+    obj.Set("legacySegments", Napi::Number::New(env, report.legacySegments));
+    obj.Set("unsupportedSegments", Napi::Number::New(env, report.unsupportedSegments));
+    obj.Set("lineSegments", Napi::Number::New(env, report.lineSegments));
+    obj.Set("bezierSegments", Napi::Number::New(env, report.bezierSegments));
+    obj.Set("arcSegments", Napi::Number::New(env, report.arcSegments));
+    obj.Set("spiralSegments", Napi::Number::New(env, report.spiralSegments));
+    obj.Set("numSegments", Napi::Number::New(env, v2.numSegments()));
+    obj.Set("totalLength", Napi::Number::New(env, v2.totalLength()));
+
+    auto warnings = Napi::Array::New(env, report.warnings.size());
+    for (size_t i = 0; i < report.warnings.size(); i++) {
+        warnings.Set(i, Napi::String::New(env, report.warnings[i]));
+    }
+    obj.Set("warnings", warnings);
+
+    return obj;
+}
+
+// roadConvertFromV2(road) → Road
+// Round-trip: Road → roadToV2Auto() → RoadV2 → roadFromV2() → Road
+// Useful for testing and migration.
+static Napi::Value RoadConvertFromV2(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected (road)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Road road = parseRoad(info[0].As<Napi::Object>());
+
+    // Forward: Road → RoadV2
+    AdapterReport fwdReport;
+    RoadV2 v2 = roadToV2Auto(road, fwdReport);
+
+    // Reverse: RoadV2 → Road
+    ReverseAdapterReport revReport;
+    Road restored = roadFromV2(v2, revReport);
+
+    return roadToJs(env, restored);
+}
+
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
     exports.Set("roadGenerateIntersection", Napi::Function::New(env, RoadGenerateIntersection));
@@ -730,6 +845,10 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadCreatePolyline", Napi::Function::New(env, RoadCreatePolyline));
     exports.Set("roadCreateBezier", Napi::Function::New(env, RoadCreateBezier));
     exports.Set("roadCreateClothoidSpline", Napi::Function::New(env, RoadCreateClothoidSpline));
+    // Phase 1.9 — RoadV2 bridge integration
+    exports.Set("roadSampleCenterlineV2", Napi::Function::New(env, RoadSampleCenterlineV2));
+    exports.Set("roadGetAdapterReport", Napi::Function::New(env, RoadGetAdapterReport));
+    exports.Set("roadConvertFromV2", Napi::Function::New(env, RoadConvertFromV2));
     return exports;
 }
 

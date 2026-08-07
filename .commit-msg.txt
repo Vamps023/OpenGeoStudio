@@ -1,61 +1,47 @@
-Phase 1.8.5: roadFromV2() inverse adapter + round-trip verification
+Phase 1.9: Bridge integration for RoadV2
 
-Completes the bidirectional conversion between legacy Road and RoadV2.
-The full round-trip is now validated:
+Exposes the RoadV2 pipeline through the IPC bridge. The TS side
+now has access to the new adapter functions without needing to know
+which adapter path is used — the bridge dispatches based on
+formatVersion.
 
-  Road → roadToV2() → RoadV2 → roadFromV2() → Road'
+New IPC methods:
+- roadSampleCenterlineV2(road, numSamples?) → Point2D[]
+  Uses roadToV2Auto() internally, samples RoadV2 centerline at
+  uniform arc-length intervals. Preferred sampling method for new code.
+- roadGetAdapterReport(road) → AdapterReport
+  Returns diagnostics: exact flag, segment counts, warnings, totalLength
+- roadConvertFromV2(road) → Road
+  Round-trip: Road → roadToV2Auto() → RoadV2 → roadFromV2() → Road
 
-Key invariant:
-  roadFromV2(roadToV2(Road))  is always LOSSLESS
-  roadToV2(roadFromV2(RoadV2)) MAY be lossy once Phase 2 adds
-  features that legacy Road cannot express (LaneSection, etc.)
+Bridge changes:
+- parseRoad() now parses formatVersion from JS objects
+- roadToJs() now serializes formatVersion to JS objects
+- segmentMeta parsing/serialization already in place from 1.8.3d
+- Version bumped to 2.0.0-road-engine
+- road_adapter.hpp included in road_bridge.cpp
 
-Changes:
-- ReverseAdapterReport struct: tracks lossless flag, warnings,
-  segment counts (line/bezier/arc/spiral), approximated/unsupported
-  segments
-- roadFromV2() function: converts RoadV2 → Road
-  - LineSegment → 2 corner ControlPoints
-  - BezierSegment → 2 smooth ControlPoints with handles
-  - ArcSegment → ControlPoint with SegmentMetadata(kind=Arc)
-  - SpiralSegment → ControlPoint with SegmentMetadata(kind=Spiral)
-  - Adjacent segments share boundary ControlPoints
-  - All metadata preserved (id, name, color, profile, width, laneCount)
-  - formatVersion set to 2
-  - LaneSection (Phase 2) → warning + lossless=false
+TypeScript changes:
+- ControlPoint type: added optional segmentMeta field
+- Road type: added optional formatVersion field
+- SegmentMetadata type: new interface (kind, version, arc/spiral params)
+- CppRoad/CppControlPoint: added formatVersion, segmentMeta, id
+- toCppRoad(): passes formatVersion and segmentMeta through
+- RoadEngineAPI: added sampleCenterlineV2, getAdapterReport, convertFromV2
+- AdapterReportResult type: new interface for bridge diagnostics
+- Window type augmentation: added new IPC methods
 
-Tests (20 new, 261 total, 2210 assertions):
+IPC plumbing:
+- 3 new channels in ipcChannels-electron.ts
+- 3 new handlers in roadEngineHandler.ts
+- 3 new preload bridges in preload.ts
 
-1.8.5a Basic conversion (8 tests):
-- Empty road → empty Road
-- LineSegment → 2 corner CPs
-- BezierSegment → 2 smooth CPs with handles (relative)
-- ArcSegment → CP with Arc metadata (curvature, arcLength, startHeading)
-- SpiralSegment → CP with Spiral metadata (k0, k1, length)
-- Multiple LineSegments → shared boundary CPs (N+1 CPs for N segments)
-- Mixed segments → correct CP count with shared boundaries
-- Metadata fields preserved (id, name, color, profile, width, laneCount)
+Tests (17 new vitest, 130 total):
+- Version 2.0.0
+- sampleCenterlineV2: line, bezier, legacy (v1), no-formatVersion
+- getAdapterReport: exact path, legacy path, arc metadata, clothoid metadata
+- convertFromV2: line round-trip, bezier round-trip (handles), arc round-trip (metadata), centerline parity
+- segmentMeta serialization: createCircleArc, createClothoidArc, createSegment
+- sampleCenterlineV2 vs sampleCenterline: endpoint parity
 
-1.8.5b Round-trip verification (6 tests):
-- Line road: lossless, positions match
-- Bezier road: lossless, handles preserved
-- Arc road: lossless, metadata preserved, double round-trip produces
-  same ArcSegment
-- Spiral road: lossless, metadata preserved, double round-trip produces
-  same SpiralSegment
-- Mixed road: lossless, all CP positions and handles preserved
-- Geometry parity: centerline at 10 sample points matches after
-  full round-trip
-
-1.8.5c Information loss report (5 tests):
-- Line-only road: lossless=true, no warnings
-- Mixed road (line+bezier+arc+spiral): lossless=true, correct counts
-- LaneSection present: lossless=false, warning emitted
-- Empty road: lossless=true
-- Segment counts match road composition
-
-1.8.5 Stress test (1 test):
-- 100 line segments: lossless, 101 CPs, full round-trip geometry parity
-  at every control point
-
-All 113 vitest tests remain green (no regression).
+All 261 doctest + 130 vitest pass (no regression).
