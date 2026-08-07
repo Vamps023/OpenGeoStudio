@@ -1,0 +1,246 @@
+{
+  "name": "straight_2pt",
+  "description": "Two corner points, pure line",
+  "numSamples": 32,
+  "roadMetadata": {
+    "id": "straight_2pt",
+    "name": "Straight 2pt",
+    "width": 8,
+    "laneCount": 2,
+    "numControlPoints": 2
+  },
+  "samples": [
+    {
+      "s": 0,
+      "x": 0,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 3.125,
+      "x": 3.125,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 6.25,
+      "x": 6.25,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 9.375,
+      "x": 9.375,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 12.5,
+      "x": 12.5,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 15.625,
+      "x": 15.625,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 18.75,
+      "x": 18.75,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 21.875,
+      "x": 21.875,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 25,
+      "x": 25,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 28.125,
+      "x": 28.125,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 31.25,
+      "x": 31.25,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 34.375,
+      "x": 34.375,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 37.5,
+      "x": 37.5,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 40.625,
+      "x": 40.625,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 43.75,
+      "x": 43.75,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 46.875,
+      "x": 46.875,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 50,
+      "x": 50,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 53.125,
+      "x": 53.125,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 56.25,
+      "x": 56.25,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 59.375,
+      "x": 59.375,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 62.5,
+      "x": 62.5,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 65.625,
+      "x": 65.625,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 68.75,
+      "x": 68.75,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 71.875,
+      "x": 71.875,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 75,
+      "x": 75,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 78.125,
+      "x": 78.125,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 81.25,
+      "x": 81.25,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 84.375,
+      "x": 84.375,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 87.5,
+      "x": 87.5,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 90.625,
+      "x": 90.625,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 93.75,
+      "x": 93.75,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 96.875,
+      "x": 96.875,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    },
+    {
+      "s": 100,
+      "x": 100,
+      "y": 0,
+      "heading": 0,
+      "curvature": 0
+    }
+  ],
+  "totalLength": 100
+}

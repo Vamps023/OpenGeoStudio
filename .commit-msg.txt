@@ -1,79 +1,62 @@
-Phase 1.7: SegmentSequence + s/t coordinate system
+Geometry kernel review: boundary semantics, zero-length, FP, continuity diagnostics
 
-Implements SegmentSequence (task 1.7 of Phase 1 — Geometry Kernel Refactor).
-New file: st_coords.hpp. Purely additive — no existing files modified.
+Addresses the 9-point review checklist before starting Phase 1.8 (adapter).
+All changes are additive — no existing behavior modified.
 
-Design (per user review):
-- Non-owning view: stores const GeometrySegment* pointers. RoadV2 will
-  own the unique_ptr<GeometrySegment> objects. This avoids duplicating
-  clone/copy/move/lifetime logic between SegmentSequence and RoadV2.
-- API mirrors GeometrySegment: evaluateDS(s), positionAt(s), tangentAt(s),
-  normalAt(s), curvatureAt(s), headingAt(s). From the outside,
-  SegmentSequence IS one continuous geometry — same interface, no
-  "global" prefix.
-- Binary search O(log N) for globalS → (segment, localS) using
-  cumulative length offsets.
-- clampS() centralizes clamping; all eval methods use it.
-- validateContinuity() returns std::vector<ContinuityError> with
-  diagnostics (segmentA, segmentB, positionError, headingError), not
-  bool — so the editor can highlight the offending segment.
-- Empty sequence: assert in debug, not silent (0,0) — hiding bugs is
-  worse than crashing in development.
-- projectToST() intentionally omitted — not declared. A stub returning
-  {0,0} is dangerous (someone could use it). When Phase 3 arrives, the
-  compiler will remind us it doesn't exist. Compile error > silent bug.
+Code changes (st_coords.hpp):
+  1. Boundary semantics documented in header comment:
+     - s=0 → {0, 0.0}, s=totalLength → {lastSeg, lastSeg.length}
+     - s at boundary → {nextSeg, 0.0} (upper_bound convention)
+     - s<0 → clamped to {0, 0.0}, s>totalLength → clamped to {lastSeg, last}
+  2. Thread safety documented: read-only after construction, no lazy init,
+     no mutable caches. Naturally usable from multi-threaded mesh jobs.
+  3. Separation of concerns documented: SegmentSequence does NOT provide
+     sampleAdaptive(). Sampling owned by GeometrySegment, composition by
+     Sequence, ownership+metadata by RoadV2.
+  4. ContinuityError expanded with expectedEnd, actualStart,
+     expectedHeading, actualHeading — editor can highlight problems
+     without recomputing.
 
-st_coords.hpp contains:
-  - SegmentSequence class (non-owning view, 215 lines)
-  - positionAtST(seq, s, t) free function: lateral offset
-    t positive = left (CCW from tangent), using normalAt(s)
-  - headingAtST(seq, s, t) free function: heading is independent of t
-    for rigid cross-section, included for lane direction queries
+Tests (15 new, 136 total, 557 assertions):
+  Boundary semantics (7):
+    - s=0 → segment 0, localS=0
+    - s=totalLength → last segment, localS=length
+    - s at exact boundary → next segment, localS=0 (upper_bound)
+    - s<0 → clamped to segment 0
+    - s>totalLength → clamped to last segment
+    - Position consistent at boundary regardless of segment choice
+    - Heading consistent at boundary for continuous segments
 
-SegmentSequence API:
-  - Constructor: SegmentSequence(vector<const GeometrySegment*>)
-  - numSegments(), totalLength(), segment(idx)
-  - clampS(s) — clamp to [0, totalLength]
-  - globalSToLocal(s) → {segmentIndex, localS} — binary search
-  - evaluateDS(s, x, y, h), positionAt(s), tangentAt(s), normalAt(s),
-    curvatureAt(s), headingAt(s)
-  - validateContinuity(posTol, headingTol) → vector<ContinuityError>
+  Zero-length segments (4):
+    - Line(0) in sequence: binary search skips zero-length, position correct
+    - Arc(0) in sequence: doesn't crash, position correct
+    - Bezier(all coincident) in sequence: doesn't crash
+    - Two consecutive zero-length segments: binary search handles correctly
 
-Tests (26 new, 121 total, 507 assertions):
-  Composition & binary search (9):
-    - Basic construction (2 line segments)
-    - globalSToLocal at start, in first segment, at boundary, in second,
-      at end
-    - Three-segment binary search correctness (9 s values)
-    - Mixed segment types (line + arc + line)
+  Floating-point accumulation (2):
+    - 1000 × 0.01m: total length accurate within 0.1%, position at s=5
+      and s=10 correct within 1cm
+    - 100 × 0.1m: binary search finds correct segment (with FP tolerance
+      on index, position verified)
 
-  Evaluation delegation (6):
-    - evaluateDS delegates to correct segment (heading changes)
-    - positionAt at various global s
-    - tangentAt at various global s
-    - normalAt at various global s
-    - curvatureAt delegates correctly (line=0, arc=0.1)
-    - clampS applied in evaluateDS (out-of-range)
+  Expanded continuity diagnostics (2):
+    - Position gap: expectedEnd, actualStart, expectedHeading,
+      actualHeading all populated correctly
+    - Heading-only discontinuity: position fields match (same point),
+      heading fields show 0 vs π/2
 
-  Continuity validation (5):
-    - Continuous segments: no errors
-    - Position gap detected (5m gap)
-    - Heading discontinuity detected (90° turn)
-    - Custom tolerances (loose vs tight)
-    - Single segment: no errors
-
-  Lateral offset (5):
-    - t=0 returns centerline
-    - Positive t offsets left
-    - Negative t offsets right
-    - Works across segment boundary
-    - headingAtST independent of t
-
-  Edge cases (1):
-    - Single segment works
+Migration plan updates (Section 7: Adapter Contract):
+  7.1 Round-trip parity: geometry, lanes, width, IDs, metadata, handles
+  7.2 Golden fixture test: 6 fixture roads (straight, arc, clothoid,
+      bezier, mixed) with point-for-point centerline comparison
+  7.3 RoadV2 ownership model: owns unique_ptr<GeometrySegment>,
+      builds SegmentSequence view once, no duplicate ownership
+  7.4 SegmentSequence design principles: non-owning, read-only,
+      no sampleAdaptive, boundary semantics, continuity diagnostics,
+      projectToST omitted
 
 Test results:
-- C++ doctest: 121/121 passed (507 assertions)
+- C++ doctest: 136/136 passed (557 assertions)
 - vitest: 41/41 passed (no regression)
 
 Generated with Devin (https://devin.ai)
