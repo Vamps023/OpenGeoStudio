@@ -33,7 +33,7 @@ import {
   detectIntersections,
   distanceMeters,
 } from '../shared/types';
-import { roadEngine } from '../shared/roadEngineClient';
+import { roadEngine, type RoadBuildResult, type MeshSectionData, type LaneCenterlineData, type LaneBoundaryData } from '../shared/roadEngineClient';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
   MeshBuilder, StandardMaterial, Color3, Color4, Mesh, LinesMesh, Texture,
@@ -43,6 +43,57 @@ import {
 
 interface RoadViewportProps {
   className?: string;
+}
+
+// ─── Legacy TS dashed marking builder (fallback when buildRoad() unavailable) ──
+function buildDashedMarkingTS(
+  name: string,
+  samples: Array<{ x: number; y: number; z: number }>,
+  offsetMeters: number,
+  normalAt: (i: number) => { nx: number; ny: number },
+  dashLength: number,
+  gapLength: number,
+  markingWidth: number,
+  yOffset: number,
+  color: Color3,
+  scene: Scene,
+  buildStripMesh: (name: string, leftPath: Vector3[], rightPath: Vector3[], uTileSize: number, vRepeat: number, scene: Scene) => Mesh,
+  roadMeshesRef: React.MutableRefObject<Map<string, Mesh>>,
+) {
+  const cumDist: number[] = [0];
+  for (let i = 1; i < samples.length; i++) {
+    const d = Math.sqrt((samples[i].x - samples[i-1].x) ** 2 + (samples[i].y - samples[i-1].y) ** 2);
+    cumDist[i] = cumDist[i - 1] + d;
+  }
+  const totalLength = cumDist[cumDist.length - 1];
+  let pos = 0;
+  let dashIdx = 0;
+  while (pos < totalLength) {
+    const dashEnd = Math.min(pos + dashLength, totalLength);
+    const startIdx = cumDist.findIndex((d) => d >= pos);
+    const endIdx = cumDist.findIndex((d) => d >= dashEnd);
+    if (startIdx < 0 || endIdx < 0) break;
+    const dashLeft: Vector3[] = [];
+    const dashRight: Vector3[] = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+      const s = samples[i];
+      const { nx, ny } = normalAt(i);
+      const halfMw = markingWidth / 2;
+      dashLeft.push(new Vector3(s.x + nx * (offsetMeters + halfMw), s.z + yOffset, s.y + ny * (offsetMeters + halfMw)));
+      dashRight.push(new Vector3(s.x + nx * (offsetMeters - halfMw), s.z + yOffset, s.y + ny * (offsetMeters - halfMw)));
+    }
+    const dashMesh = buildStripMesh(`${name}_${dashIdx}`, dashLeft, dashRight, 1, 1, scene);
+    const dashMat = new StandardMaterial(`${name}_mat_${dashIdx}`, scene);
+    dashMat.backFaceCulling = false;
+    dashMat.diffuseColor = color;
+    dashMat.emissiveColor = color.scale(0.15);
+    dashMat.specularColor = new Color3(0, 0, 0);
+    dashMesh.material = dashMat;
+    dashMesh.isPickable = false;
+    roadMeshesRef.current.set(`${name}_${dashIdx}`, dashMesh);
+    pos = dashEnd + gapLength;
+    dashIdx++;
+  }
 }
 
 export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
@@ -82,6 +133,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
   // ─── Road sample cache (populated async by C++ engine, used sync for rendering) ───
   const sampleCacheRef = useRef<Map<string, Array<{ x: number; y: number; z: number }>>>(new Map());
+  // ─── Road build result cache (Phase 2.8 — full lane engine pipeline) ───
+  const buildCacheRef = useRef<Map<string, RoadBuildResult>>(new Map());
 
   // Track shift key state globally (more reliable than e.originalEvent.shiftKey in Electron)
   const shiftDownRef = useRef(false);
@@ -1854,26 +1907,42 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   }, [store.roads, store.selection, viewMode]);
 
   // ─── Refresh sample cache from C++ engine ───────────────
+  // Also refreshes the build cache (Phase 2.8 — full lane engine pipeline)
   async function refreshSampleCache() {
     const refLat = refLatRef.current;
     const refLon = refLonRef.current;
     const newCache = new Map<string, Array<{ x: number; y: number; z: number }>>();
+    const newBuildCache = new Map<string, RoadBuildResult>();
     for (const road of roadsRef.current) {
       if (road.points.length < 2) continue;
       try {
+        // Phase 1: centerline samples (for 2D map view)
         const samples = await roadEngine.sampleCenterline(road, refLat, refLon, 24);
         newCache.set(road.id, samples);
       } catch (err) {
         console.error('[RoadViewport] Failed to sample road', road.id, err);
       }
+      try {
+        // Phase 2.8: full build (for 3D mesh view)
+        const buildResult = await roadEngine.buildRoad(road, refLat, refLon);
+        newBuildCache.set(road.id, buildResult);
+      } catch (err) {
+        console.error('[RoadViewport] Failed to build road', road.id, err);
+      }
     }
     sampleCacheRef.current = newCache;
+    buildCacheRef.current = newBuildCache;
     updateAllViews();
   }
 
   /** Get cached road samples (sync) or empty array */
   function getCachedSamples(roadId: string): Array<{ x: number; y: number; z: number }> {
     return sampleCacheRef.current.get(roadId) ?? [];
+  }
+
+  /** Get cached build result (sync) or null */
+  function getCachedBuild(roadId: string): RoadBuildResult | null {
+    return buildCacheRef.current.get(roadId) ?? null;
   }
 
   /** Compute intersection polygon from cached road samples (replaces TS computeIntersectionPolygon) */
@@ -2050,116 +2119,131 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         return mesh;
       }
 
-      // ─── Helper: build dashed marking stripes ─────────────────
-      // Creates a series of thin rectangular meshes along an offset path
-      function buildDashedMarking(
-        name: string,
-        samples: Array<{ x: number; y: number; z: number }>,
-        offsetMeters: number,
-        normalAt: (i: number) => { nx: number; ny: number },
-        dashLength: number,   // meters
-        gapLength: number,    // meters
-        markingWidth: number, // meters
-        yOffset: number,      // height above road
-        color: Color3,
-        scene: Scene,
-      ) {
-        // Compute cumulative distance
-        const cumDist: number[] = [0];
-        for (let i = 1; i < samples.length; i++) {
-          const d = Math.sqrt((samples[i].x - samples[i-1].x) ** 2 + (samples[i].y - samples[i-1].y) ** 2);
-          cumDist[i] = cumDist[i - 1] + d;
-        }
-        const totalLength = cumDist[cumDist.length - 1];
-
-        // Generate dashes at regular intervals
-        let pos = 0;
-        let dashIdx = 0;
-        while (pos < totalLength) {
-          const dashEnd = Math.min(pos + dashLength, totalLength);
-          // Find sample indices for this dash segment
-          const startIdx = cumDist.findIndex((d) => d >= pos);
-          const endIdx = cumDist.findIndex((d) => d >= dashEnd);
-          if (startIdx < 0 || endIdx < 0) break;
-
-          // Build dash as a thin strip
-          const dashLeft: Vector3[] = [];
-          const dashRight: Vector3[] = [];
-          for (let i = startIdx; i <= endIdx; i++) {
-            const s = samples[i];
-            const { nx, ny } = normalAt(i);
-            const halfMw = markingWidth / 2;
-            dashLeft.push(new Vector3(s.x + nx * (offsetMeters + halfMw), s.z + yOffset, s.y + ny * (offsetMeters + halfMw)));
-            dashRight.push(new Vector3(s.x + nx * (offsetMeters - halfMw), s.z + yOffset, s.y + ny * (offsetMeters - halfMw)));
+      // ─── Phase 2.8: Upload C++ buildRoad() mesh sections to Babylon ──
+      // The C++ engine generates typed arrays (Float32Array, Uint32Array)
+      // that can be uploaded directly to GPU without per-vertex TS processing.
+      const buildResult = getCachedBuild(road.id);
+      if (buildResult && buildResult.meshSections.length > 0) {
+        for (const sec of buildResult.meshSections) {
+          // Swap Y/Z for Babylon (C++ uses Z-up, Babylon uses Y-up)
+          // C++ position (x, y, z) → Babylon (x, z, y)
+          const babylonPositions = new Float32Array(sec.positions.length);
+          for (let i = 0; i < sec.vertexCount; i++) {
+            babylonPositions[i * 3]     = sec.positions[i * 3];       // x
+            babylonPositions[i * 3 + 1] = sec.positions[i * 3 + 2];   // z → Babylon Y
+            babylonPositions[i * 3 + 2] = sec.positions[i * 3 + 1];   // y → Babylon Z
           }
-          const dashMesh = buildStripMesh(`${name}_${dashIdx}`, dashLeft, dashRight, 1, 1, scene);
-          const dashMat = new StandardMaterial(`${name}_mat_${dashIdx}`, scene);
-          dashMat.backFaceCulling = false;
-          dashMat.diffuseColor = color;
-          dashMat.emissiveColor = color.scale(0.15);
-          dashMat.specularColor = new Color3(0, 0, 0);
-          dashMesh.material = dashMat;
-          dashMesh.isPickable = false;
-          roadMeshesRef.current.set(`${name}_${dashIdx}`, dashMesh);
+          const babylonNormals = new Float32Array(sec.normals.length);
+          for (let i = 0; i < sec.vertexCount; i++) {
+            babylonNormals[i * 3]     = sec.normals[i * 3];       // nx
+            babylonNormals[i * 3 + 1] = sec.normals[i * 3 + 2];   // nz → Babylon Y
+            babylonNormals[i * 3 + 2] = sec.normals[i * 3 + 1];   // ny → Babylon Z
+          }
 
-          pos = dashEnd + gapLength;
-          dashIdx++;
+          const mesh = new Mesh(`${sec.material}_${road.id}`, scene);
+          const vertexData = new VertexData();
+          vertexData.positions = babylonPositions;
+          vertexData.indices = sec.indices;
+          vertexData.normals = babylonNormals;
+          vertexData.uvs = sec.uvs;
+          vertexData.applyToMesh(mesh, true);
+
+          // Apply material based on section type
+          const mat = new StandardMaterial(`${sec.material}_mat_${road.id}`, scene);
+          mat.backFaceCulling = false;
+
+          if (sec.material === 'asphalt') {
+            const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
+            if (tex) {
+              mat.diffuseTexture = tex;
+              mat.diffuseColor = new Color3(1, 1, 1);
+              tex.wrapU = Texture.WRAP_ADDRESSMODE;
+              tex.wrapV = Texture.WRAP_ADDRESSMODE;
+            } else {
+              mat.diffuseColor = new Color3(0.23, 0.23, 0.23);
+            }
+            mat.emissiveColor = new Color3(0.15, 0.15, 0.15);
+            mat.specularColor = new Color3(0.05, 0.05, 0.05);
+            mesh.isPickable = true; // Enable picking for shift+click road selection
+            roadMeshesRef.current.set(road.id, mesh);
+          } else if (sec.material === 'yellow_marking') {
+            mat.diffuseColor = new Color3(1, 0.85, 0.2);
+            mat.emissiveColor = new Color3(0.15, 0.13, 0.03);
+            mat.specularColor = new Color3(0, 0, 0);
+            mesh.isPickable = false;
+            roadMeshesRef.current.set(`yellow_${road.id}`, mesh);
+          } else if (sec.material === 'white_marking') {
+            mat.diffuseColor = new Color3(1, 1, 1);
+            mat.emissiveColor = new Color3(0.12, 0.12, 0.12);
+            mat.specularColor = new Color3(0, 0, 0);
+            mesh.isPickable = false;
+            roadMeshesRef.current.set(`white_${road.id}`, mesh);
+          } else {
+            mat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+            mesh.isPickable = false;
+            roadMeshesRef.current.set(`${sec.material}_${road.id}`, mesh);
+          }
+
+          mesh.material = mat;
         }
-      }
-
-      // ─── Road surface with proper UV mapping ──────────────────
-      const pL: Vector3[] = [], pR: Vector3[] = [];
-      for (let i = 0; i < samples.length; i++) {
-        const s = samples[i]; const { nx, ny } = normalAt(i);
-        pL.push(new Vector3(s.x + nx * halfW, s.z + 0.02, s.y + ny * halfW));
-        pR.push(new Vector3(s.x - nx * halfW, s.z + 0.02, s.y - ny * halfW));
-      }
-      const roadMesh = buildStripMesh(`road_${road.id}`, pL, pR, 5, 1, scene);
-      const roadMat = new StandardMaterial(`rmat_${road.id}`, scene);
-      roadMat.backFaceCulling = false;
-      const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
-      if (tex) {
-        roadMat.diffuseTexture = tex;
-        roadMat.diffuseColor = new Color3(1, 1, 1);
-        tex.wrapU = Texture.WRAP_ADDRESSMODE;
-        tex.wrapV = Texture.WRAP_ADDRESSMODE;
       } else {
-        roadMat.diffuseColor = new Color3(0.23, 0.23, 0.23);
-      }
-      roadMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
-      roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
-      roadMesh.material = roadMat;
-      roadMesh.isPickable = true; // Enable picking for shift+click road selection
-      roadMeshesRef.current.set(road.id, roadMesh);
+        // ─── Fallback: TS-generated road surface + markings ──
+        // Used when buildRoad() is not available (e.g. addon not loaded)
 
-      // ─── Center line marking (dashed yellow) ──────────────────
-      buildDashedMarking(
-        `center_${road.id}`, samples, 0, normalAt,
-        3, 3, 0.15, 0.05,  // 3m dash, 3m gap, 15cm wide, 5cm above road
-        new Color3(1, 0.85, 0.2), scene
-      );
+        // ─── Road surface with proper UV mapping ──────────────────
+        const pL: Vector3[] = [], pR: Vector3[] = [];
+        for (let i = 0; i < samples.length; i++) {
+          const s = samples[i]; const { nx, ny } = normalAt(i);
+          pL.push(new Vector3(s.x + nx * halfW, s.z + 0.02, s.y + ny * halfW));
+          pR.push(new Vector3(s.x - nx * halfW, s.z + 0.02, s.y - ny * halfW));
+        }
+        const roadMesh = buildStripMesh(`road_${road.id}`, pL, pR, 5, 1, scene);
+        const roadMat = new StandardMaterial(`rmat_${road.id}`, scene);
+        roadMat.backFaceCulling = false;
+        const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
+        if (tex) {
+          roadMat.diffuseTexture = tex;
+          roadMat.diffuseColor = new Color3(1, 1, 1);
+          tex.wrapU = Texture.WRAP_ADDRESSMODE;
+          tex.wrapV = Texture.WRAP_ADDRESSMODE;
+        } else {
+          roadMat.diffuseColor = new Color3(0.23, 0.23, 0.23);
+        }
+        roadMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
+        roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
+        roadMesh.material = roadMat;
+        roadMesh.isPickable = true;
+        roadMeshesRef.current.set(road.id, roadMesh);
 
-      // ─── Lane divider markings (dashed white) ─────────────────
-      if (road.laneCount > 1) {
-        const laneSpacing = road.width / road.laneCount;
-        for (let lane = 1; lane < road.laneCount; lane++) {
-          const offset = -halfW + laneSpacing * lane;
-          buildDashedMarking(
-            `div_${road.id}_${lane}`, samples, offset, normalAt,
-            3, 3, 0.12, 0.04,  // 3m dash, 3m gap, 12cm wide
-            new Color3(1, 1, 1), scene
+        // ─── Center line marking (dashed yellow) ──────────────────
+        buildDashedMarkingTS(
+          `center_${road.id}`, samples, 0, normalAt,
+          3, 3, 0.15, 0.05,
+          new Color3(1, 0.85, 0.2), scene, buildStripMesh, roadMeshesRef
+        );
+
+        // ─── Lane divider markings (dashed white) ─────────────────
+        if (road.laneCount > 1) {
+          const laneSpacing = road.width / road.laneCount;
+          for (let lane = 1; lane < road.laneCount; lane++) {
+            const offset = -halfW + laneSpacing * lane;
+            buildDashedMarkingTS(
+              `div_${road.id}_${lane}`, samples, offset, normalAt,
+              3, 3, 0.12, 0.04,
+              new Color3(1, 1, 1), scene, buildStripMesh, roadMeshesRef
+            );
+          }
+        }
+
+        // ─── Edge lines (solid white at road edges) ───────────────
+        for (const side of [-1, 1]) {
+          const edgeOffset = halfW * side - (0.1 * side);
+          buildDashedMarkingTS(
+            `edge_${road.id}_${side}`, samples, edgeOffset, normalAt,
+            9999, 0, 0.1, 0.04,
+            new Color3(1, 1, 1), scene, buildStripMesh, roadMeshesRef
           );
         }
-      }
-
-      // ─── Edge lines (solid white at road edges) ───────────────
-      for (const side of [-1, 1]) {
-        const edgeOffset = halfW * side - (0.1 * side); // 10cm inside edge
-        buildDashedMarking(
-          `edge_${road.id}_${side}`, samples, edgeOffset, normalAt,
-          9999, 0, 0.1, 0.04,  // continuous (long dash, no gap)
-          new Color3(1, 1, 1), scene
-        );
       }
 
       // ─── Curbs — raised edges on both sides ───────────────────
