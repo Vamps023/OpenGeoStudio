@@ -1164,3 +1164,321 @@ TEST_CASE("Adaptive sampling: constants match architecture doc Appendix B") {
     CHECK(MIN_GEOM_LENGTH == 0.1);
     CHECK(ADAPTIVE_MAX_DEPTH == 20);
 }
+
+// ═══════════════════════════════════════════════════════════
+// SegmentSequence Tests (Task 1.7)
+// ═══════════════════════════════════════════════════════════
+// Non-owning view over ordered GeometrySegments.
+// Global s → (segment, localS) via binary search.
+// API mirrors GeometrySegment: evaluateDS, positionAt, tangentAt, etc.
+// ═══════════════════════════════════════════════════════════
+
+#include "st_coords.hpp"
+
+using geo::SegmentSequence;
+
+TEST_CASE("SegmentSequence: basic construction with two line segments") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    CHECK(seq.numSegments() == 2);
+    CHECK(seq.totalLength() == doctest::Approx(20.0));
+}
+
+TEST_CASE("SegmentSequence: globalSToLocal at start") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(0.0);
+    CHECK(loc.segmentIndex == 0);
+    CHECK(loc.localS == doctest::Approx(0.0));
+}
+
+TEST_CASE("SegmentSequence: globalSToLocal in first segment") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(5.0);
+    CHECK(loc.segmentIndex == 0);
+    CHECK(loc.localS == doctest::Approx(5.0));
+}
+
+TEST_CASE("SegmentSequence: globalSToLocal at segment boundary") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(10.0);
+    // At exact boundary — should be in segment 0 with localS=10, or segment 1 with localS=0
+    // Either is valid; check that position is correct
+    CHECK((loc.segmentIndex == 0 || loc.segmentIndex == 1));
+    Point2D p = seq.positionAt(10.0);
+    CHECK(p.x == doctest::Approx(10.0));
+    CHECK(p.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("SegmentSequence: globalSToLocal in second segment") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(15.0);
+    CHECK(loc.segmentIndex == 1);
+    CHECK(loc.localS == doctest::Approx(5.0));
+}
+
+TEST_CASE("SegmentSequence: globalSToLocal at end") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto loc = seq.globalSToLocal(20.0);
+    CHECK(loc.segmentIndex == 1);
+    CHECK(loc.localS == doctest::Approx(10.0));
+}
+
+TEST_CASE("SegmentSequence: clampS") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+    CHECK(seq.clampS(-5.0) == doctest::Approx(0.0));
+    CHECK(seq.clampS(0.0) == doctest::Approx(0.0));
+    CHECK(seq.clampS(10.0) == doctest::Approx(10.0));
+    CHECK(seq.clampS(20.0) == doctest::Approx(20.0));
+    CHECK(seq.clampS(25.0) == doctest::Approx(20.0));
+}
+
+TEST_CASE("SegmentSequence: evaluateDS delegates to correct segment") {
+    LineSegment seg1({0, 0}, {10, 0});   // heading east
+    LineSegment seg2({10, 0}, {10, 10}); // heading north
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    // In first segment: heading should be 0 (east)
+    double x, y, h;
+    seq.evaluateDS(5, x, y, h);
+    CHECK(x == doctest::Approx(5.0));
+    CHECK(y == doctest::Approx(0.0));
+    CHECK(h == doctest::Approx(0.0));
+
+    // In second segment: heading should be π/2 (north)
+    seq.evaluateDS(15, x, y, h);
+    CHECK(x == doctest::Approx(10.0));
+    CHECK(y == doctest::Approx(5.0));
+    CHECK(h == doctest::Approx(geo::HALF_PI));
+}
+
+TEST_CASE("SegmentSequence: positionAt at various global s") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {10, 10});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    CHECK(seq.positionAt(0).x == doctest::Approx(0.0));
+    CHECK(seq.positionAt(0).y == doctest::Approx(0.0));
+    CHECK(seq.positionAt(10).x == doctest::Approx(10.0));
+    CHECK(seq.positionAt(10).y == doctest::Approx(0.0));
+    CHECK(seq.positionAt(15).x == doctest::Approx(10.0));
+    CHECK(seq.positionAt(15).y == doctest::Approx(5.0));
+    CHECK(seq.positionAt(20).x == doctest::Approx(10.0));
+    CHECK(seq.positionAt(20).y == doctest::Approx(10.0));
+}
+
+TEST_CASE("SegmentSequence: tangentAt at various global s") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {10, 10});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    Vec2 t1 = seq.tangentAt(5);
+    CHECK(t1.x == doctest::Approx(1.0));  // east
+    CHECK(t1.y == doctest::Approx(0.0));
+
+    Vec2 t2 = seq.tangentAt(15);
+    CHECK(t2.x == doctest::Approx(0.0));  // north
+    CHECK(t2.y == doctest::Approx(1.0));
+}
+
+TEST_CASE("SegmentSequence: normalAt at various global s") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {10, 10});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    Vec2 n1 = seq.normalAt(5);
+    CHECK(n1.x == doctest::Approx(0.0));  // north = left of east
+    CHECK(n1.y == doctest::Approx(1.0));
+
+    Vec2 n2 = seq.normalAt(15);
+    CHECK(n2.x == doctest::Approx(-1.0)); // west = left of north
+    CHECK(n2.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("SegmentSequence: curvatureAt delegates correctly") {
+    LineSegment line({0, 0}, {10, 0});
+    ArcSegment arc({10, 0}, 0.0, 0.1, 10.0);  // κ = 0.1
+    SegmentSequence seq({{&line, &arc}});
+
+    CHECK(seq.curvatureAt(5) == doctest::Approx(0.0));   // in line
+    CHECK(seq.curvatureAt(15) == doctest::Approx(0.1));  // in arc
+}
+
+TEST_CASE("SegmentSequence: mixed segment types (line + arc + line)") {
+    LineSegment seg1({0, 0}, {10, 0});
+    ArcSegment seg2({10, 0}, 0.0, 0.1, 5.0);  // 5m arc
+    LineSegment seg3({15, 0}, {25, 0});       // approximate — not exact continuity
+    SegmentSequence seq({{&seg1, &seg2, &seg3}});
+
+    CHECK(seq.numSegments() == 3);
+    CHECK(seq.totalLength() == doctest::Approx(25.0));  // 10 + 5 + 10
+
+    // Position at start, middle of arc, end
+    Point2D p0 = seq.positionAt(0);
+    CHECK(p0.x == doctest::Approx(0.0));
+
+    Point2D pEnd = seq.positionAt(25);
+    CHECK(pEnd.x == doctest::Approx(25.0));
+}
+
+TEST_CASE("SegmentSequence: clampS applied in evaluateDS") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    // Out-of-range s should clamp
+    double x, y, h;
+    seq.evaluateDS(-5, x, y, h);
+    CHECK(x == doctest::Approx(0.0));
+    seq.evaluateDS(25, x, y, h);
+    CHECK(x == doctest::Approx(20.0));
+}
+
+// ─── Continuity validation ───
+
+TEST_CASE("SegmentSequence: validateContinuity — continuous segments return no errors") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});  // exact position + heading continuity
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto errors = seq.validateContinuity();
+    CHECK(errors.empty());
+}
+
+TEST_CASE("SegmentSequence: validateContinuity — position gap detected") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({15, 0}, {25, 0});  // 5m gap
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto errors = seq.validateContinuity();
+    CHECK(errors.size() == 1);
+    CHECK(errors[0].segmentA == 0);
+    CHECK(errors[0].segmentB == 1);
+    CHECK(errors[0].positionError == doctest::Approx(5.0));
+}
+
+TEST_CASE("SegmentSequence: validateContinuity — heading discontinuity detected") {
+    LineSegment seg1({0, 0}, {10, 0});     // heading east (0)
+    LineSegment seg2({10, 0}, {10, 10});   // heading north (π/2) — 90° turn
+    SegmentSequence seq({{&seg1, &seg2}});
+    auto errors = seq.validateContinuity(0.01, 0.1);  // 0.1 rad ≈ 5.7° tolerance
+    CHECK(errors.size() == 1);
+    CHECK(errors[0].headingError == doctest::Approx(geo::HALF_PI).epsilon(0.01));
+}
+
+TEST_CASE("SegmentSequence: validateContinuity — custom tolerances") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10.001, 0}, {20, 0});  // 1mm gap, same heading
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    // With loose tolerance (0.1m): no error
+    auto loose = seq.validateContinuity(0.1, 0.01);
+    CHECK(loose.empty());
+
+    // With tight tolerance (0.0001m): error detected
+    auto tight = seq.validateContinuity(0.0001, 0.01);
+    CHECK(tight.size() == 1);
+}
+
+TEST_CASE("SegmentSequence: validateContinuity — single segment returns no errors") {
+    LineSegment seg1({0, 0}, {10, 0});
+    SegmentSequence seq({{&seg1}});
+    auto errors = seq.validateContinuity();
+    CHECK(errors.empty());
+}
+
+// ─── Lateral offset (s, t) ───
+
+TEST_CASE("positionAtST: t=0 returns centerline position") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    Point2D p = geo::positionAtST(seq, 5.0, 0.0);
+    CHECK(p.x == doctest::Approx(5.0));
+    CHECK(p.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("positionAtST: positive t offsets to the left") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    // At s=5, heading is east. Left = north. t=3 → 3m north.
+    Point2D p = geo::positionAtST(seq, 5.0, 3.0);
+    CHECK(p.x == doctest::Approx(5.0));
+    CHECK(p.y == doctest::Approx(3.0));
+}
+
+TEST_CASE("positionAtST: negative t offsets to the right") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    Point2D p = geo::positionAtST(seq, 5.0, -2.0);
+    CHECK(p.x == doctest::Approx(5.0));
+    CHECK(p.y == doctest::Approx(-2.0));
+}
+
+TEST_CASE("positionAtST: works across segment boundary") {
+    LineSegment seg1({0, 0}, {10, 0});     // east
+    LineSegment seg2({10, 0}, {10, 10});   // north
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    // At s=15 (in second segment, heading north), left = west
+    Point2D p = geo::positionAtST(seq, 15.0, 4.0);
+    CHECK(p.x == doctest::Approx(6.0));   // 10 - 4 = 6 (west)
+    CHECK(p.y == doctest::Approx(5.0));   // 5m along north segment
+}
+
+TEST_CASE("headingAtST: heading independent of t") {
+    LineSegment seg1({0, 0}, {10, 0});
+    LineSegment seg2({10, 0}, {20, 0});
+    SegmentSequence seq({{&seg1, &seg2}});
+
+    CHECK(geo::headingAtST(seq, 5.0, 0.0) == doctest::Approx(0.0));
+    CHECK(geo::headingAtST(seq, 5.0, 10.0) == doctest::Approx(0.0));
+    CHECK(geo::headingAtST(seq, 5.0, -10.0) == doctest::Approx(0.0));
+}
+
+// ─── Edge cases ───
+
+TEST_CASE("SegmentSequence: single segment works") {
+    LineSegment seg({0, 0}, {10, 0});
+    SegmentSequence seq({{&seg}});
+    CHECK(seq.numSegments() == 1);
+    CHECK(seq.totalLength() == doctest::Approx(10.0));
+    CHECK(seq.positionAt(5).x == doctest::Approx(5.0));
+}
+
+TEST_CASE("SegmentSequence: three segments binary search correctness") {
+    LineSegment seg1({0, 0}, {10, 0});    // s ∈ [0, 10)
+    LineSegment seg2({10, 0}, {25, 0});   // s ∈ [10, 25), length 15
+    LineSegment seg3({25, 0}, {30, 0});   // s ∈ [25, 30), length 5
+    SegmentSequence seq({{&seg1, &seg2, &seg3}});
+
+    // Test at various s values
+    auto check = [&](double s, int expectedIdx) {
+        auto loc = seq.globalSToLocal(s);
+        CHECK(loc.segmentIndex == expectedIdx);
+    };
+    check(0, 0);
+    check(5, 0);
+    check(9.9, 0);
+    check(10, 1);
+    check(15, 1);
+    check(24.9, 1);
+    check(25, 2);
+    check(29.9, 2);
+    check(30, 2);
+}

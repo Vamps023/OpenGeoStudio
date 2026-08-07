@@ -1,68 +1,47 @@
-Phase 1.5: BezierSegment + clothoidA |dk| fix + degenerate guards
+Phase 1.6: Adaptive sampling (recursive midpoint displacement)
 
-Completes the four GeometrySegment subclasses (Line, Arc, Spiral, Bezier).
-Purely additive — no existing files modified, legacy model untouched.
+Implements curvature-based adaptive sampling for all GeometrySegment
+subclasses. Purely additive — no existing files modified.
 
-Bug fix (clothoidA):
-  clothoidA() divided by (κ₁-κ₀) without abs(). For right-turn spirals
-  (κ₁<κ₀), this produced sqrt(negative) = NaN. Fixed to use |κ₁-κ₀|.
-  Added test: SpiralSegment with κ₀=0.1, κ₁=-0.1 confirms finite A.
+Named constants (from architecture doc Appendix B):
+  MAX_GEOM_ERROR_HORIZONTAL = 0.25 m (default sampling tolerance)
+  MAX_GEOM_ERROR_VERTICAL   = 0.1 m
+  GEOM_TOLERANCE            = 0.2 m (min distance between vertices)
+  MAX_GEOM_LENGTH           = 50 m
+  MIN_GEOM_LENGTH           = 0.1 m
+  ADAPTIVE_MAX_DEPTH        = 20 (recursion depth limit)
 
-Standing rule applied (per user direction):
-  "Any derived quantity that divides by a magnitude computed from control
-  points or curvature parameters needs a guard and a degenerate test."
-  Applied to:
-  - clothoidA(): returns infinity when κ₀==κ₁ (tested)
-  - curvatureRate(): returns 0 when κ₀==κ₁ (tested)
-  - BezierSegment::curvatureDS(): returns 0 when |B'(t)|<epsilon (tested)
-  - BezierSegment::evaluateDS heading: falls back to neighboring t when
-    |B'(t)|≈0, then to 0.0 if still degenerate (tested)
+Algorithm: recursive midpoint displacement
+  1. Start with minSamples (default 2) uniformly distributed
+  2. For each adjacent pair, compute chord midpoint vs actual curve point
+  3. If chord error > maxError, subdivide and recurse
+  4. Stop when: error < tolerance, OR depth >= ADAPTIVE_MAX_DEPTH,
+     OR sample count >= maxSamples
+  Naturally produces more samples in high-curvature regions.
 
-BezierSegment implementation (156 lines):
-  Storage: P0, P1, P2, P3 absolute control points (Q2 decision)
-  Reuses bezierCubic() from geometry.hpp (Bernstein polynomials, equivalent
-  to de Casteljau — no reimplementation).
-  Arc-length lookup table: N=100 samples, built at construction.
-    - s→t via binary search + linear interpolation
-    - Construction cost: ~100 bezier evals + 100 distance calcs ≈ μs
-    - Interactive editing: 600 tables/sec at 60fps × 10 segments = 1.2% CPU
-  Curvature: κ(t) = (B'(t) × B''(t)) / |B'(t)|³
-    - Guard: returns 0 when |B'(t)| < EPSILON (cusp at P1==P0 or P2==P3)
-    - These are normal editor states (freshly-placed points with no handle)
-  Heading: atan2(B'(t).y, B'(t).x), with fallback for zero-velocity cusps
-  rebuild() method for mutable use (control point changes)
-  clone() deep-copies (rebuilds table from control points)
+Control-flow guards (same discipline as math guards):
+  - ADAPTIVE_MAX_DEPTH (20): prevents stack overflow on pathological inputs
+  - maxSamples (default 10000): caps total output size
+  - Zero-length segment: returns single point without recursion
+  All three guards have explicit tests.
 
-Tests (18 new Bezier + 4 new Spiral degenerate = 22 new, 82 total, 392 assertions):
-  Bezier internal (11):
-    - Construction, type, length
-    - evaluateDS at s=0 returns P0, at s=length returns P3
-    - Midpoint position (symmetric arch: (5, 3.75))
-    - Heading at start (collinear = 0)
-    - Curvature 0 for collinear control points
-    - s-clamping (out-of-range)
-    - Clone equality and independence (dramatic modification)
-    - tangentAt unit vector at 6 s values
-    - sampleUniform count and endpoints
-  Bezier degenerate (5):
-    - P1==P0 (zero handle at start): no NaN/Inf in evaluateDS or curvatureDS
-    - P2==P3 (zero handle at end): no NaN/Inf
-    - Both handles zero: linear bezier, curvature ~0
-    - All points coincident: zero-length, no crash
-    - Curvature sign: arch shape gives negative curvature at apex
-  Cross-type (4):
-    - Bezier(collinear) matches Line (5 s values, position+heading+curvature)
-    - Bezier(collinear diagonal) matches Line
-    - Clone preserves type across all 4 segment kinds
-    - (Updated existing clone test to include Bezier)
-  Spiral degenerate (4, from clothoidA fix):
-    - clothoidA with negative curvature rate: finite (not NaN)
-    - clothoidA returns infinity when κ₀==κ₁
-    - clothoidA returns infinity when κ₀==κ₁==0
-    - curvatureRate is 0 when κ₀==κ₁
+Tests (13 new, 95 total, 426 assertions):
+  - LineSegment: minimal samples (zero chord error → no subdivision)
+  - ArcSegment: produces more samples than line
+  - ArcSegment: all samples on circle (within tolerance)
+  - Tighter tolerance → more samples
+  - Respects maxSamples limit
+  - Respects minSamples
+  - BezierSegment: subdivides in high-curvature regions
+  - SpiralSegment: subdivides
+  - Zero-length segment: doesn't crash
+  - Near-zero-length segment: doesn't blow stack (depth guard)
+  - Pathological arc (tiny R, tight tolerance): doesn't blow stack
+  - All sample points on actual curve
+  - Constants match architecture doc values
 
 Test results:
-- C++ doctest: 82/82 passed (392 assertions)
+- C++ doctest: 95/95 passed (426 assertions)
 - vitest: 41/41 passed (no regression)
 
 Generated with Devin (https://devin.ai)
