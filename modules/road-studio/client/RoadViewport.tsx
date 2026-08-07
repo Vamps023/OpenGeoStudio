@@ -560,6 +560,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     } catch {
       groundMat.diffuseColor = new Color3(0.15, 0.17, 0.19);
     }
+    groundMat.backFaceCulling = false;
     groundMat.specularColor = new Color3(0, 0, 0);
     ground.material = groundMat;
     ground.position = new Vector3(centerX, 0, centerZ);
@@ -840,6 +841,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           }
           const dashMesh = buildStripMesh(`${name}_${dashIdx}`, dashLeft, dashRight, 1, 1, scene);
           const dashMat = new StandardMaterial(`${name}_mat_${dashIdx}`, scene);
+          dashMat.backFaceCulling = false;
           dashMat.diffuseColor = color;
           dashMat.emissiveColor = color.scale(0.15);
           dashMat.specularColor = new Color3(0, 0, 0);
@@ -861,6 +863,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
       const roadMesh = buildStripMesh(`road_${road.id}`, pL, pR, 5, 1, scene);
       const roadMat = new StandardMaterial(`rmat_${road.id}`, scene);
+      roadMat.backFaceCulling = false;
       const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
       if (tex) {
         roadMat.diffuseTexture = tex;
@@ -870,6 +873,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       } else {
         roadMat.diffuseColor = new Color3(0.23, 0.23, 0.23);
       }
+      roadMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
       roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
       roadMesh.material = roadMat;
       roadMesh.isPickable = false;
@@ -917,6 +921,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           }
           const cm = buildStripMesh(`curb_${road.id}_${side}`, cL, cR, 1, 1, scene);
           const cmMat = new StandardMaterial(`curbM_${road.id}_${side}`, scene);
+          cmMat.backFaceCulling = false;
           const curbTex = getTexture('pavement', scene);
           if (curbTex) {
             cmMat.diffuseTexture = curbTex;
@@ -926,6 +931,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           } else {
             cmMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
           }
+          cmMat.emissiveColor = new Color3(0.08, 0.08, 0.08);
           cmMat.specularColor = new Color3(0, 0, 0);
           cm.material = cmMat; cm.isPickable = false;
           roadMeshesRef.current.set(`curb_${road.id}_${side}`, cm);
@@ -944,6 +950,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           }
           const sm = buildStripMesh(`sw_${road.id}_${side}`, sL, sR, 2, 1, scene);
           const smMat = new StandardMaterial(`swM_${road.id}_${side}`, scene);
+          smMat.backFaceCulling = false;
           const stex = getTexture('sidewalk', scene);
           if (stex) {
             smMat.diffuseTexture = stex;
@@ -953,6 +960,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           } else {
             smMat.diffuseColor = new Color3(0.65, 0.65, 0.65);
           }
+          smMat.emissiveColor = new Color3(0.1, 0.1, 0.1);
           smMat.specularColor = new Color3(0, 0, 0);
           sm.material = smMat; sm.isPickable = false;
           roadMeshesRef.current.set(`sw_${road.id}_${side}`, sm);
