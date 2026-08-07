@@ -66,6 +66,15 @@ registerPanel(
   { defaultVisible: true, closeable: false },
 );
 
+registerPanel(
+  'road-inspector',
+  'Road Inspector',
+  'Settings',
+  'right',
+  () => import('../../modules/road-studio/client/RoadInspector').then(m => ({ default: m.RoadInspector })),
+  { defaultWidth: 320, defaultVisible: true, closeable: true, minWidth: 240 },
+);
+
 // ═══════════════════════════════════════════════════════════════
 // Framework Panels
 // ═══════════════════════════════════════════════════════════════

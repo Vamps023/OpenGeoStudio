@@ -139,6 +139,12 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   // Track shift key state globally (more reliable than e.originalEvent.shiftKey in Electron)
   const shiftDownRef = useRef(false);
 
+  // Debug layer refs (sync access from update3DMeshes)
+  const debugModeRef = useRef(false);
+  const debugLayersRef = useRef<{
+    laneCenters: boolean; laneBoundaryLines: boolean; laneIds: boolean; meshWireframe: boolean;
+  }>({ laneCenters: false, laneBoundaryLines: false, laneIds: false, meshWireframe: false });
+
   const store = useRoadStudioStore();
   const viewMode = store.viewMode;
 
@@ -166,7 +172,16 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { drawingRoadIdRef.current = store.drawingRoadId; }, [store.drawingRoadId]);
   const debugMode = store.debugMode;
   const debugLayers = store.debugLayers;
-  useEffect(() => { updateAllViews(); }, [debugMode, debugLayers]);
+  useEffect(() => {
+    debugModeRef.current = debugMode;
+    debugLayersRef.current = {
+      laneCenters: debugLayers.laneCenters,
+      laneBoundaryLines: debugLayers.laneBoundaryLines,
+      laneIds: debugLayers.laneIds,
+      meshWireframe: debugLayers.meshWireframe,
+    };
+    updateAllViews();
+  }, [debugMode, debugLayers]);
 
   // Track shift key globally — more reliable than e.originalEvent.shiftKey in Electron
   useEffect(() => {
@@ -2305,6 +2320,79 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       }
 
       createCPMeshes(road, refLat, refLon, scene, selection);
+    }
+
+    // ─── Phase 2.8: Lane engine debug overlays (3D) ──────────────
+    const dbg3d = debugLayersRef.current;
+    if (dbg3d.laneCenters || dbg3d.laneBoundaryLines || dbg3d.laneIds || dbg3d.meshWireframe) {
+      for (const road of roads) {
+        const build = getCachedBuild(road.id);
+        if (!build) continue;
+
+        // Lane centerlines (cyan lines)
+        if (dbg3d.laneCenters) {
+          for (const cl of build.lanes.centerlines) {
+            if (cl.samples.length < 2) continue;
+            const pts: Vector3[] = cl.samples.map((s) =>
+              new Vector3(s.position.x, 0.15, s.position.y));
+            const line = MeshBuilder.CreateLines(`dbg_lc_${road.id}_${cl.laneId}`, { points: pts }, scene);
+            line.color = cl.laneId === 0 ? Color3.Yellow() : (cl.laneId > 0 ? Color3.Green() : Color3.Red());
+            line.isPickable = false;
+            roadMeshesRef.current.set(`dbg_lc_${road.id}_${cl.laneId}`, line);
+          }
+        }
+
+        // Lane boundaries (orange lines, road edges in white)
+        if (dbg3d.laneBoundaryLines) {
+          for (const b of build.lanes.boundaries) {
+            if (b.samples.length < 2) continue;
+            const pts: Vector3[] = b.samples.map((s) =>
+              new Vector3(s.position.x, 0.12, s.position.y));
+            const line = MeshBuilder.CreateLines(`dbg_lb_${road.id}_${b.innerLaneId}_${b.outerLaneId}`, { points: pts }, scene);
+            line.color = b.isRoadEdge ? Color3.White() : Color3.Teal();
+            line.isPickable = false;
+            roadMeshesRef.current.set(`dbg_lb_${road.id}_${b.innerLaneId}_${b.outerLaneId}`, line);
+          }
+        }
+
+        // Lane IDs (colored spheres at centerline midpoint)
+        if (dbg3d.laneIds) {
+          for (const cl of build.lanes.centerlines) {
+            if (cl.samples.length < 2) continue;
+            const mid = cl.samples[Math.floor(cl.samples.length / 2)];
+            const sphere = MeshBuilder.CreateSphere(`dbg_lid_${road.id}_${cl.laneId}`, { diameter: 1.5, segments: 8 }, scene);
+            sphere.position = new Vector3(mid.position.x, 0.3, mid.position.y);
+            const mat = new StandardMaterial(`dbg_lid_mat_${road.id}_${cl.laneId}`, scene);
+            mat.diffuseColor = cl.laneId === 0 ? Color3.Yellow() : (cl.laneId > 0 ? Color3.Green() : Color3.Red());
+            mat.emissiveColor = mat.diffuseColor.scale(0.5);
+            sphere.material = mat;
+            sphere.isPickable = false;
+            roadMeshesRef.current.set(`dbg_lid_${road.id}_${cl.laneId}`, sphere);
+          }
+        }
+
+        // Mesh wireframe (overlay on the asphalt mesh)
+        if (dbg3d.meshWireframe) {
+          for (const sec of build.meshSections) {
+            if (sec.material !== 'asphalt') continue;
+            // Build wireframe from indices
+            const wirePts: Vector3[] = [];
+            for (let i = 0; i < sec.indexCount; i += 3) {
+              const i0 = sec.indices[i], i1 = sec.indices[i + 1], i2 = sec.indices[i + 2];
+              const p0 = new Vector3(sec.positions[i0 * 3], sec.positions[i0 * 3 + 2] + 0.05, sec.positions[i0 * 3 + 1]);
+              const p1 = new Vector3(sec.positions[i1 * 3], sec.positions[i1 * 3 + 2] + 0.05, sec.positions[i1 * 3 + 1]);
+              const p2 = new Vector3(sec.positions[i2 * 3], sec.positions[i2 * 3 + 2] + 0.05, sec.positions[i2 * 3 + 1]);
+              wirePts.push(p0, p1, p1, p2, p2, p0);
+            }
+            if (wirePts.length >= 2) {
+              const wf = MeshBuilder.CreateLines(`dbg_wf_${road.id}`, { points: wirePts }, scene);
+              wf.color = Color3.Magenta();
+              wf.isPickable = false;
+              roadMeshesRef.current.set(`dbg_wf_${road.id}`, wf);
+            }
+          }
+        }
+      }
     }
 
     // ─── Intersection surfaces in 3D ───────────────────────────

@@ -93,6 +93,11 @@ interface RoadStudioState {
     vertexNormals: boolean;
     uvGrid: boolean;
     samplePoints: boolean;
+    // Phase 2.8 — Lane engine debug overlays
+    laneCenters: boolean;
+    laneBoundaryLines: boolean;
+    laneIds: boolean;
+    meshWireframe: boolean;
   };
   /** View mode: 'top' = 2D top-down, 'perspective' = 3D angled */
   viewMode: 'top' | 'perspective';
@@ -285,6 +290,11 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     vertexNormals: false,
     uvGrid: false,
     samplePoints: false,
+    // Phase 2.8 — Lane engine debug overlays (off by default)
+    laneCenters: false,
+    laneBoundaryLines: false,
+    laneIds: false,
+    meshWireframe: false,
   },
   viewMode: 'top',
   showMapOverlay: false,
