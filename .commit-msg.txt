@@ -1,26 +1,26 @@
-Phase 1.8.3a: roadToV2() adapter — infrastructure + LineSegment conversion
+Phase 1.8.3b: roadToV2() — Bezier/Arc/Spiral exact reconstruction + AdapterReport
 
-Pure conversion function from legacy Road (ControlPoint[]) to RoadV2
-(GeometrySegment[]). This is the seam between the old and new road
-engine architectures.
+Adds exact reconstruction for all four geometry segment types,
+with explicit missing-metadata handling (no silent fallback).
 
-Implemented:
-- roadToV2(const Road&) → RoadV2 (pure function, no side effects)
-- Metadata copy (id, name, color, profileName, intersection IDs,
-  width, laneCount)
-- Empty road and single-point degenerate handling
-- Corner points (no handles) → LineSegment
-- Bezier segments temporarily fall back to LineSegment (TODO 1.8.3b)
+Changes:
+- ControlPoint: added optional SegmentMetadata for arc/spiral parameters
+- AdapterReport: diagnostics struct tracking exact/approx/unsupported counts
+- Bezier: exact from handles (P0, P0+handleOut, P1+handleIn, P1)
+- Arc: exact from metadata (startPoint, heading, curvature, arcLength)
+- Spiral: exact from metadata (startPoint, heading, k0, k1, length)
+- Unknown metadata type → warning + LineSegment fallback
+- Bezier metadata without handles → warning + LineSegment fallback
+- roadToV2(const Road&, AdapterReport&) overload for diagnostics
 
-Tests (17 new, 171 total, 717 assertions):
-- Empty road, single point, one line, two lines, five lines
-- Metadata preservation (all 8 fields)
-- Pure function invariant (input unchanged)
-- Golden parity: straight_2pt (position, heading, curvature, length)
-- Golden parity: straight_5pt (segment count, length, positions at
-  control points, zero curvature)
-- Adapter invariants: segmentCount > 0, totalLength = sum of segments,
-  position at s=0 = first point, position at s=totalLength = last point
+Tests (18 new, 189 total, 847 assertions):
+- Bezier: exact reconstruction, endpoint positions, golden fixtures
+  (bezier_arch, mixed_line_bezier — segment types + positions at CPs)
+- Arc: exact reconstruction, start position, length, constant curvature
+- Spiral: exact reconstruction, length, curvature transition k0→k1
+- AdapterReport: all-line counts, mixed counts, unknown type warning,
+  bezier-without-handles warning
+- Combined: line + bezier + arc + spiral in one road (4 segments)
 
 All 113 vitest tests remain green (no regression).
 Legacy Road path is completely untouched.

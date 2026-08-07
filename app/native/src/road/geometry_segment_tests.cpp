@@ -2268,3 +2268,626 @@ TEST_CASE("roadToV2: invariant — position at s=totalLength is last control poi
     CHECK(p.x == doctest::Approx(pts.back().x).epsilon(0.01));
     CHECK(p.y == doctest::Approx(pts.back().y).epsilon(0.01));
 }
+
+// ═══════════════════════════════════════════════════════════
+// Road Adapter Tests — Phase 1.8.3b
+// ═══════════════════════════════════════════════════════════
+// Bezier exact reconstruction (from handles)
+// Arc exact reconstruction (from metadata)
+// Spiral exact reconstruction (from metadata)
+// AdapterReport diagnostics
+// Missing metadata → explicit warning (no silent fallback)
+// ═══════════════════════════════════════════════════════════
+
+using geo::AdapterReport;
+using geo::SegmentMetadata;
+
+// ─── Helper: create a ControlPoint with bezier handles ───
+static ControlPoint makeSmoothCP(Point2D pos, Point2D hIn, Point2D hOut,
+                                  bool hasIn = true, bool hasOut = true) {
+    ControlPoint cp;
+    cp.position = pos;
+    cp.type = "smooth";
+    cp.handleIn = hIn;
+    cp.handleOut = hOut;
+    cp.hasHandleIn = hasIn;
+    cp.hasHandleOut = hasOut;
+    return cp;
+}
+
+// ─── Helper: create a ControlPoint with arc metadata ───
+static ControlPoint makeArcMetaCP(Point2D pos, double heading, double curvature, double length) {
+    ControlPoint cp;
+    cp.position = pos;
+    cp.type = "corner";
+    SegmentMetadata meta;
+    meta.type = "arc";
+    meta.startHeading = heading;
+    meta.curvature = curvature;
+    meta.arcLength = length;
+    cp.segmentMeta = meta;
+    return cp;
+}
+
+// ─── Helper: create a ControlPoint with spiral metadata ───
+static ControlPoint makeSpiralMetaCP(Point2D pos, double heading,
+                                      double k0, double k1, double length) {
+    ControlPoint cp;
+    cp.position = pos;
+    cp.type = "corner";
+    SegmentMetadata meta;
+    meta.type = "spiral";
+    meta.startHeading = heading;
+    meta.curvatureStart = k0;
+    meta.curvatureEnd = k1;
+    meta.segmentLength = length;
+    cp.segmentMeta = meta;
+    return cp;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Bezier Adapter Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2: bezier segment — exact reconstruction from handles") {
+    Road legacy;
+    legacy.id = "bezier_test";
+    legacy.name = "Bezier Test";
+
+    // Two-point bezier: (0,0) → (100,0) with handles
+    Point2D p0(0, 0), p1(100, 0);
+    Point2D hOut(25, 40), hIn(-25, 40);
+
+    legacy.points.push_back(makeSmoothCP(p0, {0, 0}, hOut, false, true));
+    legacy.points.push_back(makeSmoothCP(p1, hIn, {0, 0}, true, false));
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Bezier);
+    CHECK(report.bezierSegments == 1);
+    CHECK(report.reconstructedExactly == 1);
+    CHECK(report.reconstructedApproximately == 0);
+    CHECK(report.warnings.empty());
+
+    // Verify absolute control points are correct
+    const auto& bez = static_cast<const BezierSegment&>(v2.segment(0));
+    CHECK(bez.p0.x == doctest::Approx(0.0));
+    CHECK(bez.p0.y == doctest::Approx(0.0));
+    CHECK(bez.p1.x == doctest::Approx(25.0));    // p0 + handleOut
+    CHECK(bez.p1.y == doctest::Approx(40.0));
+    CHECK(bez.p2.x == doctest::Approx(75.0));    // p1 + handleIn = (100-25, 0+40)
+    CHECK(bez.p2.y == doctest::Approx(40.0));
+    CHECK(bez.p3.x == doctest::Approx(100.0));
+    CHECK(bez.p3.y == doctest::Approx(0.0));
+}
+
+TEST_CASE("roadToV2: bezier — position at endpoints matches control points") {
+    Road legacy;
+    legacy.id = "bez_endpoint";
+
+    Point2D p0(10, 5), p1(90, 15);
+    Point2D hOut(20, 30), hIn(-20, 30);
+
+    legacy.points.push_back(makeSmoothCP(p0, {0, 0}, hOut, false, true));
+    legacy.points.push_back(makeSmoothCP(p1, hIn, {0, 0}, true, false));
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // At s=0, position should be p0
+    Point2D start = v2.geometry().positionAt(0);
+    CHECK(start.x == doctest::Approx(p0.x));
+    CHECK(start.y == doctest::Approx(p0.y));
+
+    // At s=totalLength, position should be p1
+    Point2D end = v2.geometry().positionAt(v2.totalLength());
+    CHECK(end.x == doctest::Approx(p1.x).epsilon(0.01));
+    CHECK(end.y == doctest::Approx(p1.y).epsilon(0.01));
+}
+
+TEST_CASE("roadToV2: bezier_arch golden fixture — segment type and control points") {
+    // Replicate the bezier_arch fixture: 4 smooth points
+    Road legacy;
+    legacy.id = "bezier_arch";
+    legacy.name = "Bezier Arch";
+    legacy.width = 6.0;
+    legacy.laneCount = 2;
+
+    // From golden_fixtures.ts:
+    // makeSmooth(0, 0, null, { x: 15, y: 25 })
+    // makeSmooth(50, 30, { x: -15, y: -5 }, { x: 15, y: -5 })
+    // makeSmooth(100, 30, { x: -15, y: -5 }, { x: 15, y: -25 })
+    // makeSmooth(150, 0, { x: -15, y: -25 }, null)
+    legacy.points.push_back(makeSmoothCP({0, 0}, {0, 0}, {15, 25}, false, true));
+    legacy.points.push_back(makeSmoothCP({50, 30}, {-15, -5}, {15, -5}, true, true));
+    legacy.points.push_back(makeSmoothCP({100, 30}, {-15, -5}, {15, -25}, true, true));
+    legacy.points.push_back(makeSmoothCP({150, 0}, {-15, -25}, {0, 0}, true, false));
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    // 3 bezier segments (4 points → 3 segments)
+    CHECK(v2.numSegments() == 3);
+    for (int i = 0; i < 3; i++) {
+        CHECK(v2.segment(i).type() == GeometryType::Bezier);
+    }
+    CHECK(report.bezierSegments == 3);
+    CHECK(report.reconstructedExactly == 3);
+    CHECK(report.warnings.empty());
+
+    // Verify first segment's absolute control points
+    const auto& bez0 = static_cast<const BezierSegment&>(v2.segment(0));
+    CHECK(bez0.p0.x == doctest::Approx(0.0));
+    CHECK(bez0.p0.y == doctest::Approx(0.0));
+    CHECK(bez0.p1.x == doctest::Approx(15.0));   // 0 + 15
+    CHECK(bez0.p1.y == doctest::Approx(25.0));   // 0 + 25
+    CHECK(bez0.p2.x == doctest::Approx(35.0));   // 50 + (-15)
+    CHECK(bez0.p2.y == doctest::Approx(25.0));   // 30 + (-5)
+    CHECK(bez0.p3.x == doctest::Approx(50.0));
+    CHECK(bez0.p3.y == doctest::Approx(30.0));
+}
+
+TEST_CASE("roadToV2: bezier_arch golden fixture — position at control points") {
+    Road legacy;
+    legacy.id = "bezier_arch";
+    legacy.width = 6.0;
+    legacy.laneCount = 2;
+
+    std::vector<Point2D> cpPositions = {{0, 0}, {50, 30}, {100, 30}, {150, 0}};
+    legacy.points.push_back(makeSmoothCP(cpPositions[0], {0, 0}, {15, 25}, false, true));
+    legacy.points.push_back(makeSmoothCP(cpPositions[1], {-15, -5}, {15, -5}, true, true));
+    legacy.points.push_back(makeSmoothCP(cpPositions[2], {-15, -5}, {15, -25}, true, true));
+    legacy.points.push_back(makeSmoothCP(cpPositions[3], {-15, -25}, {0, 0}, true, false));
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Compute cumulative s at each control point
+    double sValues[4];
+    sValues[0] = 0;
+    for (int i = 0; i < 3; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+
+    // Position at each control point should match the original CP position
+    for (int i = 0; i < 4; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(cpPositions[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(cpPositions[i].y).epsilon(0.01));
+    }
+}
+
+TEST_CASE("roadToV2: mixed_line_bezier golden fixture — segment types") {
+    // From golden_fixtures.ts:
+    // makeCorner(0, 0)                            → line
+    // makeCorner(40, 0)                           → line end / bezier start
+    // makeSmooth(60, 15, { x: -10, y: 0 }, { x: 10, y: 0 })  → bezier mid
+    // makeCorner(80, 0)                           → bezier end / line start
+    // makeCorner(120, 0)                          → line end
+    Road legacy;
+    legacy.id = "mixed_line_bezier";
+    legacy.name = "Mixed Line+Bezier";
+    legacy.width = 7.0;
+    legacy.laneCount = 2;
+
+    legacy.points.push_back(makeLegacyRoad("x", {{0,0}}).points[0]);  // corner (0,0)
+    legacy.points[0].id = "cp0";
+    auto corner40 = makeLegacyRoad("x", {{40,0}}).points[0];
+    corner40.id = "cp1";
+    legacy.points.push_back(corner40);
+    legacy.points.push_back(makeSmoothCP({60, 15}, {-10, 0}, {10, 0}));
+    legacy.points[2].id = "cp2";
+    auto corner80 = makeLegacyRoad("x", {{80,0}}).points[0];
+    corner80.id = "cp3";
+    legacy.points.push_back(corner80);
+    auto corner120 = makeLegacyRoad("x", {{120,0}}).points[0];
+    corner120.id = "cp4";
+    legacy.points.push_back(corner120);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    // 4 segments:
+    // 0: (0,0)→(40,0) line (both corners, no handles)
+    // 1: (40,0)→(60,15) bezier (cp1 has no handleOut, cp2 has handleIn)
+    //    Actually: cp1 is corner (no handleOut), cp2 has handleIn → isBezier = true
+    // 2: (60,15)→(80,0) bezier (cp2 has handleOut, cp3 is corner with no handleIn)
+    //    Actually: cp2 has handleOut, cp3 has no handleIn → isBezier = true
+    // 3: (80,0)→(120,0) line (both corners, no handles)
+    CHECK(v2.numSegments() == 4);
+    CHECK(v2.segment(0).type() == GeometryType::Line);
+    CHECK(v2.segment(1).type() == GeometryType::Bezier);
+    CHECK(v2.segment(2).type() == GeometryType::Bezier);
+    CHECK(v2.segment(3).type() == GeometryType::Line);
+
+    CHECK(report.lineSegments == 2);
+    CHECK(report.bezierSegments == 2);
+    CHECK(report.reconstructedExactly == 4);
+    CHECK(report.warnings.empty());
+}
+
+TEST_CASE("roadToV2: mixed_line_bezier — position at control points") {
+    Road legacy;
+    legacy.id = "mixed_line_bezier";
+    legacy.width = 7.0;
+    legacy.laneCount = 2;
+
+    std::vector<Point2D> cpPositions = {{0, 0}, {40, 0}, {60, 15}, {80, 0}, {120, 0}};
+    legacy.points.push_back(makeLegacyRoad("x", {cpPositions[0]}).points[0]);
+    legacy.points.push_back(makeLegacyRoad("x", {cpPositions[1]}).points[0]);
+    legacy.points.push_back(makeSmoothCP(cpPositions[2], {-10, 0}, {10, 0}));
+    legacy.points.push_back(makeLegacyRoad("x", {cpPositions[3]}).points[0]);
+    legacy.points.push_back(makeLegacyRoad("x", {cpPositions[4]}).points[0]);
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Compute cumulative s at each control point
+    double sValues[5];
+    sValues[0] = 0;
+    for (int i = 0; i < 4; i++) {
+        sValues[i + 1] = sValues[i] + v2.segment(i).length();
+    }
+
+    // Position at each control point should match
+    for (int i = 0; i < 5; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(cpPositions[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(cpPositions[i].y).epsilon(0.01));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Arc Adapter Tests (metadata-driven)
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2: arc segment — exact reconstruction from metadata") {
+    Road legacy;
+    legacy.id = "arc_meta_test";
+
+    // Arc: start at (0,0), heading=0 (east), curvature=0.1 (left turn), length=50
+    double curvature = 0.1;   // radius = 10
+    double arcLength = 50.0;
+    double heading = 0.0;
+
+    ControlPoint cp0 = makeArcMetaCP({0, 0}, heading, curvature, arcLength);
+    ControlPoint cp1;
+    cp1.position = {10, 10};  // end point (not used for arc reconstruction)
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Arc);
+    CHECK(report.arcSegments == 1);
+    CHECK(report.reconstructedExactly == 1);
+    CHECK(report.warnings.empty());
+
+    // Verify arc parameters
+    const auto& arc = static_cast<const ArcSegment&>(v2.segment(0));
+    CHECK(arc.startPoint_.x == doctest::Approx(0.0));
+    CHECK(arc.startPoint_.y == doctest::Approx(0.0));
+    CHECK(arc.startHeading_ == doctest::Approx(0.0));
+    CHECK(arc.curvature_ == doctest::Approx(0.1));
+    CHECK(arc.arcLength_ == doctest::Approx(50.0));
+}
+
+TEST_CASE("roadToV2: arc — position at s=0 is start point") {
+    Road legacy;
+    legacy.id = "arc_start";
+
+    ControlPoint cp0 = makeArcMetaCP({5, 3}, 0.5, 0.05, 30.0);
+    ControlPoint cp1;
+    cp1.position = {20, 15};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    Point2D p = v2.geometry().positionAt(0);
+    CHECK(p.x == doctest::Approx(5.0));
+    CHECK(p.y == doctest::Approx(3.0));
+}
+
+TEST_CASE("roadToV2: arc — total length matches metadata arcLength") {
+    Road legacy;
+    legacy.id = "arc_len";
+
+    double arcLength = 42.5;
+    ControlPoint cp0 = makeArcMetaCP({0, 0}, 0.0, 0.08, arcLength);
+    ControlPoint cp1;
+    cp1.position = {30, 20};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.totalLength() == doctest::Approx(arcLength));
+}
+
+TEST_CASE("roadToV2: arc — curvature is constant from metadata") {
+    Road legacy;
+    legacy.id = "arc_curv";
+
+    double curvature = 0.15;
+    ControlPoint cp0 = makeArcMetaCP({0, 0}, 0.0, curvature, 40.0);
+    ControlPoint cp1;
+    cp1.position = {20, 20};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Curvature should be constant along the arc
+    double sValues[] = {0, 10, 20, 30, 40};
+    for (double s : sValues) {
+        CHECK(v2.geometry().curvatureAt(s) == doctest::Approx(curvature).epsilon(0.01));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Spiral Adapter Tests (metadata-driven)
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2: spiral segment — exact reconstruction from metadata") {
+    Road legacy;
+    legacy.id = "spiral_meta_test";
+
+    // Spiral: start at (0,0), heading=0, kappa0=0, kappa1=0.1, length=80
+    double k0 = 0.0, k1 = 0.1, len = 80.0, heading = 0.0;
+
+    ControlPoint cp0 = makeSpiralMetaCP({0, 0}, heading, k0, k1, len);
+    ControlPoint cp1;
+    cp1.position = {70, 15};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Spiral);
+    CHECK(report.spiralSegments == 1);
+    CHECK(report.reconstructedExactly == 1);
+    CHECK(report.warnings.empty());
+
+    // Verify spiral parameters
+    const auto& sp = static_cast<const SpiralSegment&>(v2.segment(0));
+    CHECK(sp.startPoint_.x == doctest::Approx(0.0));
+    CHECK(sp.startPoint_.y == doctest::Approx(0.0));
+    CHECK(sp.startHeading_ == doctest::Approx(0.0));
+    CHECK(sp.curvatureStart_ == doctest::Approx(0.0));
+    CHECK(sp.curvatureEnd_ == doctest::Approx(0.1));
+    CHECK(sp.segmentLength_ == doctest::Approx(80.0));
+}
+
+TEST_CASE("roadToV2: spiral — total length matches metadata") {
+    Road legacy;
+    legacy.id = "spiral_len";
+
+    double len = 65.0;
+    ControlPoint cp0 = makeSpiralMetaCP({0, 0}, 0.0, 0.0, 0.08, len);
+    ControlPoint cp1;
+    cp1.position = {55, 10};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.totalLength() == doctest::Approx(len));
+}
+
+TEST_CASE("roadToV2: spiral — curvature transitions from k0 to k1") {
+    Road legacy;
+    legacy.id = "spiral_curv";
+
+    double k0 = 0.0, k1 = 0.1, len = 80.0;
+    ControlPoint cp0 = makeSpiralMetaCP({0, 0}, 0.0, k0, k1, len);
+    ControlPoint cp1;
+    cp1.position = {70, 15};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // At s=0, curvature ≈ k0
+    CHECK(v2.geometry().curvatureAt(0) == doctest::Approx(k0).epsilon(0.01));
+    // At s=length, curvature ≈ k1
+    CHECK(v2.geometry().curvatureAt(len) == doctest::Approx(k1).epsilon(0.01));
+    // At s=length/2, curvature ≈ (k0+k1)/2
+    double midK = (k0 + k1) / 2.0;
+    CHECK(v2.geometry().curvatureAt(len / 2.0) == doctest::Approx(midK).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// AdapterReport Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2: AdapterReport — all-line road has correct counts") {
+    Road legacy = makeLegacyRoad("all_line", {{0, 0}, {10, 0}, {20, 5}});
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(report.lineSegments == 2);
+    CHECK(report.bezierSegments == 0);
+    CHECK(report.arcSegments == 0);
+    CHECK(report.spiralSegments == 0);
+    CHECK(report.totalSegments() == 2);
+    CHECK(report.reconstructedExactly == 2);
+    CHECK(report.reconstructedApproximately == 0);
+    CHECK(report.unsupportedSegments == 0);
+    CHECK(report.warnings.empty());
+}
+
+TEST_CASE("roadToV2: AdapterReport — mixed road has correct counts") {
+    Road legacy;
+    legacy.id = "mixed";
+    legacy.width = 7.0;
+    legacy.laneCount = 2;
+
+    // Segment 0: line (0,0)→(40,0)
+    legacy.points.push_back(makeLegacyRoad("x", {{0, 0}}).points[0]);
+    legacy.points.push_back(makeLegacyRoad("x", {{40, 0}}).points[0]);
+    // Segment 1: arc (40,0)→... with metadata
+    legacy.points[1].segmentMeta = SegmentMetadata{};
+    legacy.points[1].segmentMeta->type = "arc";
+    legacy.points[1].segmentMeta->startHeading = 0.0;
+    legacy.points[1].segmentMeta->curvature = 0.05;
+    legacy.points[1].segmentMeta->arcLength = 30.0;
+    ControlPoint cp2;
+    cp2.position = {60, 15};
+    cp2.type = "corner";
+    legacy.points.push_back(cp2);
+    // Segment 2: line (60,15)→(100,15)
+    ControlPoint cp3;
+    cp3.position = {100, 15};
+    cp3.type = "corner";
+    legacy.points.push_back(cp3);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(report.lineSegments == 2);
+    CHECK(report.arcSegments == 1);
+    CHECK(report.totalSegments() == 3);
+    CHECK(report.reconstructedExactly == 3);
+    CHECK(report.warnings.empty());
+}
+
+TEST_CASE("roadToV2: AdapterReport — unknown metadata type produces warning") {
+    Road legacy;
+    legacy.id = "unknown_meta";
+
+    ControlPoint cp0;
+    cp0.position = {0, 0};
+    cp0.type = "corner";
+    cp0.segmentMeta = SegmentMetadata{};
+    cp0.segmentMeta->type = "unknown_type";
+    ControlPoint cp1;
+    cp1.position = {50, 0};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Line);  // fallback
+    CHECK(report.unsupportedSegments == 1);
+    CHECK(!report.warnings.empty());
+    CHECK(report.warnings[0].find("unknown metadata type") != std::string::npos);
+}
+
+TEST_CASE("roadToV2: AdapterReport — bezier metadata without handles produces warning") {
+    Road legacy;
+    legacy.id = "bez_meta_no_handles";
+
+    ControlPoint cp0;
+    cp0.position = {0, 0};
+    cp0.type = "corner";
+    cp0.segmentMeta = SegmentMetadata{};
+    cp0.segmentMeta->type = "bezier";
+    // No handles set
+    ControlPoint cp1;
+    cp1.position = {50, 0};
+    cp1.type = "corner";
+    legacy.points.push_back(cp0);
+    legacy.points.push_back(cp1);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Line);  // fallback
+    CHECK(report.unsupportedSegments == 1);
+    CHECK(!report.warnings.empty());
+    CHECK(report.warnings[0].find("no handles") != std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Combined: Line + Bezier + Arc + Spiral in one road
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("roadToV2: mixed road with line + bezier + arc + spiral") {
+    Road legacy;
+    legacy.id = "all_types";
+    legacy.name = "All Types";
+    legacy.width = 8.0;
+    legacy.laneCount = 2;
+
+    // 5 control points → 4 segments:
+    //   cp0→cp1: line (no handles, no metadata)
+    //   cp1→cp2: bezier (cp1 has handleOut, cp2 has handleIn)
+    //   cp2→cp3: arc (cp2 has arc metadata for outgoing segment)
+    //   cp3→cp4: spiral (cp3 has spiral metadata for outgoing segment)
+
+    // cp0: line start
+    ControlPoint cp0;
+    cp0.position = {0, 0};
+    cp0.type = "corner";
+    legacy.points.push_back(cp0);
+
+    // cp1: line end / bezier start (has handleOut for bezier)
+    ControlPoint cp1;
+    cp1.position = {50, 0};
+    cp1.type = "corner";
+    cp1.hasHandleOut = true;
+    cp1.handleOut = {10, 15};
+    legacy.points.push_back(cp1);
+
+    // cp2: bezier end (has handleIn) / arc start (has arc metadata)
+    ControlPoint cp2 = makeSmoothCP({100, 20}, {-10, -5}, {0, 0}, true, false);
+    cp2.segmentMeta = SegmentMetadata{};
+    cp2.segmentMeta->type = "arc";
+    cp2.segmentMeta->startHeading = 0.3;
+    cp2.segmentMeta->curvature = 0.05;
+    cp2.segmentMeta->arcLength = 40.0;
+    legacy.points.push_back(cp2);
+
+    // cp3: arc end / spiral start (has spiral metadata)
+    ControlPoint cp3;
+    cp3.position = {130, 35};
+    cp3.type = "corner";
+    cp3.segmentMeta = SegmentMetadata{};
+    cp3.segmentMeta->type = "spiral";
+    cp3.segmentMeta->startHeading = 0.5;
+    cp3.segmentMeta->curvatureStart = 0.0;
+    cp3.segmentMeta->curvatureEnd = 0.08;
+    cp3.segmentMeta->segmentLength = 60.0;
+    legacy.points.push_back(cp3);
+
+    // cp4: spiral end
+    ControlPoint cp4;
+    cp4.position = {170, 50};
+    cp4.type = "corner";
+    legacy.points.push_back(cp4);
+
+    AdapterReport report;
+    RoadV2 v2 = roadToV2(legacy, report);
+
+    CHECK(v2.numSegments() == 4);
+    CHECK(v2.segment(0).type() == GeometryType::Line);
+    CHECK(v2.segment(1).type() == GeometryType::Bezier);
+    CHECK(v2.segment(2).type() == GeometryType::Arc);
+    CHECK(v2.segment(3).type() == GeometryType::Spiral);
+
+    CHECK(report.lineSegments == 1);
+    CHECK(report.bezierSegments == 1);
+    CHECK(report.arcSegments == 1);
+    CHECK(report.spiralSegments == 1);
+    CHECK(report.totalSegments() == 4);
+    CHECK(report.reconstructedExactly == 4);
+    CHECK(report.warnings.empty());
+
+    // Total length = sum of all segment lengths
+    double sumLen = 0;
+    for (int i = 0; i < 4; i++) sumLen += v2.segment(i).length();
+    CHECK(v2.totalLength() == doctest::Approx(sumLen));
+}

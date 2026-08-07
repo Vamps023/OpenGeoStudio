@@ -7,8 +7,40 @@
 #include "geometry.hpp"
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace geo {
+
+// ─── Segment Metadata ──────────────────────────────────────
+// Optional metadata stored in a ControlPoint to enable exact
+// reconstruction of non-Bezier geometry segments (Arc, Spiral).
+//
+// When present, the adapter uses these parameters to reconstruct
+// the segment exactly — no fitting, no approximation.
+// When absent, the adapter reports a warning (no silent fallback).
+//
+// The metadata describes the segment STARTING at this control point
+// (i.e., the segment from this CP to the next CP).
+//
+// Field semantics (OpenDRIVE-style):
+//   type = "arc":     curvature + length describe a constant-radius arc
+//   type = "spiral":  curvatureStart + curvatureEnd + length describe a clothoid
+//   type = "line":    (no metadata needed — straight line is implicit)
+//   type = "bezier":  (no metadata needed — handles are the metadata)
+struct SegmentMetadata {
+    std::string type;              // "arc", "spiral", "line", "bezier"
+
+    // Arc parameters (type = "arc")
+    double curvature = 0.0;        // signed curvature (1/radius), positive = left/CCW
+    double arcLength = 0.0;        // arc length in meters
+    double startHeading = 0.0;     // heading at segment start (radians)
+
+    // Spiral parameters (type = "spiral")
+    double curvatureStart = 0.0;   // κ₀ at segment start
+    double curvatureEnd = 0.0;     // κ₁ at segment end
+    double segmentLength = 0.0;    // total segment length in meters
+    // startHeading is shared with arc (same field)
+};
 
 // ─── Control Point (with bezier handles) ───────────────────
 struct ControlPoint {
@@ -20,6 +52,10 @@ struct ControlPoint {
     bool hasHandleOut = false;
     std::string type = "corner";  // "corner" or "smooth"
     std::string id;                // unique ID
+
+    // Optional segment metadata for exact reconstruction (Phase 1.8.3b)
+    // Describes the segment STARTING at this control point.
+    std::optional<SegmentMetadata> segmentMeta;
 };
 
 // ─── Road ──────────────────────────────────────────────────
