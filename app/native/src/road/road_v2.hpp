@@ -4,9 +4,19 @@
 // RoadV2 — New road model with segment-based geometry
 // ═══════════════════════════════════════════════════════════
 //
+// @file road_v2.hpp
+// @brief Public API: New road model with segment-based geometry
+//
 // This is the new road representation that replaces the legacy
 // ControlPoint[]-based Road. It owns GeometrySegment objects and
 // exposes a non-owning SegmentSequence view for geometry queries.
+//
+// @section API_Freeze Phase 1 API Freeze
+// The following classes are FROZEN as of Phase 1 Complete:
+//   - LaneSection (placeholder — will be expanded in Phase 2)
+//   - RoadV2
+// Breaking changes to RoadV2 require a major version bump.
+// LaneSection is explicitly NOT frozen — Phase 2 will define it.
 //
 // Design (per review):
 // - segments owns geometry via unique_ptr<GeometrySegment>
@@ -17,9 +27,6 @@
 // - Deep-clone copy constructor/assignment (uses segment clone())
 // - LaneSection is a placeholder for Phase 2 (empty struct for now)
 // - No adapter, no IPC, no serialization — that's 1.8.3+
-//
-// The ONLY objective of 1.8.2:
-//   "Can RoadV2 own geometry safely and expose a valid SegmentSequence view?"
 //
 // Ownership invariant:
 //   segments  → owns the geometry (unique_ptr)

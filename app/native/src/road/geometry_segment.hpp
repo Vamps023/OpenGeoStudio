@@ -4,11 +4,25 @@
 // Geometry Segment — Polymorphic road geometry primitives
 // ═══════════════════════════════════════════════════════════
 //
+// @file geometry_segment.hpp
+// @brief Public API: Polymorphic road geometry primitives
+//
 // This is the new polymorphic geometry system that will eventually
 // replace the flat ControlPoint[] model. Each road segment is a
 // GeometrySegment subclass (Line, Arc, Spiral, Bezier) that can
 // evaluate its position, heading, and curvature at any arc-length
 // distance s along the segment.
+//
+// @section API_Freeze Phase 1 API Freeze
+// The following classes are FROZEN as of Phase 1 Complete:
+//   - GeometryType (enum)
+//   - GeometrySegment (abstract base)
+//   - LineSegment
+//   - ArcSegment
+//   - SpiralSegment
+//   - BezierSegment
+//   - SegmentSequence
+// Breaking changes to these classes require a major version bump.
 //
 // Design decisions (see docs/ROAD_ENGINE_MIGRATION_PLAN.md):
 // - Heap-allocated via unique_ptr (Q1: simpler than variant, more extensible)
@@ -16,9 +30,6 @@
 // - Absolute coordinates (Q2: adapter handles relative→absolute at boundary)
 // - s is arc-length in meters from segment start [0, length()]
 // - All segments are planar (2D); elevation is handled separately
-//
-// Phase 1.1: Abstract base + LineSegment only.
-// Arc/Spiral/Bezier will be added in tasks 1.3–1.5.
 
 #include "geometry.hpp"
 #include <memory>

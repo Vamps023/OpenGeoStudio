@@ -31,27 +31,33 @@ npm run test:watch        # Watch mode
 - **Source:** `app/native/src/road/` (header-only C++20)
 - **Bridge:** `app/native/src/road_bridge.cpp` (N-API bindings)
 - **Build:** `cd app/native/road_engine && npx node-gyp build`
-- **Tests:** `tests/road-engine.test.ts` (41 tests, vitest)
+- **Tests:** `tests/road-engine.test.ts` (130 tests, vitest)
+- **C++ Tests:** `geometry_segment_tests.cpp` (261 doctest tests, 2210 assertions)
+- **Architecture:** `docs/ROAD_ENGINE_PHASE1.md` (Phase 1 API reference)
+- **Phase:** 1 Complete (API frozen, tagged `phase1-complete`)
 
 ### C++ Engine Files
 
 | File | Purpose |
 |------|---------|
 | `geometry.hpp` | Math kernel (Point2D, Vec2, intersections, offsets, bezier) |
-| `road.hpp` | Road data model (ControlPoint, Road, Lane, GeneratedIntersection) |
+| `geometry_segment.hpp` | **[FROZEN]** GeometrySegment, LineSegment, ArcSegment, SpiralSegment, BezierSegment, SegmentSequence |
+| `road.hpp` | Road data model (ControlPoint, Road, SegmentMetadata, SegmentKind) |
+| `road_v2.hpp` | **[FROZEN]** RoadV2 — new segment-based road model |
+| `road_adapter.hpp` | **[FROZEN]** Bidirectional adapter: roadToV2, roadToV2Legacy, roadToV2Auto, roadFromV2 |
 | `arc.hpp` | Circular arc computation with tangent continuity |
 | `clothoid.hpp` | Euler spiral (clothoid) for G2 continuity |
 | `intersection.hpp` | Edge-based junction generation with fillet corners |
 | `mesh.hpp` | Triangle mesh tessellation (ear-clipping, road strips) |
 | `opendrive.hpp` | OpenDRIVE XML export |
-| `road_tools.hpp` | SCANeR-style road creation tools (6 tools) |
+| `road_tools.hpp` | SCANeR-style road creation tools (6 tools, emit SegmentMetadata) |
 
 ### Road Studio Key Files
 
 - `modules/road-studio/client/RoadViewport.tsx` — MapLibre 2D + Babylon.js 3D rendering
 - `modules/road-studio/client/RoadToolbar.tsx` — Tool buttons, debug toggles, elevation editor
 - `modules/road-studio/client/store/roadStudioStore.ts` — Zustand store (roads, tools, undo/redo, debug)
-- `modules/road-studio/shared/roadEngineClient.ts` — IPC client (16 C++ engine methods)
+- `modules/road-studio/shared/roadEngineClient.ts` — IPC client (19 C++ engine methods)
 - `modules/road-studio/shared/types.ts` — Road, ControlPoint, Intersection, GeneratedIntersection types
 - `app/handlers/roadEngineHandler.ts` — IPC handler (16 channels)
 - `app/preload.ts` — Preload bridge (window.roadEngine.*)

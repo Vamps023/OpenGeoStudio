@@ -1,47 +1,53 @@
-Phase 1.9: Bridge integration for RoadV2
+Phase 1 Exit: API freeze, benchmarks, architecture docs
 
-Exposes the RoadV2 pipeline through the IPC bridge. The TS side
-now has access to the new adapter functions without needing to know
-which adapter path is used — the bridge dispatches based on
-formatVersion.
+Final PR before Phase 2 (Lane Engine). Freezes the Phase 1 public
+API, records performance baselines, and documents the architecture
+for future contributors.
 
-New IPC methods:
-- roadSampleCenterlineV2(road, numSamples?) → Point2D[]
-  Uses roadToV2Auto() internally, samples RoadV2 centerline at
-  uniform arc-length intervals. Preferred sampling method for new code.
-- roadGetAdapterReport(road) → AdapterReport
-  Returns diagnostics: exact flag, segment counts, warnings, totalLength
-- roadConvertFromV2(road) → Road
-  Round-trip: Road → roadToV2Auto() → RoadV2 → roadFromV2() → Road
+Changes:
+- Doxygen @file/@brief/@section API_Freeze markers added to:
+  - geometry_segment.hpp (GeometrySegment, Line/Arc/Spiral/Bezier, SegmentSequence)
+  - road_v2.hpp (RoadV2, LaneSection placeholder)
+  - road_adapter.hpp (SegmentKind, SegmentMetadata, AdapterReport,
+    ReverseAdapterReport, roadToV2/roadToV2Legacy/roadToV2Auto/roadFromV2)
+- benchmark.cpp: standalone performance benchmark
+  - Measures roadToV2Auto(), sampling, roadFromV2()
+  - 100/500/1000 segments × {line, bezier, legacy}
+  - Key result: 1000-segment bezier road converts in 75ms, samples in 0.5ms
+- docs/ROAD_ENGINE_PHASE1.md: comprehensive architecture reference
+  - Layer architecture diagram
+  - Ownership model
+  - Geometry segment contract
+  - Adapter system (exact, legacy, auto-dispatch, inverse)
+  - formatVersion migration strategy
+  - Bridge & IPC
+  - TypeScript types
+  - Public API freeze list (frozen vs not-frozen)
+  - Performance baseline tables
+  - Testing coverage
+  - Technical debt & future work (Phases 2-5)
+- AGENTS.md: updated to reflect Phase 1 completion
+  - Test counts updated (261 doctest, 130 vitest)
+  - FROZEN markers on public API headers
+  - Link to ROAD_ENGINE_PHASE1.md
 
-Bridge changes:
-- parseRoad() now parses formatVersion from JS objects
-- roadToJs() now serializes formatVersion to JS objects
-- segmentMeta parsing/serialization already in place from 1.8.3d
-- Version bumped to 2.0.0-road-engine
-- road_adapter.hpp included in road_bridge.cpp
+API Freeze:
+  FROZEN (breaking changes require major version bump):
+    - GeometryType, GeometrySegment, LineSegment, ArcSegment,
+      SpiralSegment, BezierSegment, SegmentSequence
+    - RoadV2
+    - SegmentKind, SegmentMetadata
+    - AdapterReport, ReverseAdapterReport
+    - roadToV2(), roadToV2Legacy(), roadToV2Auto(), roadFromV2()
 
-TypeScript changes:
-- ControlPoint type: added optional segmentMeta field
-- Road type: added optional formatVersion field
-- SegmentMetadata type: new interface (kind, version, arc/spiral params)
-- CppRoad/CppControlPoint: added formatVersion, segmentMeta, id
-- toCppRoad(): passes formatVersion and segmentMeta through
-- RoadEngineAPI: added sampleCenterlineV2, getAdapterReport, convertFromV2
-- AdapterReportResult type: new interface for bridge diagnostics
-- Window type augmentation: added new IPC methods
+  NOT FROZEN (will change in Phase 2):
+    - LaneSection (empty placeholder)
+    - Road::width, Road::laneCount
+    - RoadV2::width, RoadV2::laneCount
 
-IPC plumbing:
-- 3 new channels in ipcChannels-electron.ts
-- 3 new handlers in roadEngineHandler.ts
-- 3 new preload bridges in preload.ts
-
-Tests (17 new vitest, 130 total):
-- Version 2.0.0
-- sampleCenterlineV2: line, bezier, legacy (v1), no-formatVersion
-- getAdapterReport: exact path, legacy path, arc metadata, clothoid metadata
-- convertFromV2: line round-trip, bezier round-trip (handles), arc round-trip (metadata), centerline parity
-- segmentMeta serialization: createCircleArc, createClothoidArc, createSegment
-- sampleCenterlineV2 vs sampleCenterline: endpoint parity
+Performance Baseline (Windows, MSVC release):
+  Line 1000:  19.75ms convert, 0.20ms sample, 0.94ms reverse
+  Bezier 1000: 75.54ms convert, 0.50ms sample, 2.01ms reverse
+  Legacy 1000: 20.21ms convert, 0.32ms sample, 1.29ms reverse
 
 All 261 doctest + 130 vitest pass (no regression).

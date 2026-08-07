@@ -4,9 +4,24 @@
 // Road Adapter — Conversion between legacy Road and RoadV2
 // ═══════════════════════════════════════════════════════════
 //
+// @file road_adapter.hpp
+// @brief Public API: Bidirectional adapter between legacy Road and RoadV2
+//
 // This is the seam between the legacy ControlPoint[]-based Road
 // and the new GeometrySegment-based RoadV2. The adapter is a pure
 // conversion function — no side effects, no mutation of input.
+//
+// @section API_Freeze Phase 1 API Freeze
+// The following types and functions are FROZEN as of Phase 1 Complete:
+//   - SegmentKind (enum)
+//   - SegmentMetadata (struct)
+//   - AdapterReport (struct)
+//   - ReverseAdapterReport (struct)
+//   - roadToV2()        — exact reconstruction adapter
+//   - roadToV2Legacy()  — legacy compatibility adapter
+//   - roadToV2Auto()    — formatVersion-aware auto-dispatch
+//   - roadFromV2()      — inverse adapter (RoadV2 → Road)
+// Breaking changes to these require a major version bump.
 //
 // Two adapter paths:
 //
@@ -24,12 +39,10 @@
 //    The objective is: produce the same centerline, not recover
 //    the original design intent.
 //
-// Phase history:
-//   1.8.3a: Infrastructure + LineSegment only
-//   1.8.3b: Bezier/Arc/Spiral exact reconstruction from metadata
-//   1.8.3c: Legacy compatibility reconstruction
-//   1.8.3d: Update creation tools to emit SegmentMetadata + serialization
-//   1.8.4:  Golden parity validation + formatVersion auto-dispatch
+// Round-trip invariant:
+//   roadFromV2(roadToV2(Road))     is always LOSSLESS (Phase 1)
+//   roadToV2(roadFromV2(RoadV2))   MAY be lossy in Phase 2
+//     (LaneSection data cannot be represented in legacy Road)
 //
 // formatVersion compatibility table:
 //   1 = Legacy ControlPoint[] only (no SegmentMetadata)
