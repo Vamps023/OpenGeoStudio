@@ -23,8 +23,18 @@
 #include "geometry.hpp"
 #include <memory>
 #include <string>
+#include <functional>
+#include <algorithm>
 
 namespace geo {
+
+// ─── Sampling/Geometry Constants (from architecture doc Appendix B) ───
+constexpr double MAX_GEOM_ERROR_HORIZONTAL = 0.25;  // m — max horizontal error from sampling
+constexpr double MAX_GEOM_ERROR_VERTICAL = 0.1;     // m — max vertical error
+constexpr double GEOM_TOLERANCE = 0.2;              // m — min distance between vertices
+constexpr double MAX_GEOM_LENGTH = 50.0;            // m — max segment length
+constexpr double MIN_GEOM_LENGTH = 0.1;             // m — min segment length
+constexpr int ADAPTIVE_MAX_DEPTH = 20;              // recursion depth limit for adaptive sampling
 
 // ─── Geometry Type Enum ────────────────────────────────────
 enum class GeometryType {
@@ -127,9 +137,17 @@ public:
     // End heading (s=length)
     double endHeading() const { return headingAt(length()); }
 
-    // ─── Adaptive sampling (task 1.6 will override with curvature-based) ───
-    // Default: uniform sampling. Subclasses may override for better resolution.
-    virtual std::vector<Point2D> sampleAdaptive(double maxError = 0.01, int minSamples = 2, int maxSamples = 1000) const;
+    // ─── Adaptive sampling (curvature-based recursive midpoint displacement) ───
+    // Subdivides recursively until the chord error (distance from midpoint
+    // of the chord to the actual curve point) is below maxError.
+    // Uses MAX_GEOM_ERROR_HORIZONTAL (0.25m) as default tolerance.
+    // Recursion depth limited by ADAPTIVE_MAX_DEPTH (20) to prevent stack
+    // overflow on pathological inputs.
+    virtual std::vector<Point2D> sampleAdaptive(
+        double maxError = MAX_GEOM_ERROR_HORIZONTAL,
+        int minSamples = 2,
+        int maxSamples = 10000
+    ) const;
 
     // Uniform sampling at fixed count
     std::vector<Point2D> sampleUniform(int numSamples) const {
@@ -144,14 +162,81 @@ public:
     }
 };
 
-// ─── Default adaptive sampling (uniform fallback) ──────────
+// ─── Adaptive sampling (recursive midpoint displacement) ───
+//
+// Algorithm:
+//   1. Start with endpoints (s=0, s=length)
+//   2. For each pair of adjacent samples, compute the midpoint of the chord
+//      and the actual curve point at the midpoint s
+//   3. If the distance between them exceeds maxError, subdivide (insert the
+//      actual midpoint) and recurse on both halves
+//   4. Stop when error < maxError, or recursion depth exceeds ADAPTIVE_MAX_DEPTH,
+//      or sample count exceeds maxSamples
+//
+// This naturally produces more samples in high-curvature regions (where the
+// chord deviates most from the curve) and fewer in straight regions.
+//
 inline std::vector<Point2D> GeometrySegment::sampleAdaptive(
-    double /*maxError*/, int minSamples, int maxSamples
+    double maxError, int minSamples, int maxSamples
 ) const {
-    // Default: uniform sampling with at least minSamples
-    // Task 1.6 will replace this with curvature-based adaptive sampling
-    int n = std::max(minSamples, std::min(maxSamples, 32));
-    return sampleUniform(n);
+    if (length() < EPSILON) {
+        return {positionAt(0.0)};
+    }
+
+    // Start with minSamples uniformly distributed
+    std::vector<Point2D> samples;
+    samples.reserve(minSamples);
+    for (int i = 0; i < minSamples; i++) {
+        double s = length() * static_cast<double>(i) / (minSamples - 1);
+        samples.push_back(positionAt(s));
+    }
+    // Track the s-value for each sample (needed for subdivision)
+    std::vector<double> sValues;
+    sValues.reserve(minSamples);
+    for (int i = 0; i < minSamples; i++) {
+        sValues.push_back(length() * static_cast<double>(i) / (minSamples - 1));
+    }
+
+    // Recursive subdivision helper
+    // Subdivides the range [sLo, sHi] if chord error exceeds maxError.
+    // Inserts points into samples/sValues in-place.
+    std::function<void(double sLo, double sHi, int depth)> subdivide =
+        [&](double sLo, double sHi, int depth) {
+            if (depth >= ADAPTIVE_MAX_DEPTH) return;
+            if (static_cast<int>(samples.size()) >= maxSamples) return;
+
+            double sMid = (sLo + sHi) / 2.0;
+            Point2D pMid = positionAt(sMid);
+            Point2D pLo = positionAt(sLo);
+            Point2D pHi = positionAt(sHi);
+
+            // Chord midpoint (linear interpolation)
+            Point2D chordMid = Point2D::lerp(pLo, pHi, 0.5);
+
+            // Chord error = distance from actual curve to chord midpoint
+            double error = pMid.distanceTo(chordMid);
+
+            if (error < maxError) return;
+
+            // Need to subdivide: insert pMid, then recurse on both halves.
+            // Find insertion index (after the sample at sLo).
+            // We search for sHi in sValues and insert before it.
+            auto it = std::lower_bound(sValues.begin(), sValues.end(), sHi);
+            int idx = static_cast<int>(it - sValues.begin());
+            sValues.insert(sValues.begin() + idx, sMid);
+            samples.insert(samples.begin() + idx, pMid);
+
+            // Recurse
+            subdivide(sLo, sMid, depth + 1);
+            subdivide(sMid, sHi, depth + 1);
+        };
+
+    // Subdivide each initial segment
+    for (int i = 0; i < static_cast<int>(sValues.size()) - 1; i++) {
+        subdivide(sValues[i], sValues[i + 1], 0);
+    }
+
+    return samples;
 }
 
 // ─── Line Segment ──────────────────────────────────────────

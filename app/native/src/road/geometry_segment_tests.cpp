@@ -20,6 +20,12 @@ using geo::LineSegment;
 using geo::Point2D;
 using geo::Vec2;
 using geo::GeometryType;
+using geo::MAX_GEOM_ERROR_HORIZONTAL;
+using geo::MAX_GEOM_ERROR_VERTICAL;
+using geo::GEOM_TOLERANCE;
+using geo::MAX_GEOM_LENGTH;
+using geo::MIN_GEOM_LENGTH;
+using geo::ADAPTIVE_MAX_DEPTH;
 
 // ─── LineSegment Tests ─────────────────────────────────────
 
@@ -1028,4 +1034,133 @@ TEST_CASE("Cross-type: clone preserves type across all 4 segment kinds") {
     CHECK(ac->positionAt(s).x == doctest::Approx(arc.positionAt(s).x).epsilon(0.001));
     CHECK(sc->positionAt(s).x == doctest::Approx(spiral.positionAt(s).x).epsilon(0.01));
     CHECK(bc->positionAt(s).x == doctest::Approx(bez.positionAt(s).x).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Adaptive Sampling Tests (Task 1.6)
+// ═══════════════════════════════════════════════════════════
+// Recursive midpoint displacement with chord-error tolerance.
+// Uses MAX_GEOM_ERROR_HORIZONTAL (0.25m) from architecture doc Appendix B.
+// Recursion depth limited by ADAPTIVE_MAX_DEPTH (20) to prevent stack overflow.
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("Adaptive sampling: LineSegment produces minimal samples") {
+    // A straight line has zero chord error — should produce just minSamples
+    LineSegment seg({0, 0}, {100, 0});
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+    CHECK(pts.size() == 2);  // no subdivision needed
+    CHECK(pts[0].x == doctest::Approx(0.0));
+    CHECK(pts[1].x == doctest::Approx(100.0));
+}
+
+TEST_CASE("Adaptive sampling: ArcSegment produces more samples than line") {
+    // A tight arc has high chord error — should subdivide
+    double R = 5.0;
+    double kappa = 1.0 / R;
+    double quarterLen = geo::PI * R / 2.0;
+    ArcSegment seg({R, 0}, geo::HALF_PI, kappa, quarterLen);
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+    CHECK(pts.size() > 2);  // must subdivide
+    CHECK(pts.size() <= 1000);  // respects maxSamples
+}
+
+TEST_CASE("Adaptive sampling: ArcSegment samples are within tolerance") {
+    // Every sample point should be on the circle (within tolerance)
+    double R = 10.0;
+    double kappa = 1.0 / R;
+    double quarterLen = geo::PI * R / 2.0;
+    ArcSegment seg({R, 0}, geo::HALF_PI, kappa, quarterLen);
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+
+    // All points should be on the circle of radius R centered at origin
+    for (const auto& p : pts) {
+        double dist = std::hypot(p.x, p.y);
+        CHECK(dist == doctest::Approx(R).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Adaptive sampling: tighter tolerance produces more samples") {
+    ArcSegment seg({10, 0}, geo::HALF_PI, 0.1, geo::PI * 5);
+    auto loose = seg.sampleAdaptive(1.0, 2, 1000);   // 1m tolerance
+    auto tight = seg.sampleAdaptive(0.001, 2, 1000); // 1mm tolerance
+    CHECK(tight.size() > loose.size());
+}
+
+TEST_CASE("Adaptive sampling: respects maxSamples limit") {
+    // Very tight tolerance on a long arc — would produce many samples
+    // but should be capped at maxSamples
+    ArcSegment seg({100, 0}, geo::HALF_PI, 0.01, geo::PI * 1000);
+    auto pts = seg.sampleAdaptive(0.0001, 2, 50);
+    CHECK(pts.size() <= 50);
+}
+
+TEST_CASE("Adaptive sampling: respects minSamples") {
+    LineSegment seg({0, 0}, {10, 0});
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 5, 1000);
+    CHECK(pts.size() >= 5);
+}
+
+TEST_CASE("Adaptive sampling: BezierSegment subdivides in high-curvature regions") {
+    // Arch-shaped bezier — more samples near the peak
+    BezierSegment seg({0, 0}, {3, 10}, {7, 10}, {10, 0});
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+    CHECK(pts.size() > 2);
+    // First and last points should be endpoints
+    CHECK(pts.front().x == doctest::Approx(0.0));
+    CHECK(pts.back().x == doctest::Approx(10.0).epsilon(0.01));
+}
+
+TEST_CASE("Adaptive sampling: SpiralSegment subdivides") {
+    // Spiral with significant curvature change
+    SpiralSegment seg({0, 0}, 0.0, 0.0, 0.2, 30.0);
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+    CHECK(pts.size() > 2);
+}
+
+TEST_CASE("Adaptive sampling: zero-length segment doesn't crash") {
+    LineSegment seg({5, 5}, {5, 5});
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+    CHECK(pts.size() >= 1);
+    CHECK(pts[0].x == doctest::Approx(5.0));
+    CHECK(pts[0].y == doctest::Approx(5.0));
+}
+
+TEST_CASE("Adaptive sampling: near-zero-length segment doesn't blow stack") {
+    // Pathological: very short segment with tight tolerance
+    // Could cause deep recursion if not for depth guard
+    LineSegment seg({0, 0}, {0.0001, 0});
+    auto pts = seg.sampleAdaptive(0.000001, 2, 1000);
+    // Should complete without stack overflow
+    CHECK(pts.size() >= 1);
+}
+
+TEST_CASE("Adaptive sampling: pathological arc with tight tolerance doesn't blow stack") {
+    // Very tight arc (small radius) with very tight tolerance
+    // Could cause extreme subdivision if not for depth/maxSamples guards
+    ArcSegment seg({0.001, 0}, geo::HALF_PI, 1000.0, 0.01);
+    auto pts = seg.sampleAdaptive(1e-10, 2, 1000);
+    CHECK(pts.size() <= 1000);  // maxSamples guard
+    CHECK(pts.size() >= 1);
+}
+
+TEST_CASE("Adaptive sampling: all sample points are on the actual curve") {
+    // Verify that every returned point matches positionAt(s) for some s
+    ArcSegment seg({10, 0}, geo::HALF_PI, 0.1, geo::PI * 5);
+    auto pts = seg.sampleAdaptive(MAX_GEOM_ERROR_HORIZONTAL, 2, 1000);
+
+    // Each point should be on the circle of radius 10 centered at origin
+    for (const auto& p : pts) {
+        double dist = std::hypot(p.x, p.y);
+        CHECK(dist == doctest::Approx(10.0).epsilon(0.01));
+    }
+}
+
+TEST_CASE("Adaptive sampling: constants match architecture doc Appendix B") {
+    // Verify the named constants are what the doc says
+    CHECK(MAX_GEOM_ERROR_HORIZONTAL == 0.25);
+    CHECK(MAX_GEOM_ERROR_VERTICAL == 0.1);
+    CHECK(GEOM_TOLERANCE == 0.2);
+    CHECK(MAX_GEOM_LENGTH == 50.0);
+    CHECK(MIN_GEOM_LENGTH == 0.1);
+    CHECK(ADAPTIVE_MAX_DEPTH == 20);
 }
