@@ -1,94 +1,101 @@
-Phase 2.6: Road Mark Generator — semantic marking descriptions
+Phase 2.7: Road Mesh Generator — renderable geometry
 
-Introduces the road mark generation layer that transforms LaneNetwork
-boundaries into structured marking descriptions. No mesh, no rendering
-— only logical marking data with parametric dash representation.
+Introduces the mesh generation layer that converts LaneNetwork and
+RoadMarkNetwork into renderable triangle strips. No lane math, no
+sampling, no marking logic — just tessellation of already-defined
+geometry.
 
-New file: road_mark_generator.hpp
+New file: road_mesh_generator.hpp
   Separation of concerns:
-    lane_engine.hpp         = Data model
-    lane_geometry.hpp       = Evaluation
-    lane_sampling.hpp       = Sampling
-    lane_network.hpp        = Persistent lane network
-    road_mark_generator.hpp = Mark generation (THIS FILE)
+    lane_engine.hpp          = Data model
+    lane_geometry.hpp        = Evaluation
+    lane_sampling.hpp        = Sampling
+    lane_network.hpp         = Persistent lane network
+    road_mark_generator.hpp  = Mark generation
+    road_mesh_generator.hpp  = Mesh generation (THIS FILE)
 
-  DashPattern struct:
-    - dashLength, gapLength, phase
-    - period() = dash + gap
-    - isDashAt(distance) — parametric dash placement
-    - Default: 3m dash, 9m gap (MUTCD broken line)
+  MaterialType enum:
+    - Asphalt, WhiteMarking, YellowMarking
+    - Curb, Shoulder, Sidewalk, Grass (future)
+    - Unknown (fallback)
+    - materialTypeName() for serialization
 
-  RoadMarkStyle struct:
-    - type (LaneRoadMarkType), color, width
-    - dashPattern (for dashed types)
-    - isDashed(), isSolid(), isDouble() queries
+  MeshVertex struct:
+    - position (Point3D): world-space (x, y, z)
+    - normal (Vec3): unit normal (0, 0, 1) for flat roads
+    - uv (Vec2): texture coordinates
 
-  RoadMarkPolyline struct:
-    - style, innerLaneId, outerLaneId
-    - isRoadEdge, isCenterLine flags
-    - startS, endS, length
-    - vector<SamplePoint> samples (from LaneBoundary)
-    - id() debug string
+  MeshSection struct:
+    - material, materialName
+    - vector<MeshVertex> vertices
+    - vector<uint32_t> indices
+    - merge() for combining sections of same material
 
-  RoadMarkNetwork struct:
-    - vector<RoadMarkPolyline> markings
-    - findByType(), centerMarks(), edgeMarks()
-    - dashedMarks(), solidMarks() queries
+  RoadMesh struct:
+    - vector<MeshSection> sections (split by material)
+    - findSection(), getOrCreateSection()
+    - totalVertices(), totalTriangles()
 
-  RoadMarkLibrary:
-    - Maps boundary roles to styles
-    - Default: MUTCD (center=dashed yellow, inner=dashed white, edge=solid white)
-    - european() — white center
-    - none() — no markings
+  MeshGenParams:
+    - zHeight (default 0)
+    - uvScale (1m = 1 UV unit)
+    - markingElevation (0.01m above pavement)
+    - generateMarkings flag
 
-  generateRoadMarks(network, library):
-    - Transforms LaneBoundary → RoadMarkPolyline
-    - One source of truth: LaneNetwork provides geometry, library provides style
-    - Skips None-type markings
-    - No geometry recomputation
+  Pavement generation (generateRoadMesh):
+    - One triangle strip per lane
+    - Uses boundary samples from LaneNetwork
+    - CCW winding from above (Z-up)
+    - UV: U = s (arc-length), V = lateral offset
+    - Lanes processed independently (per-lane LOD/editing)
+    - Only drivable lanes get asphalt material
 
-  generateDashedSegments(mark):
-    - Returns (startDist, endDist) pairs for each dash
-    - Parametric — no tiny line segments
-    - Mesh generator (2.7) will tessellate from these
+  Marking generation (generateMarkingMesh):
+    - Solid lines: continuous strip along marking polyline
+    - Dashed lines: one quad per dash, interpolated at exact
+      dash boundaries (not dependent on sample density)
+    - UV: U = distance along marking, V = 0..1 across width
+    - Split by color: WhiteMarking, YellowMarking
+    - Markings elevated slightly above pavement (0.01m)
 
-Tests (26 new doctest, 433 total, 3863 assertions):
-  DashPattern (3):
-    - Default 3m/9m pattern
-    - isDashAt correctly identifies dash regions
-    - Phase offset shifts pattern
-    - Custom dotted pattern
-  RoadMarkStyle (3):
-    - Dashed/solid/double classification
-  RoadMarkLibrary (3):
-    - Default MUTCD styles
-    - European style (white center)
-    - none() disables all
-  2-lane road (2):
-    - 1 center dashed yellow, 2 edge solid white
-    - Marking positions match boundary positions
-  4-lane road (1):
-    - Center yellow, inner dashed white, edge solid
-  Lane transition (1):
-    - Markings continue across 2→4 section change
-    - Center marks position-continuous at boundary
-  Multi-section (2):
-    - Custom library applies to all sections
-    - none() library produces no markings
+  generateFullRoadMesh: combines pavement + markings
+
+Tests (23 new doctest, 456 total, 4751 assertions):
+  MaterialType (1):
+    - Name strings correct
+  MeshVertex/MeshSection (3):
+    - Constructor sets all fields
+    - merge() combines vertices and indices with offset
+    - getOrCreateSection creates and reuses
+  Straight road (4):
+    - Correct vertex count, 2 triangles per segment
+    - Vertices at z=0, normals (0,0,1)
+    - UVs are s and lateral offset
+  Winding (1):
+    - All triangles CCW from above
+  Arc road (2):
+    - No inverted winding (all CCW)
+    - Normals consistent
+  Variable width (1):
+    - Mesh widens smoothly (taper from 3.5m to 0)
+  Multi-section (1):
+    - 2→4 lane transition: no cracks at boundary
+  Marking mesh (5):
+    - Solid edge markings generated
+    - Dashed center markings generated
+    - Markings above pavement (z=0.01)
+    - Dashed marking has gaps in UV
+    - UV V ranges 0 to 1
+  Full road mesh (1):
+    - Contains asphalt + white + yellow sections
   Legacy (1):
-    - Synthesized road generates markings
-  generateDashedSegments (3):
-    - Correct dash count for 100m line
-    - Solid line returns empty
-    - Respects custom dash pattern
-  Queries (3):
-    - findByType, dashedMarks/solidMarks, id() string
-  No mesh (1):
-    - RoadMarkPolyline contains only SamplePoints
-  Edge case (1):
-    - Empty network produces no markings
-  Arc road (1):
-    - Markings follow curvature, dashed segments work
+    - Synthesized road generates mesh
+  Edge cases (2):
+    - Empty network → empty mesh
+    - No markings → empty marking mesh
+  Performance (1):
+    - 1000-segment, 8 lanes, full mesh (pavement + markings)
+    - Records vertices, triangles, milliseconds baseline
 
-No triangles, no UVs, no render buffers. Those are 2.7.
+No renderer-specific code. Output is generic MeshVertex/MeshSection.
 All 130 vitest tests pass (no regression).

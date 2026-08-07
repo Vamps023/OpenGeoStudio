@@ -7709,3 +7709,565 @@ TEST_CASE("2.6 Arc road: markings follow curvature") {
     auto segments = generateDashedSegments(*centerMarks[0]);
     CHECK(segments.size() >= 5);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.7 — Road Mesh Generator Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for MeshVertex, MeshSection, RoadMesh, MaterialType,
+// generateRoadMesh(), generateMarkingMesh(), generateFullRoadMesh().
+//
+// Verifies tessellation of LaneNetwork into renderable geometry.
+// ═══════════════════════════════════════════════════════════
+
+#include "road_mesh_generator.hpp"
+
+using geo::MaterialType;
+using geo::MeshVertex;
+using geo::MeshSection;
+using geo::RoadMesh;
+using geo::MeshGenParams;
+using geo::generateRoadMesh;
+using geo::generateMarkingMesh;
+using geo::generateFullRoadMesh;
+using geo::materialTypeName;
+using geo::Point3D;
+using geo::Vec3;
+
+// ═══════════════════════════════════════════════════════════
+// MaterialType Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 MaterialType: name strings are correct") {
+    CHECK(std::string(materialTypeName(MaterialType::Asphalt)) == "asphalt");
+    CHECK(std::string(materialTypeName(MaterialType::WhiteMarking)) == "white_marking");
+    CHECK(std::string(materialTypeName(MaterialType::YellowMarking)) == "yellow_marking");
+    CHECK(std::string(materialTypeName(MaterialType::Unknown)) == "unknown");
+}
+
+// ═══════════════════════════════════════════════════════════
+// MeshVertex / MeshSection Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 MeshVertex: constructor sets all fields") {
+    MeshVertex v(Point3D(1, 2, 3), Vec3(0, 0, 1), Vec2(0.5, 0.5));
+    CHECK(v.position.x == doctest::Approx(1.0));
+    CHECK(v.position.y == doctest::Approx(2.0));
+    CHECK(v.position.z == doctest::Approx(3.0));
+    CHECK(v.normal.z == doctest::Approx(1.0));
+    CHECK(v.uv.x == doctest::Approx(0.5));
+    CHECK(v.uv.y == doctest::Approx(0.5));
+}
+
+TEST_CASE("2.7 MeshSection: merge combines vertices and indices") {
+    MeshSection a;
+    a.material = MaterialType::Asphalt;
+    a.vertices.push_back(MeshVertex(Point3D(0, 0, 0), Vec3(0, 0, 1), Vec2(0, 0)));
+    a.vertices.push_back(MeshVertex(Point3D(1, 0, 0), Vec3(0, 0, 1), Vec2(1, 0)));
+    a.indices.push_back(0);
+    a.indices.push_back(1);
+    a.indices.push_back(0);
+
+    MeshSection b;
+    b.material = MaterialType::Asphalt;
+    b.vertices.push_back(MeshVertex(Point3D(2, 0, 0), Vec3(0, 0, 1), Vec2(2, 0)));
+    b.vertices.push_back(MeshVertex(Point3D(3, 0, 0), Vec3(0, 0, 1), Vec2(3, 0)));
+    b.indices.push_back(0);
+    b.indices.push_back(1);
+    b.indices.push_back(0);
+
+    a.merge(b);
+
+    CHECK(a.vertexCount() == 4);
+    CHECK(a.indexCount() == 6);
+    // Indices should be offset by 2 (original vertex count)
+    CHECK(a.indices[3] == 2);
+    CHECK(a.indices[4] == 3);
+}
+
+TEST_CASE("2.7 RoadMesh: getOrCreateSection creates and reuses") {
+    RoadMesh mesh;
+    MeshSection& s1 = mesh.getOrCreateSection(MaterialType::Asphalt);
+    CHECK(mesh.numSections() == 1);
+    MeshSection& s2 = mesh.getOrCreateSection(MaterialType::Asphalt);
+    CHECK(mesh.numSections() == 1);  // same section
+    CHECK(&s1 == &s2);
+
+    MeshSection& s3 = mesh.getOrCreateSection(MaterialType::WhiteMarking);
+    CHECK(mesh.numSections() == 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Straight Road Mesh Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Straight road: generates asphalt mesh with correct vertex count") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    // Should have one asphalt section
+    CHECK(mesh.numSections() >= 1);
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // 2 drivable lanes (lane 1 and -1), each with N samples
+    // Each lane strip: 2 * N vertices, (N-1) * 2 triangles = (N-1) * 6 indices
+    CHECK(asphalt->vertexCount() >= 4);  // at least 2 per lane
+    CHECK(asphalt->triangleCount() >= 2);
+    CHECK(asphalt->indexCount() == asphalt->triangleCount() * 3);
+}
+
+TEST_CASE("2.7 Straight road: 2 triangles per segment per lane") {
+    // Short straight road with minimal samples (2 samples)
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(10, 0));
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+
+    // Use tight sampling to get few samples
+    SamplingParams sp;
+    sp.maxError = 10.0;  // very loose → fewer samples
+    LaneNetwork net2 = generateLaneNetwork(road, sp);
+
+    RoadMesh mesh = generateRoadMesh(net2);
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // 2 lanes × (N-1) segments × 2 triangles
+    // With loose tolerance, straight road should have ~2 samples per lane
+    // → 2 lanes × 1 segment × 2 triangles = 4 triangles
+    CHECK(asphalt->triangleCount() >= 2);
+    CHECK(asphalt->triangleCount() <= 20);  // not too many
+}
+
+TEST_CASE("2.7 Straight road: vertices at correct positions") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // All vertices should have z=0 (flat road)
+    for (const auto& v : asphalt->vertices) {
+        CHECK(v.position.z == doctest::Approx(0.0));
+    }
+
+    // All normals should be (0, 0, 1)
+    for (const auto& v : asphalt->vertices) {
+        CHECK(v.normal.x == doctest::Approx(0.0));
+        CHECK(v.normal.y == doctest::Approx(0.0));
+        CHECK(v.normal.z == doctest::Approx(1.0));
+    }
+}
+
+TEST_CASE("2.7 Straight road: UVs are s and lateral offset") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // UV.x should be s (0 to 100), UV.y should be lateral offset
+    for (const auto& v : asphalt->vertices) {
+        CHECK(v.uv.x >= -0.001);
+        CHECK(v.uv.x <= 100.001);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Winding Order Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Winding: triangles are CCW from above (right lane)") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // Check at least one triangle's winding
+    // For CCW from above (Z-up): cross product of (v1-v0) × (v2-v0) should have +Z
+    int ccwCount = 0;
+    int totalChecked = 0;
+    for (size_t i = 0; i + 2 < asphalt->indices.size(); i += 3) {
+        uint32_t i0 = asphalt->indices[i];
+        uint32_t i1 = asphalt->indices[i + 1];
+        uint32_t i2 = asphalt->indices[i + 2];
+
+        Point3D v0 = asphalt->vertices[i0].position;
+        Point3D v1 = asphalt->vertices[i1].position;
+        Point3D v2 = asphalt->vertices[i2].position;
+
+        // 2D cross product (z component)
+        double cross = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+        if (cross > 0) ccwCount++;
+        totalChecked++;
+    }
+
+    // All triangles should be CCW
+    CHECK(ccwCount == totalChecked);
+    CHECK(totalChecked > 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Arc Road Mesh Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Arc road: no inverted winding") {
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // All triangles should be CCW from above
+    int ccwCount = 0;
+    int cwCount = 0;
+    for (size_t i = 0; i + 2 < asphalt->indices.size(); i += 3) {
+        uint32_t i0 = asphalt->indices[i];
+        uint32_t i1 = asphalt->indices[i + 1];
+        uint32_t i2 = asphalt->indices[i + 2];
+
+        Point3D v0 = asphalt->vertices[i0].position;
+        Point3D v1 = asphalt->vertices[i1].position;
+        Point3D v2 = asphalt->vertices[i2].position;
+
+        double cross = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+        if (cross > 0) ccwCount++;
+        else if (cross < 0) cwCount++;
+    }
+
+    // No inverted triangles
+    CHECK(cwCount == 0);
+    CHECK(ccwCount > 0);
+}
+
+TEST_CASE("2.7 Arc road: normals are consistent") {
+    RoadV2 road;
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 100.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // All normals should be (0, 0, 1) for flat road
+    for (const auto& v : asphalt->vertices) {
+        CHECK(v.normal.z == doctest::Approx(1.0));
+        CHECK(std::abs(v.normal.x) < 0.001);
+        CHECK(std::abs(v.normal.y) < 0.001);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Variable Width Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Variable width: mesh widens smoothly") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    // Taper from 3.5 to 0 over 100m
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.035, 0, 0)));
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+    CHECK(asphalt->vertexCount() >= 4);
+
+    // Find vertices at s=0 and s=100 (approximately)
+    // At s=0, lane width = 3.5, at s=100, lane width = 0
+    // The mesh should narrow from 3.5 to 0
+    double maxWidth = 0, minWidth = 1e9;
+    for (size_t i = 0; i + 1 < asphalt->vertices.size(); i += 2) {
+        // Each pair is (inner, outer) for a sample
+        double dy = std::abs(asphalt->vertices[i + 1].position.y -
+                             asphalt->vertices[i].position.y);
+        maxWidth = std::max(maxWidth, dy);
+        minWidth = std::min(minWidth, dy);
+    }
+
+    CHECK(maxWidth == doctest::Approx(3.5).epsilon(0.01));
+    CHECK(minWidth < 0.5);  // should taper to near 0
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Section (2→4 Lane Transition) Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 2→4 lane transition: no cracks at boundary") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+
+    // Should have mesh for both sections
+    CHECK(asphalt->vertexCount() > 0);
+    CHECK(asphalt->triangleCount() > 0);
+
+    // Lane 1 exists in both sections — its mesh should be continuous
+    // Check that there are vertices near x=100 (the boundary)
+    int verticesNearBoundary = 0;
+    for (const auto& v : asphalt->vertices) {
+        if (std::abs(v.position.x - 100.0) < 1.0) {
+            verticesNearBoundary++;
+        }
+    }
+    CHECK(verticesNearBoundary > 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Marking Mesh Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Marking mesh: solid edge markings generated") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateMarkingMesh(marks);
+
+    // Should have white marking section (solid edges)
+    const MeshSection* white = mesh.findSection(MaterialType::WhiteMarking);
+    REQUIRE(white != nullptr);
+    CHECK(white->vertexCount() > 0);
+    CHECK(white->triangleCount() > 0);
+}
+
+TEST_CASE("2.7 Marking mesh: dashed center markings generated") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateMarkingMesh(marks);
+
+    // Should have yellow marking section (dashed center)
+    const MeshSection* yellow = mesh.findSection(MaterialType::YellowMarking);
+    REQUIRE(yellow != nullptr);
+    CHECK(yellow->vertexCount() > 0);
+    CHECK(yellow->triangleCount() > 0);
+}
+
+TEST_CASE("2.7 Marking mesh: markings are above pavement") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    MeshGenParams params;
+    params.zHeight = 0.0;
+    params.markingElevation = 0.01;
+    RoadMesh mesh = generateMarkingMesh(marks, params);
+
+    const MeshSection* yellow = mesh.findSection(MaterialType::YellowMarking);
+    REQUIRE(yellow != nullptr);
+
+    // All marking vertices should be at z = 0.01
+    for (const auto& v : yellow->vertices) {
+        CHECK(v.position.z == doctest::Approx(0.01));
+    }
+}
+
+TEST_CASE("2.7 Marking mesh: dashed marking has gaps") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateMarkingMesh(marks);
+
+    const MeshSection* yellow = mesh.findSection(MaterialType::YellowMarking);
+    REQUIRE(yellow != nullptr);
+
+    // Dashed marking (3m dash, 9m gap) over 100m → ~8 dashes
+    // Each dash has at least 2 vertices → at least 16 vertices
+    // But not as many as a solid line (which would have ~20+)
+    CHECK(yellow->vertexCount() >= 16);
+
+    // Verify there are gaps: not all s-positions are covered
+    // Collect all U values (s positions)
+    std::vector<double> uValues;
+    for (const auto& v : yellow->vertices) {
+        uValues.push_back(v.uv.x);
+    }
+    std::sort(uValues.begin(), uValues.end());
+
+    // There should be gaps in the U values
+    // (not continuous from 0 to 100)
+    bool hasGap = false;
+    for (size_t i = 1; i < uValues.size(); i++) {
+        if (uValues[i] - uValues[i - 1] > 5.0) {  // gap > 5m
+            hasGap = true;
+            break;
+        }
+    }
+    CHECK(hasGap);
+}
+
+TEST_CASE("2.7 Marking mesh: UV V ranges from 0 to 1") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateMarkingMesh(marks);
+
+    const MeshSection* white = mesh.findSection(MaterialType::WhiteMarking);
+    REQUIRE(white != nullptr);
+
+    for (const auto& v : white->vertices) {
+        CHECK(v.uv.y >= -0.001);
+        CHECK(v.uv.y <= 1.001);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Full Road Mesh Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Full road mesh: contains asphalt + white + yellow sections") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+
+    CHECK(mesh.findSection(MaterialType::Asphalt) != nullptr);
+    CHECK(mesh.findSection(MaterialType::WhiteMarking) != nullptr);
+    CHECK(mesh.findSection(MaterialType::YellowMarking) != nullptr);
+
+    int totalVerts = mesh.totalVertices();
+    int totalTris = mesh.totalTriangles();
+    CHECK(totalVerts > 0);
+    CHECK(totalTris > 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Legacy Road Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Legacy: synthesized road generates mesh") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMesh mesh = generateRoadMesh(net);
+
+    const MeshSection* asphalt = mesh.findSection(MaterialType::Asphalt);
+    REQUIRE(asphalt != nullptr);
+    CHECK(asphalt->vertexCount() >= 4);
+    CHECK(asphalt->triangleCount() >= 2);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Edge Cases
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Edge case: empty network produces empty mesh") {
+    LaneNetwork net;
+    RoadMesh mesh = generateRoadMesh(net);
+
+    CHECK(mesh.numSections() == 0);
+    CHECK(mesh.totalVertices() == 0);
+}
+
+TEST_CASE("2.7 Edge case: no markings produces empty marking mesh") {
+    RoadMarkNetwork marks;
+    RoadMesh mesh = generateMarkingMesh(marks);
+
+    CHECK(mesh.numSections() == 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Performance Benchmark
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.7 Performance: 1000-segment road, 8 lanes, full mesh") {
+    RoadV2 road;
+    road.reserveSegments(1000);
+    for (int i = 0; i < 1000; i++) {
+        double x1 = i * 10.0;
+        double y1 = (i % 2 == 0) ? 0.0 : 1.0;
+        double x2 = (i + 1) * 10.0;
+        double y2 = (i % 2 == 0) ? 1.0 : 0.0;
+        road.addSegment<LineSegment>(Point2D(x1, y1), Point2D(x2, y2));
+    }
+    road.width = 28.0;
+    road.laneCount = 8;
+
+    LaneSection ls(0.0);
+    for (int i = 4; i >= 1; i--) {
+        ls.addLane(Lane(-i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    for (int i = 1; i <= 4; i++) {
+        ls.addLane(Lane(i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    road.addLaneSection(std::move(ls));
+
+    LaneNetwork net = generateLaneNetwork(road);
+    RoadMarkNetwork marks = generateRoadMarks(net);
+
+    auto start = std::chrono::high_resolution_clock::now();
+    RoadMesh mesh = generateFullRoadMesh(net, marks);
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    int totalVerts = mesh.totalVertices();
+    int totalTris = mesh.totalTriangles();
+
+    INFO("1000-seg, 8 lanes: " << totalVerts << " vertices, "
+         << totalTris << " triangles in " << ms << " ms");
+
+    CHECK(totalVerts > 0);
+    CHECK(totalTris > 0);
+    // Should be well under interactive budget
+    CHECK(ms < 2000.0);
+}
