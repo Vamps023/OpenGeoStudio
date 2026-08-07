@@ -1,66 +1,11 @@
-Phase 2.8: Road Engine Runtime API — buildRoad()
+Fix: rebuild native addon against Electron ABI + correct Python path
 
-Introduces the single public API that the editor calls to get
-everything from the lane engine in one IPC round-trip.
+The road engine addon was built against Node.js ABI 137 but Electron
+42.5.1 uses ABI 146, causing the Electron main process to crash on
+addon load. Rebuilt with node-gyp --target=42.5.1 against Electron
+headers. Also fixed the Python path in build scripts (was pointing to
+non-existent python3.13.exe, now uses Python 3.12 installed via winget).
 
-  Road → roadToV2Auto() → LaneNetwork → RoadMarkNetwork → RoadMesh
-                                                              ↓
-                                                         RoadBuildResult
+Generated with [Devin](https://devin.ai)
 
-The editor no longer needs to call four separate functions. It calls
-buildRoad(road) and receives:
-
-  - meshSections: Float32Array/Uint32Array (Babylon-ready buffers)
-  - lanes: LaneNetworkData (centerlines, boundaries, samples)
-  - markings: RoadMarkNetworkData (marking polylines)
-  - adapter: BuildAdapterReport (conversion diagnostics)
-
-C++ Bridge (road_bridge.cpp):
-  - roadBuildRoad(road) → RoadBuildResult
-  - Serializes MeshSection with typed arrays:
-      positions: Float32Array (x,y,z interleaved)
-      normals:   Float32Array (nx,ny,nz)
-      uvs:       Float32Array (u,v)
-      indices:   Uint32Array
-  - Serializes LaneNetwork (centerlines, boundaries, sample points)
-  - Serializes RoadMarkNetwork (marking polylines with style)
-  - Serializes AdapterReport (exact, segments, warnings)
-
-IPC Layer:
-  - New channel: ROAD_BUILD_ROAD = 'road:buildRoad'
-  - Handler in roadEngineHandler.ts
-  - Preload bridge: window.roadEngine.buildRoad(road)
-  - TypeScript types in roadEngineClient.ts:
-      MeshSectionData, LaneNetworkData, LaneCenterlineData,
-      LaneBoundaryData, SamplePointData, RoadMarkNetworkData,
-      RoadMarkPolylineData, BuildAdapterReport, RoadBuildResult
-  - RoadEngineAPI.buildRoad() + convenience export roadEngine.buildRoad
-
-Tests (7 new doctest, 11 new vitest):
-  C++ (463 total, 5274 assertions):
-    - Full pipeline RoadV2 → LaneNetwork → RoadMarkNetwork → RoadMesh
-    - 4-lane legacy road
-    - Adapter report correctness
-    - Empty road → empty result
-    - Material names correct
-    - Mesh data self-consistent (indices in range)
-    - Performance baseline (1000-seg, 8 lanes)
-
-  vitest (141 total, 11 new):
-    - Returns RoadBuildResult with all fields
-    - Typed arrays in mesh sections (Babylon-ready)
-    - Has asphalt, white_marking, yellow_marking sections
-    - 4-lane road → 5 centerlines
-    - Valid indices (all within vertex range)
-    - Empty road → empty result
-    - Flat normals (0,0,1)
-    - All z=0 for flat road
-    - Markings above pavement (z > 0)
-    - Sample points have s, heading, laneOffset
-    - Performance: 1000-segment road < 5s
-
-No regression: 463 doctest + 141 vitest all pass.
-TypeScript build: clean.
-Native addon: rebuilt with roadBuildRoad().
-
-Phase 2 (Lane Engine) is now complete.
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>
