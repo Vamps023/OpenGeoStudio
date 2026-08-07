@@ -23,6 +23,45 @@ npm run test:watch        # Watch mode
 
 1. **Home** — Recent projects, quick actions, create project
 2. **Terrain** — Map area selection (shift+drag), TIFF/PNG download via Export panel
+3. **Road Studio** — Road network design with C++ geometry engine
+
+## C++ Road Engine
+
+- **Native addon:** `app/native/road_engine/` (node-gyp, Electron target)
+- **Source:** `app/native/src/road/` (header-only C++20)
+- **Bridge:** `app/native/src/road_bridge.cpp` (N-API bindings)
+- **Build:** `cd app/native/road_engine && npx node-gyp build`
+- **Tests:** `tests/road-engine.test.ts` (41 tests, vitest)
+
+### C++ Engine Files
+
+| File | Purpose |
+|------|---------|
+| `geometry.hpp` | Math kernel (Point2D, Vec2, intersections, offsets, bezier) |
+| `road.hpp` | Road data model (ControlPoint, Road, Lane, GeneratedIntersection) |
+| `arc.hpp` | Circular arc computation with tangent continuity |
+| `clothoid.hpp` | Euler spiral (clothoid) for G2 continuity |
+| `intersection.hpp` | Edge-based junction generation with fillet corners |
+| `mesh.hpp` | Triangle mesh tessellation (ear-clipping, road strips) |
+| `opendrive.hpp` | OpenDRIVE XML export |
+| `road_tools.hpp` | SCANeR-style road creation tools (6 tools) |
+
+### Road Studio Key Files
+
+- `modules/road-studio/client/RoadViewport.tsx` — MapLibre 2D + Babylon.js 3D rendering
+- `modules/road-studio/client/RoadToolbar.tsx` — Tool buttons, debug toggles, elevation editor
+- `modules/road-studio/client/store/roadStudioStore.ts` — Zustand store (roads, tools, undo/redo, debug)
+- `modules/road-studio/shared/roadEngineClient.ts` — IPC client (16 C++ engine methods)
+- `modules/road-studio/shared/types.ts` — Road, ControlPoint, Intersection, GeneratedIntersection types
+- `app/handlers/roadEngineHandler.ts` — IPC handler (16 channels)
+- `app/preload.ts` — Preload bridge (window.roadEngine.*)
+
+### Debug Mode
+
+- **Toggle:** Ctrl+Shift+G
+- **14 layers:** centerline, leftEdge, rightEdge, laneBoundaries, samplePoints,
+  intersectionPolygon, trimPoints, tangentPoints, filletArcs, triangulation,
+  boundaryIntersections, trimLines, corners, polygonVertices
 
 ## Key Files
 
@@ -30,10 +69,11 @@ npm run test:watch        # Watch mode
 - `modules/export/client/ExportPanel/ExportPanel.tsx` — Export settings (TIFF, PNG, formats)
 - `renderer/App.tsx` — Main application shell with workspace switching
 - `renderer/panels/RecentProjects/RecentProjects.tsx` — Home/start screen with project templates
-- `core/workspace/workspace-manager.ts` — Workspace definitions (home, terrain)
+- `core/workspace/workspace-manager.ts` — Workspace definitions (home, terrain, road-studio)
 - `core/project/project-manager.ts` — Project CRUD and persistence
 - `app/handlers/coreIpcHandler.ts` — Core IPC (project, workspace, commands, jobs)
 - `app/handlers/exportHandler.ts` — Export operations (heightmap, imagery download)
+- `docs/ROAD_ENGINE_NEW_ARCHITECTURE.md` — New architecture design (esmini-inspired)
 
 ## Conventions
 
