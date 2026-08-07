@@ -18,6 +18,7 @@ import {
   ROAD_COMPUTE_CLOTHOID,
   ROAD_GENERATE_ROAD_MESH,
   ROAD_GENERATE_INTERSECTION_MESH,
+  ROAD_EXPORT_OPENDRIVE,
   ROAD_SAMPLE_CENTERLINE,
   ROAD_GEO_TO_LOCAL,
   ROAD_LOCAL_TO_GEO,
@@ -49,6 +50,7 @@ export interface RoadEngineAddon {
   ): unknown;
   roadGenerateRoadMesh(road: unknown, numSamples?: number): unknown;
   roadGenerateIntersectionMesh(intersection: unknown, z?: number): unknown;
+  roadExportOpenDrive(roads: unknown[], refLat: number, refLon: number): string;
   roadSampleCenterline(road: unknown, numSamples?: number): unknown;
   roadGeoToLocal(lat: number, lon: number, refLat: number, refLon: number): { x: number; y: number };
   roadLocalToGeo(x: number, y: number, refLat: number, refLon: number): { lat: number; lon: number };
@@ -132,6 +134,13 @@ export async function registerRoadEngineHandlers(): Promise<void> {
       throw new Error('Road engine native addon not available');
     }
     return addon.roadGenerateIntersectionMesh(intersection, z);
+  });
+
+  ipcMain.handle(ROAD_EXPORT_OPENDRIVE, async (_event, roads, refLat, refLon) => {
+    if (!addon) {
+      throw new Error('Road engine native addon not available');
+    }
+    return addon.roadExportOpenDrive(roads, refLat, refLon);
   });
 
   ipcMain.handle(ROAD_SAMPLE_CENTERLINE, async (_event, road, numSamples) => {

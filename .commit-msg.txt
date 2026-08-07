@@ -1,14 +1,15 @@
-Phase 5: Implement mesh tessellation in C++
+Phase 6: Implement OpenDRIVE I/O in C++
 
-- mesh.hpp: Ear-clipping polygon triangulation + road strip mesh generation
-  - triangulatePolygon(): ear-clipping algorithm for simple polygons
-  - generateRoadMesh(): triangle strip along centerline with normals and UVs
-  - generateIntersectionMesh(): triangulated intersection polygon
-  - Returns typed arrays (Float32Array, Uint32Array) for direct GPU upload
-- road_bridge.cpp: Added roadGenerateRoadMesh and roadGenerateIntersectionMesh
-- IPC channels: road:generateRoadMesh, road:generateIntersectionMesh
-- roadEngineClient.ts: Added MeshData type and mesh generation API
-- 10 tests pass (including road mesh and intersection mesh tests)
+- opendrive.hpp: OpenDRIVE 1.6 XML format export
+  - roadToOpenDrive(): converts Road to OdRoad with geometry, lanes, elevation
+  - serializeOpenDrive(): serializes OpenDriveDocument to XML string
+  - exportOpenDrive(): full pipeline from Road[] to .xodr XML
+  - Supports: roads, lanes, lane sections, elevation profiles, junctions
+  - Geometry types: line, arc, clothoid, paramPoly3
+- road_bridge.cpp: Added roadExportOpenDrive N-API binding
+- IPC channel: road:exportOpenDrive
+- roadEngineClient.ts: Added exportOpenDrive API
+- 11 tests pass (including OpenDRIVE XML export test)
 
 Generated with Devin (https://devin.ai)
 

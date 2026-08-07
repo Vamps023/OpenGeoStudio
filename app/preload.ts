@@ -40,6 +40,7 @@ import {
   ROAD_COMPUTE_CLOTHOID,
   ROAD_GENERATE_ROAD_MESH,
   ROAD_GENERATE_INTERSECTION_MESH,
+  ROAD_EXPORT_OPENDRIVE,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -111,6 +112,7 @@ export interface ElectronAPI {
     computeClothoid: (startPoint: { x: number; y: number }, startDirection: { x: number; y: number }, endPoint: { x: number; y: number }, endDirection: { x: number; y: number }, initialA?: number, segments?: number) => Promise<unknown>;
     generateRoadMesh: (road: unknown, numSamples?: number) => Promise<unknown>;
     generateIntersectionMesh: (intersection: unknown, z?: number) => Promise<unknown>;
+    exportOpenDrive: (roads: unknown[], refLat: number, refLon: number) => Promise<string>;
     sampleCenterline: (road: unknown, numSamples?: number) => Promise<unknown>;
     geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) => Promise<{ x: number; y: number }>;
     localToGeo: (x: number, y: number, refLat: number, refLon: number) => Promise<{ lat: number; lon: number }>;
@@ -180,6 +182,8 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(ROAD_GENERATE_ROAD_MESH, road, numSamples),
     generateIntersectionMesh: (intersection, z) =>
       ipcRenderer.invoke(ROAD_GENERATE_INTERSECTION_MESH, intersection, z),
+    exportOpenDrive: (roads, refLat, refLon) =>
+      ipcRenderer.invoke(ROAD_EXPORT_OPENDRIVE, roads, refLat, refLon),
     sampleCenterline: (road, numSamples) =>
       ipcRenderer.invoke(ROAD_SAMPLE_CENTERLINE, road, numSamples),
     geoToLocal: (lat, lon, refLat, refLon) =>

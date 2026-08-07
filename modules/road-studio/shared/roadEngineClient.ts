@@ -46,6 +46,7 @@ declare global {
         computeClothoid(sp: { x: number; y: number }, sd: { x: number; y: number }, ep: { x: number; y: number }, ed: { x: number; y: number }, initialA?: number, segments?: number): Promise<unknown>;
         generateRoadMesh(road: unknown, numSamples?: number): Promise<unknown>;
         generateIntersectionMesh(intersection: unknown, z?: number): Promise<unknown>;
+        exportOpenDrive(roads: unknown[], refLat: number, refLon: number): Promise<string>;
         sampleCenterline(road: unknown, numSamples?: number): Promise<unknown>;
         geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
         localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -125,6 +126,7 @@ export interface RoadEngineAPI {
   ): Promise<ClothoidResult>;
   generateRoadMesh(road: Road, numSamples?: number): Promise<MeshData>;
   generateIntersectionMesh(intersection: GeneratedIntersection, z?: number): Promise<MeshData>;
+  exportOpenDrive(roads: Road[], refLat: number, refLon: number): Promise<string>;
   sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>>;
   geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }>;
   localToGeo(x: number, y: number, refLat: number, refLon: number): Promise<{ lat: number; lon: number }>;
@@ -183,6 +185,11 @@ class NativeRoadEngine implements RoadEngineAPI {
 
   async generateIntersectionMesh(intersection: GeneratedIntersection, z?: number): Promise<MeshData> {
     return this.api.generateIntersectionMesh(intersection, z) as Promise<MeshData>;
+  }
+
+  async exportOpenDrive(roads: Road[], refLat: number, refLon: number): Promise<string> {
+    const cppRoads = roads.map(r => toCppRoad(r, refLat, refLon));
+    return this.api.exportOpenDrive(cppRoads, refLat, refLon);
   }
 
   async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
@@ -301,6 +308,8 @@ export const roadEngine = {
     getRoadEngine().generateRoadMesh(road, numSamples),
   generateIntersectionMesh: (intersection: GeneratedIntersection, z?: number) =>
     getRoadEngine().generateIntersectionMesh(intersection, z),
+  exportOpenDrive: (roads: Road[], refLat: number, refLon: number) =>
+    getRoadEngine().exportOpenDrive(roads, refLat, refLon),
   sampleCenterline: (road: Road, numSamples?: number) =>
     getRoadEngine().sampleCenterline(road, numSamples),
   geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) =>

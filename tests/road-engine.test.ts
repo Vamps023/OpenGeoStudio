@@ -209,4 +209,45 @@ describeIfAddon('C++ Road Geometry Engine', () => {
     expect(mesh.triangleCount).toBeGreaterThan(0);
     expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
   });
+
+  it('should export roads to OpenDRIVE XML', () => {
+    const roads = [
+      {
+        id: 'r1', name: 'Main Street', width: 8.0, laneCount: 2,
+        points: [
+          { x: 0, y: 0, z: 0, type: 'corner' },
+          { x: 100, y: 0, z: 5, type: 'corner' },
+        ],
+      },
+      {
+        id: 'r2', name: 'Cross Road', width: 6.0, laneCount: 2,
+        points: [
+          { x: 50, y: -50, z: 0, type: 'corner' },
+          { x: 50, y: 50, z: 0, type: 'corner' },
+        ],
+      },
+    ];
+
+    const xml = addon.roadExportOpenDrive(roads, 37.7749, -122.4194);
+
+    // Should produce valid XML
+    expect(xml).toContain('<?xml');
+    expect(xml).toContain('<OpenDRIVE>');
+    expect(xml).toContain('</OpenDRIVE>');
+
+    // Should contain road elements
+    expect(xml).toContain('<road');
+    expect(xml).toContain('Main Street');
+    expect(xml).toContain('Cross Road');
+
+    // Should contain geometry
+    expect(xml).toContain('<planView>');
+    expect(xml).toContain('<geometry');
+    expect(xml).toContain('<line/>');
+
+    // Should contain lanes
+    expect(xml).toContain('<lanes>');
+    expect(xml).toContain('<laneSection');
+    expect(xml).toContain('driving');
+  });
 });

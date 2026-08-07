@@ -5,6 +5,7 @@
 #include "road/intersection.hpp"
 #include "road/clothoid.hpp"
 #include "road/mesh.hpp"
+#include "road/opendrive.hpp"
 #include <sstream>
 
 namespace geo {
@@ -364,6 +365,27 @@ static Napi::Value RoadGenerateIntersectionMesh(const Napi::CallbackInfo& info) 
     return meshToJs(env, mesh);
 }
 
+// roadExportOpenDrive(roads[], refLat, refLon) → string (XML)
+static Napi::Value RoadExportOpenDrive(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 3 || !info[0].IsArray()) {
+        Napi::TypeError::New(env, "Expected (roads: array, refLat, refLon)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    auto roadsArr = info[0].As<Napi::Array>();
+    double refLat = info[1].As<Napi::Number>().DoubleValue();
+    double refLon = info[2].As<Napi::Number>().DoubleValue();
+
+    std::vector<Road> roads;
+    for (uint32_t i = 0; i < roadsArr.Length(); i++) {
+        roads.push_back(parseRoad(roadsArr.Get(i).As<Napi::Object>()));
+    }
+
+    std::string xml = exportOpenDrive(roads, refLat, refLon);
+    return Napi::String::New(env, xml);
+}
+
 // ─── Init function ─────────────────────────────────────────
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
@@ -375,6 +397,7 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadLocalToGeo", Napi::Function::New(env, RoadLocalToGeo));
     exports.Set("roadGenerateRoadMesh", Napi::Function::New(env, RoadGenerateRoadMesh));
     exports.Set("roadGenerateIntersectionMesh", Napi::Function::New(env, RoadGenerateIntersectionMesh));
+    exports.Set("roadExportOpenDrive", Napi::Function::New(env, RoadExportOpenDrive));
     return exports;
 }
 

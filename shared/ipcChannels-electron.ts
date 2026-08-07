@@ -30,6 +30,7 @@ export const ROAD_LOCAL_TO_GEO = 'road:localToGeo' as const;
 export const ROAD_COMPUTE_CLOTHOID = 'road:computeClothoid' as const;
 export const ROAD_GENERATE_ROAD_MESH = 'road:generateRoadMesh' as const;
 export const ROAD_GENERATE_INTERSECTION_MESH = 'road:generateIntersectionMesh' as const;
+export const ROAD_EXPORT_OPENDRIVE = 'road:exportOpenDrive' as const;
 
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
