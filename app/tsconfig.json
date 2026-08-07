@@ -14,7 +14,7 @@
     "sourceMap": true,
     "declaration": false,
     "composite": false,
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "paths": {
       "@/*": ["../renderer/*"],
       "@shared/*": ["../shared/*"],
@@ -35,6 +35,7 @@
     "__tests__",
     "../dist-electron",
     "../modules/**/client/**/*.tsx",
-    "../modules/**/client/**/*.ts"
+    "../modules/**/client/**/*.ts",
+    "../modules/road-studio/shared/roadEngineClient.ts"
   ]
 }

@@ -31,6 +31,12 @@ import {
   FS_LOAD_PROJECT,
   FS_READ_FILE_BINARY,
   FS_WRITE_FILE_BINARY,
+  ROAD_GET_VERSION,
+  ROAD_GENERATE_INTERSECTION,
+  ROAD_COMPUTE_CIRCLE_ARC,
+  ROAD_SAMPLE_CENTERLINE,
+  ROAD_GEO_TO_LOCAL,
+  ROAD_LOCAL_TO_GEO,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -94,6 +100,15 @@ export interface ElectronAPI {
     on: (channel: string, listener: (event: unknown, ...args: any[]) => void) => () => void;
     removeListener: (channel: string, listener: (...args: any[]) => void) => void;
   };
+  /** C++ Road Geometry Engine — all road math runs in native code */
+  roadEngine: {
+    getVersion: () => Promise<string>;
+    generateIntersection: (road1: unknown, road2: unknown, refLat: number, refLon: number) => Promise<unknown>;
+    computeCircleArc: (startPoint: { x: number; y: number }, startDirection: { x: number; y: number }, endPoint: { x: number; y: number }, segments?: number) => Promise<unknown>;
+    sampleCenterline: (road: unknown, numSamples?: number) => Promise<unknown>;
+    geoToLocal: (lat: number, lon: number, refLat: number, refLon: number) => Promise<{ x: number; y: number }>;
+    localToGeo: (x: number, y: number, refLat: number, refLon: number) => Promise<{ lat: number; lon: number }>;
+  };
 }
 
 // Re-export types for convenience
@@ -146,6 +161,19 @@ const api: ElectronAPI = {
     removeListener: (channel: string, listener: (...args: any[]) => void) => {
       ipcRenderer.removeListener(channel, listener as any);
     },
+  },
+  roadEngine: {
+    getVersion: () => ipcRenderer.invoke(ROAD_GET_VERSION),
+    generateIntersection: (road1, road2, refLat, refLon) =>
+      ipcRenderer.invoke(ROAD_GENERATE_INTERSECTION, road1, road2, refLat, refLon),
+    computeCircleArc: (startPoint, startDirection, endPoint, segments) =>
+      ipcRenderer.invoke(ROAD_COMPUTE_CIRCLE_ARC, startPoint, startDirection, endPoint, segments),
+    sampleCenterline: (road, numSamples) =>
+      ipcRenderer.invoke(ROAD_SAMPLE_CENTERLINE, road, numSamples),
+    geoToLocal: (lat, lon, refLat, refLon) =>
+      ipcRenderer.invoke(ROAD_GEO_TO_LOCAL, lat, lon, refLat, refLon),
+    localToGeo: (x, y, refLat, refLon) =>
+      ipcRenderer.invoke(ROAD_LOCAL_TO_GEO, x, y, refLat, refLon),
   },
 };
 

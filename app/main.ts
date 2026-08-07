@@ -15,6 +15,7 @@ import { registerExportHandlers } from './handlers/exportHandler';
 import { registerFsHandlers, registerSettingsHandlers } from './handlers/fsHandler';
 import { registerDialogHandlers } from './handlers/dialogHandler';
 import { registerCoreIpc } from './handlers/coreIpcHandler';
+import { registerRoadEngineHandlers } from './handlers/roadEngineHandler';
 import type { NativeAddon } from './handlers/nativeHandler';
 import type { CancellationToken } from '../modules/export/server/types';
 import { AppBootstrap } from '../core/module/bootstrap';
@@ -110,6 +111,7 @@ app.whenReady().then(async () => {
   registerFsHandlers(exportState);
   registerSettingsHandlers();
   registerDialogHandlers(exportState, () => mainWindow);
+  registerRoadEngineHandlers();
 
   // Register core service IPC (jobs, notifications, commands, selection, project, workspace)
   if (appContext) {

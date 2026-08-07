@@ -20,6 +20,14 @@ export const OPENDRIVE_PREVIEW = 'opendrive:preview' as const;
 export const OPENDRIVE_READ = 'opendrive:read' as const;
 export const OPENDRIVE_VALIDATE = 'opendrive:validate' as const;
 
+// ─── Road Engine (C++ native addon) ─────────────────────────
+export const ROAD_GET_VERSION = 'road:getVersion' as const;
+export const ROAD_GENERATE_INTERSECTION = 'road:generateIntersection' as const;
+export const ROAD_COMPUTE_CIRCLE_ARC = 'road:computeCircleArc' as const;
+export const ROAD_SAMPLE_CENTERLINE = 'road:sampleCenterline' as const;
+export const ROAD_GEO_TO_LOCAL = 'road:geoToLocal' as const;
+export const ROAD_LOCAL_TO_GEO = 'road:localToGeo' as const;
+
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
 export const DIALOG_SELECT_PACKAGE = 'dialog:selectPackage' as const;
