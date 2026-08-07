@@ -78,15 +78,18 @@ async function getRoadEngine(): Promise<RoadEngineAddon | null> {
   roadEngineLoadAttempted = true;
 
   // Try multiple possible locations for the native addon
+  // __dirname = dist-electron/app/handlers/ (when compiled)
   const candidates = [
-    // When running from dist-electron/app/ (compiled) — __dirname = dist-electron/app/
+    // dist-electron/native/road_engine/build/Release/ (copied alongside dist-electron/app/)
+    path.join(__dirname, '..', '..', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
+    // dist-electron/app/native/... (flat copy inside app/)
     path.join(__dirname, '..', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
-    // When running from dist-electron/app/ (flat copy inside app/)
+    // dist-electron/app/handlers/native/... (same directory as handler)
     path.join(__dirname, 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
     // Packaged app resources
     path.join(process.resourcesPath || __dirname, 'native', 'road_engine_native.node'),
-    // Fallback: direct from source (development)
-    path.join(__dirname, '..', '..', 'app', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
+    // Fallback: direct from source (development) — app/native/road_engine/build/Release/
+    path.join(__dirname, '..', '..', '..', 'app', 'native', 'road_engine', 'build', 'Release', 'road_engine_native.node'),
   ];
 
   console.log('[RoadEngine] Searching for native addon...');
