@@ -33,7 +33,7 @@ import {
   detectIntersections,
   distanceMeters,
 } from '../shared/types';
-import { roadEngine, type RoadBuildResult, type MeshSectionData, type LaneCenterlineData, type LaneBoundaryData } from '../shared/roadEngineClient';
+import { roadEngine, type RoadBuildResult, type MeshSectionData, type LaneCenterlineData, type LaneBoundaryData, type JunctionResultData } from '../shared/roadEngineClient';
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
   MeshBuilder, StandardMaterial, Color3, Color4, Mesh, LinesMesh, Texture,
@@ -117,6 +117,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   const roadsRef = useRef<Road[]>([]);
   const intersectionsRef = useRef<Intersection[]>([]);
   const generatedIntersectionsRef = useRef<GeneratedIntersection[]>([]);
+  const junctionResultsRef = useRef<JunctionResultData[]>([]);
   const selectedRoadIdsRef = useRef<string[]>([]);
   const refLatRef = useRef(18.52);
   const refLonRef = useRef(73.85);
@@ -152,6 +153,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   useEffect(() => { selectionRef.current = store.selection; }, [store.selection]);
   useEffect(() => { selectedRoadIdsRef.current = store.selectedRoadIds; updateAllViews(); }, [store.selectedRoadIds]);
   useEffect(() => { generatedIntersectionsRef.current = store.generatedIntersections; updateAllViews(); }, [store.generatedIntersections]);
+  useEffect(() => { junctionResultsRef.current = store.junctionResults; updateAllViews(); }, [store.junctionResults]);
   useEffect(() => { updateAllViews(); }, [store.arcPreview]);
   useEffect(() => { updateAllViews(); }, [store.clothoidPreview]);
   useEffect(() => { updateAllViews(); }, [store.polylinePoints]);
@@ -985,11 +987,19 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     }
 
     // ─── Generated intersections (full algorithm: polygon + stop lines + crosswalks + lane paths) ───
+    // Phase 3.5: Skip legacy polygon if a lane-based junction mesh exists
+    const junctionResults2D = junctionResultsRef.current;
     for (let gi = 0; gi < genIntersections.length; gi++) {
       const gen = genIntersections[gi];
 
-      // 1. Intersection surface polygon
-      if (gen.polygon.length >= 3) {
+      // Check if a Phase 3 junction mesh exists for this intersection
+      const hasJunctionMesh = junctionResults2D.some(
+        (jr) => Math.abs(jr.center.x - gen.center.x) < 5 &&
+               Math.abs(jr.center.y - gen.center.y) < 5,
+      );
+
+      // 1. Intersection surface polygon — skip if junction mesh exists
+      if (gen.polygon.length >= 3 && !hasJunctionMesh) {
         const polyCoords: [number, number][] = gen.polygon.map((p) => {
           const geo = localToGeo(p.x, p.y, refLat, refLon);
           return [geo.lon, geo.lat];
@@ -1024,8 +1034,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         });
       }
 
-      // 2. Stop lines (white, thick, perpendicular to each approach)
-      for (const sl of gen.stopLines) {
+      // 2. Stop lines (white, thick, perpendicular to each approach) — skip if junction mesh exists
+      if (!hasJunctionMesh) for (const sl of gen.stopLines) {
         const p1Geo = localToGeo(sl.p1.x, sl.p1.y, refLat, refLon);
         const p2Geo = localToGeo(sl.p2.x, sl.p2.y, refLat, refLon);
         const slSrcId = `gi-sl-src-${gi}-${sl.approach}`;
@@ -1046,8 +1056,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         });
       }
 
-      // 3. Crosswalks (white striped rectangles)
-      for (const cw of gen.crosswalks) {
+      // 3. Crosswalks (white striped rectangles) — skip if junction mesh exists
+      if (!hasJunctionMesh) for (const cw of gen.crosswalks) {
         const cwCoords: [number, number][] = cw.corners.map((c) => {
           const geo = localToGeo(c.x, c.y, refLat, refLon);
           return [geo.lon, geo.lat];
@@ -1080,7 +1090,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         });
       }
 
-      // 4. Lane connection paths (colored by turn type)
+      // 4. Lane connection paths (colored by turn type) — skip if junction mesh exists
+      if (!hasJunctionMesh) {
       const turnColors: Record<string, string> = {
         straight: '#4ecca3', // green
         left: '#ffaa00',     // orange
@@ -1115,6 +1126,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           },
         });
       }
+      } // end if (!hasJunctionMesh)
 
       // 5. Intersection center marker
       const centerGeo = localToGeo(gen.center.x, gen.center.y, refLat, refLon);
@@ -2541,13 +2553,20 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
     }
 
     // ─── Generated intersections in 3D (full algorithm) ────────
+    // Phase 3.5: Skip legacy polygon rendering if a lane-based junction mesh exists
     const genIntersections = generatedIntersectionsRef.current;
     for (let gi = 0; gi < genIntersections.length; gi++) {
       const gen = genIntersections[gi];
       const zHeight = (gen.approaches[0]?.z ?? 0) + 0.03;
 
-      // 1. Intersection surface mesh (filled polygon)
-      if (gen.polygon.length >= 3) {
+      // Check if a Phase 3 junction mesh exists for this intersection
+      const hasJunctionMesh = junctionResultsRef.current.some(
+        (jr) => Math.abs(jr.center.x - gen.center.x) < 5 &&
+               Math.abs(jr.center.y - gen.center.y) < 5,
+      );
+
+      // 1. Intersection surface mesh (filled polygon) — skip if junction mesh exists
+      if (gen.polygon.length >= 3 && !hasJunctionMesh) {
         const positions: number[] = [];
         const indices: number[] = [];
         const uvs: number[] = [];
@@ -2596,8 +2615,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         roadMeshesRef.current.set(`gi_surface_${gi}`, giMesh);
       }
 
-      // 2. Stop lines (thin white strips)
-      for (const sl of gen.stopLines) {
+      // 2. Stop lines (thin white strips) — skip if junction mesh exists
+      if (!hasJunctionMesh) for (const sl of gen.stopLines) {
         const slMesh = MeshBuilder.CreateLines(
           `gi_sl_${gi}_${sl.approach}`,
           {
@@ -2617,8 +2636,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         roadMeshesRef.current.set(`gi_sl_${gi}_${sl.approach}`, slMesh);
       }
 
-      // 3. Crosswalks (white striped rectangles)
-      for (const cw of gen.crosswalks) {
+      // 3. Crosswalks (white striped rectangles) — skip if junction mesh exists
+      if (!hasJunctionMesh) for (const cw of gen.crosswalks) {
         if (cw.corners.length < 4) continue;
         const cwPositions: number[] = [];
         const cwIndices: number[] = [];
@@ -2647,7 +2666,8 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         roadMeshesRef.current.set(`gi_cw_${gi}_${cw.approach}`, cwMesh);
       }
 
-      // 4. Lane connection paths (colored lines)
+      // 4. Lane connection paths (colored lines) — skip if junction mesh exists
+      if (!hasJunctionMesh) {
       const turnColors3D: Record<string, Color3> = {
         straight: new Color3(0.3, 0.8, 0.64),
         left: new Color3(1, 0.67, 0),
@@ -2665,6 +2685,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         lcMesh.isPickable = false;
         roadMeshesRef.current.set(`gi_lc_${gi}_${li}`, lcMesh);
       }
+      } // end if (!hasJunctionMesh)
 
       // 5. Intersection center marker (red sphere)
       const giMarker = MeshBuilder.CreateSphere(`gi_marker_${gi}`, { diameter: 1.5, segments: 8 }, scene);
@@ -2676,6 +2697,103 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       giMarker.material = giMarkerMat;
       giMarker.isPickable = false;
       roadMeshesRef.current.set(`gi_marker_${gi}`, giMarker);
+    }
+
+    // ─── Phase 3.5: Lane-based junction mesh (replaces legacy polygon) ───
+    const junctionResults = junctionResultsRef.current;
+    for (let ji = 0; ji < junctionResults.length; ji++) {
+      const jr = junctionResults[ji];
+
+      // 1. Asphalt mesh (from C++ typed arrays)
+      if (jr.asphaltMesh.triangleCount > 0) {
+        const am = jr.asphaltMesh;
+        // Swap Y/Z for Babylon (C++ Z-up → Babylon Y-up)
+        const babylonPos = new Float32Array(am.positions.length);
+        for (let i = 0; i < am.vertexCount; i++) {
+          babylonPos[i * 3]     = am.positions[i * 3];       // x
+          babylonPos[i * 3 + 1] = am.positions[i * 3 + 2];   // z → Babylon Y
+          babylonPos[i * 3 + 2] = am.positions[i * 3 + 1];   // y → Babylon Z
+        }
+        const babylonNorm = new Float32Array(am.normals.length);
+        for (let i = 0; i < am.vertexCount; i++) {
+          babylonNorm[i * 3]     = am.normals[i * 3];
+          babylonNorm[i * 3 + 1] = am.normals[i * 3 + 2];
+          babylonNorm[i * 3 + 2] = am.normals[i * 3 + 1];
+        }
+
+        const jxMesh = new Mesh(`jx_asphalt_${ji}`, scene);
+        const jxVd = new VertexData();
+        jxVd.positions = babylonPos;
+        jxVd.indices = am.indices;
+        jxVd.normals = babylonNorm;
+        jxVd.uvs = am.uvs;
+        jxVd.applyToMesh(jxMesh, true);
+
+        const jxMat = new StandardMaterial(`jx_mat_${ji}`, scene);
+        jxMat.backFaceCulling = false;
+        const jxTex = getTexture('asphalt', scene);
+        if (jxTex) {
+          jxMat.diffuseTexture = jxTex;
+          jxMat.diffuseColor = new Color3(0.9, 0.9, 0.9);
+          jxTex.wrapU = Texture.WRAP_ADDRESSMODE;
+          jxTex.wrapV = Texture.WRAP_ADDRESSMODE;
+        } else {
+          jxMat.diffuseColor = new Color3(0.22, 0.22, 0.22);
+        }
+        jxMat.emissiveColor = new Color3(0.12, 0.12, 0.12);
+        jxMat.specularColor = new Color3(0.05, 0.05, 0.05);
+        jxMesh.material = jxMat;
+        jxMesh.isPickable = false;
+        roadMeshesRef.current.set(`jx_asphalt_${ji}`, jxMesh);
+      }
+
+      // 2. Marking mesh (lane stripes)
+      if (jr.markingMesh.triangleCount > 0) {
+        const mm = jr.markingMesh;
+        const babylonPos = new Float32Array(mm.positions.length);
+        for (let i = 0; i < mm.vertexCount; i++) {
+          babylonPos[i * 3]     = mm.positions[i * 3];
+          babylonPos[i * 3 + 1] = mm.positions[i * 3 + 2];
+          babylonPos[i * 3 + 2] = mm.positions[i * 3 + 1];
+        }
+        const babylonNorm = new Float32Array(mm.normals.length);
+        for (let i = 0; i < mm.vertexCount; i++) {
+          babylonNorm[i * 3]     = mm.normals[i * 3];
+          babylonNorm[i * 3 + 1] = mm.normals[i * 3 + 2];
+          babylonNorm[i * 3 + 2] = mm.normals[i * 3 + 1];
+        }
+
+        const mkMesh = new Mesh(`jx_marking_${ji}`, scene);
+        const mkVd = new VertexData();
+        mkVd.positions = babylonPos;
+        mkVd.indices = mm.indices;
+        mkVd.normals = babylonNorm;
+        mkVd.uvs = mm.uvs;
+        mkVd.applyToMesh(mkMesh, true);
+
+        const mkMat = new StandardMaterial(`jx_mk_mat_${ji}`, scene);
+        mkMat.backFaceCulling = false;
+        mkMat.diffuseColor = new Color3(1, 1, 1);
+        mkMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
+        mkMat.specularColor = new Color3(0, 0, 0);
+        mkMesh.material = mkMat;
+        mkMesh.isPickable = false;
+        roadMeshesRef.current.set(`jx_marking_${ji}`, mkMesh);
+      }
+
+      // 3. Lane stripe debug lines (if debug mode is on)
+      if (debugLayersRef.current.laneBoundaryLines) {
+        for (let si = 0; si < jr.laneStripes.length; si++) {
+          const stripe = jr.laneStripes[si];
+          if (stripe.samples.length < 2) continue;
+          const pts: Vector3[] = stripe.samples.map((p) =>
+            new Vector3(p.x, 0.15, p.y));
+          const line = MeshBuilder.CreateLines(`jx_stripe_${ji}_${si}`, { points: pts }, scene);
+          line.color = stripe.type === 0 ? Color3.White() : Color3.Teal();
+          line.isPickable = false;
+          roadMeshesRef.current.set(`jx_stripe_${ji}_${si}`, line);
+        }
+      }
     }
   }
 

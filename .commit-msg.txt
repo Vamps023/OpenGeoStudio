@@ -1,33 +1,43 @@
-Phase 3.4: Bridge + TS integration for RoadGraph and Junction Builder
+Phase 3.5: Replace legacy intersection polygon with lane-based junction mesh
 
-C++ Bridge (road_bridge.cpp):
-  - Added roadBuildRoadGraph(roads[], intersections[]) → RoadGraph
-    Parses roads and intersections, converts to RoadV2, builds RoadGraph
-    via buildFromRoads(), serializes nodes/edges to JS objects
-  - Added roadBuildJunction(junctionId, roadGraph, laneNetworks) → JunctionResult
-    Reconstructs RoadGraph and LaneNetworks from JS objects, builds
-    LaneGraph via LaneGraphBuilder::build(), builds junction geometry
-    via JunctionBuilder::build(), serializes as typed arrays
-  - Both functions registered in InitRoadBridge
+This is the final step of Phase 3 — the editor now renders junction geometry
+from the lane-based JunctionBuilder instead of the legacy polygon generator.
 
-IPC Channels (ipcChannels-electron.ts):
-  - ROAD_BUILD_ROAD_GRAPH = 'road:buildRoadGraph'
-  - ROAD_BUILD_JUNCTION = 'road:buildJunction'
+Store (roadStudioStore.ts):
+  - Added junctionResults: JunctionResultData[] and roadGraph: RoadGraphData
+  - detectIntersection() now builds a RoadGraph from all roads + intersections,
+    finds the junction node, builds LaneNetworks for each connected road,
+    and calls buildJunction() to generate the lane-based junction mesh
+  - The legacy generateIntersection() is still called for road splitting,
+    but its polygon/marking output is no longer rendered when a junction
+    mesh exists
 
-IPC Handler (roadEngineHandler.ts):
-  - Handles ROAD_BUILD_ROAD_GRAPH and ROAD_BUILD_JUNCTION
-  - Added roadBuildRoadGraph and roadBuildJunction to addon interface
+RoadViewport.tsx — 3D rendering:
+  - New junction mesh rendering section in update3DMeshes():
+    - Asphalt mesh from C++ typed arrays (Y/Z swapped for Babylon)
+    - Marking mesh for lane stripes
+    - Debug stripe lines (when debug mode is on)
+  - Legacy generated intersection rendering (polygon, stop lines,
+    crosswalks, lane connections) is now gated by hasJunctionMesh:
+    skipped when a Phase 3 junction mesh exists for the same intersection
 
-Preload (preload.ts):
-  - Added buildRoadGraph and buildJunction to roadEngine API
-  - Type declarations and ipcRenderer.invoke bindings
+RoadViewport.tsx — 2D rendering:
+  - Same gating applied to 2D MapLibre layers:
+    polygon, stop lines, crosswalks, and lane connections are skipped
+    when a junction mesh exists
+  - Intersection center marker is always shown (for selection/identification)
 
-TypeScript Client (roadEngineClient.ts):
-  - New types: RoadNodeData, RoadEdgeData, RoadGraphData,
-    JunctionStripeData, JunctionMeshData, JunctionResultData
-  - NativeRoadEngine.buildRoadGraph() and buildJunction() methods
-  - Convenience exports on roadEngine object
-  - Window type augmentation for new methods
+The pipeline is now:
+  Road → RoadV2 → LaneNetwork → RoadGraph → LaneGraph → JunctionBuilder → Mesh → Babylon
 
-Native addon rebuilt successfully against Electron 42.5.1 ABI.
-All builds pass. 141 vitest + 493 doctest (463 existing + 30 new) all pass.
+Legacy generateIntersection() is still called for road splitting (trimming
+road endpoints at the junction), but its visual output is replaced by
+the lane-based junction mesh. A future cleanup can separate the road-
+splitting logic from the polygon generation.
+
+Verification:
+  - TypeScript build: clean
+  - Vite build: clean
+  - Vitest: 141 passed (no regression)
+  - Native addon: roadBuildRoadGraph and roadBuildJunction both available
+  - Electron app: launches successfully, addon loads with all 23 functions

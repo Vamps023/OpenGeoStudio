@@ -8,7 +8,7 @@
 import { create } from 'zustand';
 import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection, Point2D, CircleArc } from '../../shared/types';
 import { generateId, ROAD_PROFILES, distanceMeters, localToGeo, geoToLocal, detectIntersections } from '../../shared/types';
-import { roadEngine } from '../../shared/roadEngineClient';
+import { roadEngine, type JunctionResultData, type RoadGraphData } from '../../shared/roadEngineClient';
 
 /** Compute tangent direction at a sample index */
 function computeTangentAtSamples(samples: Array<{ x: number; y: number; z: number }>, idx: number): Point2D {
@@ -107,6 +107,10 @@ interface RoadStudioState {
   intersections: Intersection[];
   /** Generated intersections (from Detect Intersection tool) */
   generatedIntersections: GeneratedIntersection[];
+  /** Phase 3 — Junction mesh results (lane-based, replaces legacy polygon) */
+  junctionResults: JunctionResultData[];
+  /** Phase 3 — Road graph (topology of all roads + junctions) */
+  roadGraph: RoadGraphData | null;
 
   // ─── Actions ────────────────────────────────────
 
@@ -300,6 +304,8 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   showMapOverlay: false,
   intersections: [],
   generatedIntersections: [],
+  junctionResults: [],
+  roadGraph: null,
 
   setTool: (tool) => {
     const state = get();
@@ -1245,6 +1251,62 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       selectedRoadIds: [],
       selection: { roadId: null, pointIndices: [], handle: null },
     });
+
+    // Phase 3.5 — Build lane-based junction mesh (replaces legacy polygon)
+    try {
+      console.log('[Store] detectIntersection: building road graph...');
+      const allRoads = get().roads;
+      const allIntersections = get().generatedIntersections;
+
+      // Build road graph from all roads + intersections
+      const roadGraph = await roadEngine.buildRoadGraph(
+        allRoads,
+        allIntersections,
+        state.refLat,
+        state.refLon,
+      );
+      console.log('[Store] roadGraph:', roadGraph.numNodes, 'nodes,', roadGraph.numEdges, 'edges');
+
+      // Find the junction node for this intersection
+      const junctionNode = roadGraph.nodes.find(
+        (n) => n.typeName === 'Junction' &&
+               Math.abs(n.position.x - generated.center.x) < 5 &&
+               Math.abs(n.position.y - generated.center.y) < 5,
+      );
+
+      if (junctionNode) {
+        // Build lane networks for each connected road
+        const laneNetworks: Record<string, unknown> = {};
+        for (const roadId of junctionNode.connectedRoadIds) {
+          const road = allRoads.find((r) => r.id === roadId);
+          if (!road || road.points.length < 2) continue;
+          const buildResult = await roadEngine.buildRoad(road, state.refLat, state.refLon);
+          laneNetworks[roadId] = buildResult.lanes;
+        }
+
+        // Build the junction
+        console.log('[Store] building junction for node:', junctionNode.id);
+        const junctionResult = await roadEngine.buildJunction(
+          junctionNode.id,
+          roadGraph,
+          laneNetworks,
+        );
+        console.log('[Store] junction built:',
+          junctionResult.numLaneConnections, 'connections,',
+          junctionResult.asphaltMesh.triangleCount, 'asphalt tris,',
+          junctionResult.markingMesh.triangleCount, 'marking tris');
+
+        set({
+          roadGraph,
+          junctionResults: [...get().junctionResults, junctionResult],
+        });
+      } else {
+        console.log('[Store] No matching junction node found for intersection center');
+        set({ roadGraph });
+      }
+    } catch (err) {
+      console.error('[Store] Phase 3 junction build failed (non-fatal):', err);
+    }
 
     return true;
   },
