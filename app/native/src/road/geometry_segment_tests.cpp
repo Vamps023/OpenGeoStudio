@@ -5237,3 +5237,383 @@ TEST_CASE("2.1 Regression: empty LaneSection in roadFromV2 still triggers warnin
     CHECK(!report.warnings.empty());
     CHECK(report.warnings[0].find("LaneSection") != std::string::npos);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.2 — Polynomial Width Evaluation Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for polynomial evaluation, derivatives, validation,
+// and lane width interpolation (pure math, no geometry).
+// ═══════════════════════════════════════════════════════════
+
+#include <cmath>
+#include <limits>
+
+// ═══════════════════════════════════════════════════════════
+// Polynomial3 — secondDerivative Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 Polynomial3: secondDerivative of constant is zero") {
+    Polynomial3 p(3.5);
+    CHECK(p.secondDerivative(0.0) == doctest::Approx(0.0));
+    CHECK(p.secondDerivative(100.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 Polynomial3: secondDerivative of linear is zero") {
+    Polynomial3 p(3.5, -0.07, 0, 0);
+    CHECK(p.secondDerivative(0.0) == doctest::Approx(0.0));
+    CHECK(p.secondDerivative(50.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 Polynomial3: secondDerivative of quadratic") {
+    // p(ds) = 1 + 2*ds + 3*ds^2 → p''(ds) = 6
+    Polynomial3 p(1, 2, 3, 0);
+    CHECK(p.secondDerivative(0.0) == doctest::Approx(6.0));
+    CHECK(p.secondDerivative(10.0) == doctest::Approx(6.0));
+}
+
+TEST_CASE("2.2 Polynomial3: secondDerivative of cubic") {
+    // p(ds) = 3 + 2*ds + 3*ds^2 + 4*ds^3 → p''(ds) = 6 + 24*ds
+    Polynomial3 p(3, 2, 3, 4);
+    CHECK(p.secondDerivative(0.0) == doctest::Approx(6.0));
+    CHECK(p.secondDerivative(1.0) == doctest::Approx(30.0));
+    CHECK(p.secondDerivative(2.0) == doctest::Approx(54.0));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Polynomial3 — isValid (NaN/Inf) Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 Polynomial3: isValid for normal coefficients") {
+    Polynomial3 p(3.5, 0.1, 0.01, 0.001);
+    CHECK(p.isValid() == true);
+}
+
+TEST_CASE("2.2 Polynomial3: isValid for zero polynomial") {
+    Polynomial3 p;
+    CHECK(p.isValid() == true);
+}
+
+TEST_CASE("2.2 Polynomial3: isValid detects NaN in a") {
+    Polynomial3 p;
+    p.a = std::numeric_limits<double>::quiet_NaN();
+    CHECK(p.isValid() == false);
+}
+
+TEST_CASE("2.2 Polynomial3: isValid detects Inf in b") {
+    Polynomial3 p;
+    p.b = std::numeric_limits<double>::infinity();
+    CHECK(p.isValid() == false);
+}
+
+TEST_CASE("2.2 Polynomial3: isValid detects NaN in d") {
+    Polynomial3 p(1, 2, 3, 4);
+    p.d = std::numeric_limits<double>::quiet_NaN();
+    CHECK(p.isValid() == false);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Polynomial3 — Edge Case Evaluation
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 Polynomial3: negative ds evaluation") {
+    Polynomial3 p(3.5, 0.1, 0, 0);
+    CHECK(p.evaluate(-10.0) == doctest::Approx(2.5));
+    CHECK(p.evaluate(-35.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 Polynomial3: large ds evaluation (numerical stability)") {
+    Polynomial3 p(3.5);
+    CHECK(p.evaluate(1e6) == doctest::Approx(3.5));
+    CHECK(p.evaluate(1e9) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.2 Polynomial3: large ds with cubic term") {
+    // p(ds) = 1e-9 * ds^3; at ds=1000: p = 1.0
+    Polynomial3 p(0, 0, 0, 1e-9);
+    CHECK(p.evaluate(1000.0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("2.2 Polynomial3: linear widening (merge lane)") {
+    // 0 to 3.5m over 50m: p(ds) = 0.07*ds
+    Polynomial3 p(0, 0.07, 0, 0);
+    CHECK(p.evaluate(0.0) == doctest::Approx(0.0));
+    CHECK(p.evaluate(25.0) == doctest::Approx(1.75));
+    CHECK(p.evaluate(50.0) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.2 Polynomial3: linear narrowing (exit lane)") {
+    // 3.5m to 0 over 50m: p(ds) = 3.5 - 0.07*ds
+    Polynomial3 p(3.5, -0.07, 0, 0);
+    CHECK(p.evaluate(0.0) == doctest::Approx(3.5));
+    CHECK(p.evaluate(25.0) == doctest::Approx(1.75));
+    CHECK(p.evaluate(50.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 Polynomial3: cubic smooth taper (C1 continuous)") {
+    // Smooth taper 0 → W over L: p(ds) = W*(3*(ds/L)^2 - 2*(ds/L)^3)
+    double W = 3.5;
+    double L = 50.0;
+    Polynomial3 p(0, 0, 3 * W / (L * L), -2 * W / (L * L * L));
+
+    CHECK(p.evaluate(0.0) == doctest::Approx(0.0));
+    CHECK(p.evaluate(L) == doctest::Approx(W));
+    CHECK(p.evaluate(L / 2) == doctest::Approx(W * 0.5));
+
+    // Derivative at endpoints should be 0 (smooth)
+    CHECK(p.derivative(0.0) == doctest::Approx(0.0).epsilon(0.01));
+    CHECK(p.derivative(L) == doctest::Approx(0.0).epsilon(0.01));
+
+    // Second derivative at start: 2c = 6W/L^2
+    CHECK(p.secondDerivative(0.0) == doctest::Approx(6 * W / (L * L)));
+}
+
+TEST_CASE("2.2 Polynomial3: randomized evaluation matches explicit formula") {
+    double coeffs[4] = {2.5, -0.3, 0.05, -0.001};
+    Polynomial3 p(coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
+
+    double dsValues[] = {0, 1, 10, 50, 100, -5, -20, 123.456};
+    for (double ds : dsValues) {
+        double expected = coeffs[0] + coeffs[1] * ds +
+                          coeffs[2] * ds * ds + coeffs[3] * ds * ds * ds;
+        CHECK(p.evaluate(ds) == doctest::Approx(expected).epsilon(0.0001));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LaneSection — Width Interpolation Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 LaneSection: rightWidthAt and leftWidthAt") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-2, LaneType::Shoulder, Polynomial3(2.0)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.rightWidthAt(0.0) == doctest::Approx(7.0));
+    CHECK(ls.leftWidthAt(0.0) == doctest::Approx(5.5));
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(12.5));
+}
+
+TEST_CASE("2.2 LaneSection: boundaryOffset for right lanes") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.boundaryOffset(0, 0.0) == doctest::Approx(0.0));
+    CHECK(ls.boundaryOffset(1, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.boundaryOffset(2, 0.0) == doctest::Approx(7.0));
+}
+
+TEST_CASE("2.2 LaneSection: boundaryOffset for left lanes") {
+    LaneSection ls;
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    CHECK(ls.boundaryOffset(0, 0.0) == doctest::Approx(0.0));
+    CHECK(ls.boundaryOffset(-1, 0.0) == doctest::Approx(-3.5));
+    CHECK(ls.boundaryOffset(-2, 0.0) == doctest::Approx(-7.0));
+}
+
+TEST_CASE("2.2 LaneSection: laneCenterOffset for right lanes") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.laneCenterOffset(1, 0.0) == doctest::Approx(1.75));
+    CHECK(ls.laneCenterOffset(2, 0.0) == doctest::Approx(5.25));
+}
+
+TEST_CASE("2.2 LaneSection: laneCenterOffset for left lanes") {
+    LaneSection ls;
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    CHECK(ls.laneCenterOffset(-1, 0.0) == doctest::Approx(-1.75));
+    CHECK(ls.laneCenterOffset(-2, 0.0) == doctest::Approx(-5.25));
+}
+
+TEST_CASE("2.2 LaneSection: laneCenterOffset for center lane is zero") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.laneCenterOffset(0, 0.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 LaneSection: laneInnerEdgeOffset and laneOuterEdgeOffset") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.laneInnerEdgeOffset(1, 0.0) == doctest::Approx(0.0));
+    CHECK(ls.laneOuterEdgeOffset(1, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.laneInnerEdgeOffset(2, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.laneOuterEdgeOffset(2, 0.0) == doctest::Approx(7.0));
+}
+
+TEST_CASE("2.2 LaneSection: boundaryOffset with variable width") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.boundaryOffset(1, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.boundaryOffset(2, 0.0) == doctest::Approx(7.0));
+    CHECK(ls.boundaryOffset(1, 50.0) == doctest::Approx(0.0));
+    CHECK(ls.boundaryOffset(2, 50.0) == doctest::Approx(3.5));
+}
+
+TEST_CASE("2.2 LaneSection: laneCenterOffset with variable width") {
+    LaneSection ls;
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0)));
+
+    CHECK(ls.laneCenterOffset(1, 0.0) == doctest::Approx(1.75));
+    CHECK(ls.laneCenterOffset(1, 50.0) == doctest::Approx(0.0));
+    CHECK(ls.laneCenterOffset(1, 25.0) == doctest::Approx(0.875));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Width Continuity Across Section Boundaries
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 Width continuity: constant width across sections") {
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+
+    double w1 = ls1.totalWidthAt(100.0);
+    double w2 = ls2.totalWidthAt(0.0);
+    CHECK(w1 == doctest::Approx(w2));
+    CHECK(w1 == doctest::Approx(7.0));
+}
+
+TEST_CASE("2.2 Width continuity: taper then constant") {
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.07, 0, 0)));
+
+    LaneSection ls2(50.0);
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    CHECK(ls1.totalWidthAt(50.0) == doctest::Approx(0.0));
+    CHECK(ls2.totalWidthAt(0.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("2.2 Width continuity: smooth taper using cubic") {
+    double W = 3.5;
+    double L = 50.0;
+    Polynomial3 taper(W, 0, -3 * W / (L * L), 2 * W / (L * L * L));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, taper));
+
+    LaneSection ls2(L);
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+
+    CHECK(ls1.totalWidthAt(L) == doctest::Approx(0.0).epsilon(0.001));
+    CHECK(ls2.totalWidthAt(0.0) == doctest::Approx(0.0));
+
+    const Lane* lane1 = ls1.findLane(1);
+    REQUIRE(lane1 != nullptr);
+    CHECK(lane1->width.derivative(L) == doctest::Approx(0.0).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Validation with NaN/Inf
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 Validation: NaN coefficients detected") {
+    LaneSection ls;
+    Lane lane(1, LaneType::Driving, Polynomial3(3.5));
+    lane.width.a = std::numeric_limits<double>::quiet_NaN();
+    ls.addLane(lane);
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool found = false;
+    for (const auto& e : v.errors) {
+        if (e.find("non-finite") != std::string::npos) found = true;
+    }
+    CHECK(found == true);
+}
+
+TEST_CASE("2.2 Validation: Inf coefficients detected") {
+    LaneSection ls;
+    Lane lane(1, LaneType::Driving, Polynomial3(3.5));
+    lane.width.c = std::numeric_limits<double>::infinity();
+    ls.addLane(lane);
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == false);
+    bool found = false;
+    for (const auto& e : v.errors) {
+        if (e.find("non-finite") != std::string::npos) found = true;
+    }
+    CHECK(found == true);
+}
+
+TEST_CASE("2.2 Validation: valid polynomial passes NaN check") {
+    LaneSection ls;
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, 0.1, 0.01, 0.001)));
+
+    LaneValidation v = ls.validate();
+    CHECK(v.valid == true);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Lane Road Offset Verification
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.2 4-lane road: all boundary offsets") {
+    LaneSection ls;
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+
+    CHECK(ls.boundaryOffset(0, 0.0) == doctest::Approx(0.0));
+    CHECK(ls.boundaryOffset(1, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.boundaryOffset(2, 0.0) == doctest::Approx(7.0));
+    CHECK(ls.boundaryOffset(-1, 0.0) == doctest::Approx(-3.5));
+    CHECK(ls.boundaryOffset(-2, 0.0) == doctest::Approx(-7.0));
+
+    CHECK(ls.laneCenterOffset(1, 0.0) == doctest::Approx(1.75));
+    CHECK(ls.laneCenterOffset(2, 0.0) == doctest::Approx(5.25));
+    CHECK(ls.laneCenterOffset(-1, 0.0) == doctest::Approx(-1.75));
+    CHECK(ls.laneCenterOffset(-2, 0.0) == doctest::Approx(-5.25));
+}
+
+TEST_CASE("2.2 6-lane road: all boundary offsets") {
+    LaneSection ls = synthesizeFromLegacy(21.0, 6);
+
+    CHECK(ls.boundaryOffset(0, 0.0) == doctest::Approx(0.0));
+    CHECK(ls.boundaryOffset(1, 0.0) == doctest::Approx(3.5));
+    CHECK(ls.boundaryOffset(2, 0.0) == doctest::Approx(7.0));
+    CHECK(ls.boundaryOffset(3, 0.0) == doctest::Approx(10.5));
+    CHECK(ls.boundaryOffset(-1, 0.0) == doctest::Approx(-3.5));
+    CHECK(ls.boundaryOffset(-2, 0.0) == doctest::Approx(-7.0));
+    CHECK(ls.boundaryOffset(-3, 0.0) == doctest::Approx(-10.5));
+
+    CHECK(ls.totalWidthAt(0.0) == doctest::Approx(21.0));
+    CHECK(ls.rightWidthAt(0.0) == doctest::Approx(10.5));
+    CHECK(ls.leftWidthAt(0.0) == doctest::Approx(10.5));
+}

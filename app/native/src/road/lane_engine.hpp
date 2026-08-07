@@ -33,6 +33,7 @@
 
 #include "geometry.hpp"
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,14 +54,26 @@ struct Polynomial3 {
     double c = 0.0;  // quadratic term
     double d = 0.0;  // cubic term
 
-    // Evaluate polynomial at ds
+    // Evaluate polynomial at ds: p(ds) = a + b·ds + c·ds² + d·ds³
     double evaluate(double ds) const {
         return a + b * ds + c * ds * ds + d * ds * ds * ds;
     }
 
-    // Evaluate first derivative at ds
+    // First derivative: p'(ds) = b + 2c·ds + 3d·ds²
     double derivative(double ds) const {
         return b + 2.0 * c * ds + 3.0 * d * ds * ds;
+    }
+
+    // Second derivative: p''(ds) = 2c + 6d·ds
+    // Useful for smooth tapers, curvature-aware width, superelevation, mesh smoothing
+    double secondDerivative(double ds) const {
+        return 2.0 * c + 6.0 * d * ds;
+    }
+
+    // Check if all coefficients are finite (not NaN/Inf)
+    bool isValid() const {
+        return std::isfinite(a) && std::isfinite(b) &&
+               std::isfinite(c) && std::isfinite(d);
     }
 
     // Default: zero-width polynomial (a=b=c=d=0)
@@ -354,6 +367,115 @@ struct LaneSection {
         return total;
     }
 
+    // Total width of right side at ds (sum of right lane widths, id > 0).
+    double rightWidthAt(double ds) const {
+        double total = 0;
+        for (const auto& l : lanes_) {
+            if (l.id > 0) {
+                double w = l.widthAt(ds);
+                if (w > 0) total += w;
+            }
+        }
+        return total;
+    }
+
+    // Total width of left side at ds (sum of left lane widths, id < 0).
+    double leftWidthAt(double ds) const {
+        double total = 0;
+        for (const auto& l : lanes_) {
+            if (l.id < 0) {
+                double w = l.widthAt(ds);
+                if (w > 0) total += w;
+            }
+        }
+        return total;
+    }
+
+    // ─── Lane offset queries (pure lateral math, no world-space) ───
+    //
+    // These compute lateral offsets from the reference line (center).
+    // Positive offset = right side, negative = left side.
+    // World-space conversion (applying normal vector) is deferred to 2.3.
+    //
+
+    // Lateral offset of the boundary between lane `laneId` and the
+    // next lane outward (laneId+1 for right, laneId-1 for left).
+    // For right lanes (id > 0): offset = sum(width(1..laneId))
+    // For left lanes (id < 0): offset = -sum(width(-1..laneId))
+    // For center (id = 0): offset = 0
+    //
+    // Example for a 4-lane road:
+    //   boundaryOffset(0, ds)  = 0           (center line)
+    //   boundaryOffset(1, ds)  = w1          (between lane 1 and 2)
+    //   boundaryOffset(2, ds)  = w1 + w2     (outer right edge)
+    //   boundaryOffset(-1, ds) = -w_left1    (between lane -1 and -2)
+    //
+    double boundaryOffset(int laneId, double ds) const {
+        if (laneId == 0) return 0.0;
+
+        if (laneId > 0) {
+            // Right side: sum widths of lanes 1..laneId
+            double offset = 0;
+            for (int i = 1; i <= laneId; i++) {
+                const Lane* lane = findLane(i);
+                if (lane) offset += lane->widthAt(ds);
+            }
+            return offset;
+        } else {
+            // Left side: negative offset, sum widths of lanes -1..laneId
+            double offset = 0;
+            for (int i = -1; i >= laneId; i--) {
+                const Lane* lane = findLane(i);
+                if (lane) offset += lane->widthAt(ds);
+            }
+            return -offset;
+        }
+    }
+
+    // Lateral offset of the CENTER of lane `laneId` from the reference line.
+    // For right lanes: boundary(laneId-1) + width(laneId)/2
+    // For left lanes:  boundary(laneId+1) - width(laneId)/2
+    // For center (0):  0
+    //
+    double laneCenterOffset(int laneId, double ds) const {
+        if (laneId == 0) return 0.0;
+
+        const Lane* lane = findLane(laneId);
+        if (!lane) return 0.0;
+
+        double halfWidth = lane->widthAt(ds) / 2.0;
+
+        if (laneId > 0) {
+            // Right: inner boundary + half width
+            double innerBoundary = boundaryOffset(laneId - 1, ds);
+            return innerBoundary + halfWidth;
+        } else {
+            // Left: inner boundary - half width
+            // boundaryOffset(laneId+1) gives the boundary between this lane
+            // and the next one toward center
+            double innerBoundary = boundaryOffset(laneId + 1, ds);
+            return innerBoundary - halfWidth;
+        }
+    }
+
+    // Outer edge offset of lane `laneId` (the boundary farthest from center).
+    // For right lanes: boundaryOffset(laneId)
+    // For left lanes:  boundaryOffset(laneId)
+    // Same as boundaryOffset — provided for API clarity.
+    double laneOuterEdgeOffset(int laneId, double ds) const {
+        return boundaryOffset(laneId, ds);
+    }
+
+    // Inner edge offset of lane `laneId` (the boundary closest to center).
+    // For right lanes (id > 0): boundaryOffset(laneId - 1)
+    // For left lanes (id < 0):  boundaryOffset(laneId + 1)
+    // For center (0): 0
+    double laneInnerEdgeOffset(int laneId, double ds) const {
+        if (laneId == 0) return 0.0;
+        if (laneId > 0) return boundaryOffset(laneId - 1, ds);
+        return boundaryOffset(laneId + 1, ds);
+    }
+
     // Number of drivable lanes (any side).
     int drivingLaneCount() const {
         int count = 0;
@@ -412,12 +534,18 @@ struct LaneSection {
             }
         }
 
+        // Check: polynomial coefficients are finite (not NaN/Inf)
+        for (const auto& l : lanes_) {
+            if (!l.width.isValid()) {
+                result.addError("Lane " + std::to_string(l.id) +
+                    " has non-finite polynomial coefficients (NaN/Inf)");
+            }
+        }
+
         // Check: center lane should have zero width
         if (centerCount == 1) {
             const Lane* c = center();
             if (c && c->widthAt(0.0) != 0.0) {
-                // Warning, not error — some implementations allow non-zero center
-                // We'll be strict: center lane must be zero-width
                 result.addError("Center lane (id=0) must have zero width, got: " +
                     std::to_string(c->widthAt(0.0)));
             }

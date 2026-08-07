@@ -1,59 +1,43 @@
-Phase 2.1: Lane Engine data model
+Phase 2.2: Polynomial width evaluation
 
-Implements the lane data model (no geometry generation yet).
-This is the foundation for the Lane Engine — all subsequent
-milestones (2.2-2.8) build on these structures.
+Extends the lane data model with polynomial evaluation, derivatives,
+and lane width interpolation (pure math, no geometry generation).
 
-New file: lane_engine.hpp
-  - Polynomial3: cubic polynomial for lane width (a + b*ds + c*ds^2 + d*ds^3)
-    - evaluate(ds), derivative(ds)
-    - constant/linear/cubic constructors
-  - LaneType enum: Driving, Shoulder, Sidewalk, Border, Parking, etc.
-  - LaneRoadMarkType enum: Solid, Dashed, SolidSolid, Curb, etc.
-  - LaneRoadMark: sOffset, type, color, width, laneChange
-  - Lane: id, type, width polynomial, road marks
-    - widthAt(ds), isCenter/isLeft/isRight, isDrivable
-  - LaneSection: startS + encapsulated lane vector
-    - addLane/removeLane/findLane/findLaneMut
-    - center(), leftLanes(), rightLanes() (sorted by |id|)
-    - maxLeftLaneId(), maxRightLaneId()
-    - totalWidthAt(ds), drivingLaneCount()
-    - validate() → LaneValidation (unique IDs, contiguous, non-negative
-      widths, zero-width center, no duplicate center)
-  - LaneValidation: valid flag + errors vector
-  - synthesizeFromLegacy(width, laneCount): creates LaneSection from
-    flat width/laneCount (left=ceil(n/2), right=floor(n/2))
-  - laneTypeToString(), roadMarkTypeToString(): OpenDRIVE string mapping
+Polynomial3 additions:
+  - secondDerivative(ds): p''(ds) = 2c + 6d·ds
+    Useful for smooth tapers, curvature-aware width, superelevation,
+    mesh smoothing. Inexpensive to add while API is still small.
+  - isValid(): checks all coefficients are finite (not NaN/Inf)
 
-RoadV2 changes (minimal):
-  - Includes lane_engine.hpp (LaneSection now fully defined)
-  - laneSection(idx): access by index
-  - laneSectionAt(s): find active section at s-position
-  - clearLaneSections(): clear + invalidate cache
-  - legacyLaneSection(): cached synthesis from width/laneCount
-    (uses mutable optional<LaneSection> for lazy caching)
-  - invalidateLegacyCache(): call when width/laneCount changes
+LaneSection width interpolation (pure lateral math, no world-space):
+  - rightWidthAt(ds): sum of right lane widths (id > 0)
+  - leftWidthAt(ds): sum of left lane widths (id < 0)
+  - boundaryOffset(laneId, ds): lateral offset of lane boundary
+    Right: sum(width(1..laneId)), Left: -sum(width(-1..laneId))
+  - laneCenterOffset(laneId, ds): lateral offset of lane center
+    Right: boundary(laneId-1) + width/2, Left: boundary(laneId+1) - width/2
+  - laneInnerEdgeOffset(laneId, ds): boundary closest to center
+  - laneOuterEdgeOffset(laneId, ds): boundary farthest from center
 
-Legacy compatibility:
-  - Renamed road.hpp struct Lane → LegacyLane (was unused in code)
-    to avoid name collision with new lane_engine.hpp Lane
-  - Existing Phase 1 tests using LaneSection{} (empty) still work
-  - roadFromV2() still triggers lossless=false for LaneSections
+Validation enhancement:
+  - Checks polynomial coefficients for NaN/Inf
+  - Reports "non-finite polynomial coefficients" error
 
-Tests (45 new doctest, 306 total, 2367 assertions):
-  Polynomial3 (6): default, constant, linear, cubic, derivative, fields
-  Lane (5): default, width eval, custom poly, type queries, road marks
-  LaneSection (10): empty, center, left/right ordering, findLane,
-    removeLane, totalWidthAt, variable width, drivingLaneCount,
-    maxLeft/Right, no-left
-  Validation (7): valid, duplicate IDs, non-contiguous, negative width,
-    center zero-width, multiple center, empty valid
-  synthesizeFromLegacy (6): 2/4/6-lane, odd (3), width preservation,
-    zero lanes
-  RoadV2 integration (7): laneSectionAt (none/single/multiple),
-    cached synthesis, invalidate cache, clear, default
-  Enum strings (2): laneTypeToString, roadMarkTypeToString
-  Regression (2): existing LaneSection{} tests still work
+Tests (33 new doctest, 339 total, 2463 assertions):
+  secondDerivative (4): constant, linear, quadratic, cubic
+  isValid (5): normal, zero, NaN in a/b/d, Inf in b
+  Edge cases (8): negative ds, large ds, numerical stability,
+    linear widening, linear narrowing, cubic smooth taper,
+    randomized evaluation vs explicit formula
+  Width interpolation (10): rightWidthAt, leftWidthAt,
+    boundaryOffset (right/left), laneCenterOffset (right/left/center),
+    inner/outer edge, variable width, variable center offset
+  Width continuity (3): constant across sections, taper then constant,
+    smooth taper using cubic
+  Validation NaN/Inf (3): NaN detected, Inf detected, valid passes
+  Multi-lane offsets (2): 4-lane all offsets, 6-lane all offsets
 
-No geometry generation, no boundary/centerline/mesh — those are 2.3+.
+No geometry code, no SegmentSequence integration, no world-space
+calculations. Those are 2.3+.
+
 All 130 vitest tests pass (no regression).
