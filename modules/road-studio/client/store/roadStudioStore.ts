@@ -6,8 +6,8 @@
  */
 
 import { create } from 'zustand';
-import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2 } from '../../shared/types';
-import { generateId } from '../../shared/types';
+import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile } from '../../shared/types';
+import { generateId, ROAD_PROFILES } from '../../shared/types';
 
 interface RoadStudioState {
   /** All roads in the project */
@@ -64,6 +64,9 @@ interface RoadStudioState {
 
   /** Set control point type (smooth/corner) */
   setPointType: (roadId: string, pointIndex: number, type: 'smooth' | 'corner') => void;
+
+  /** Set road profile (SCANeR-style road type) */
+  setRoadProfile: (roadId: string, profile: RoadProfile) => void;
 
   /** Delete a control point */
   deleteControlPoint: (roadId: string, pointIndex: number) => void;
@@ -164,6 +167,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       width: state.defaultWidth,
       laneCount: state.defaultLaneCount,
       color: '#4ecca3',
+      profile: { ...ROAD_PROFILES.city_2x1 },
     };
     set({
       roads: [...state.roads, road],
@@ -253,6 +257,20 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
                   : p
               ),
             }
+          : r
+      ),
+    });
+  },
+
+  setRoadProfile: (roadId, profile) => {
+    const state = get();
+    get().pushHistory('Set road profile');
+    // Update width based on profile
+    const width = profile.laneWidth * (profile.type.includes('2x2') ? 4 : profile.type.includes('2x3') ? 6 : 2);
+    set({
+      roads: state.roads.map((r) =>
+        r.id === roadId
+          ? { ...r, profile: { ...profile }, width, laneCount: width / profile.laneWidth }
           : r
       ),
     });

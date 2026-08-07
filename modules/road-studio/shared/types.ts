@@ -40,7 +40,69 @@ export interface Road {
   laneCount: number;
   /** Visual color */
   color: string;
+  /** Road surface profile (SCANeR-style) */
+  profile: RoadProfile;
 }
+
+/** SCANeR-style road profile — defines road type, surface, and lane config */
+export interface RoadProfile {
+  /** Profile type based on SCANeR profiles */
+  type: 'city_2x1' | 'city_2x2' | 'country_2x1' | 'highway_2x3' | 'custom';
+  /** Surface texture name (from SCANeR textures) */
+  surfaceTexture: string;
+  /** Lane marking texture name */
+  markingTexture: string;
+  /** Lane width in meters */
+  laneWidth: number;
+  /** Has sidewalk? */
+  hasSidewalk: boolean;
+  /** Has curb? */
+  hasCurb: boolean;
+}
+
+/** Default road profiles based on SCANeR .rndProfile files */
+export const ROAD_PROFILES: Record<string, RoadProfile> = {
+  city_2x1: {
+    type: 'city_2x1',
+    surfaceTexture: 'asphalt',
+    markingTexture: 'marking',
+    laneWidth: 3.5,
+    hasSidewalk: true,
+    hasCurb: true,
+  },
+  city_2x2: {
+    type: 'city_2x2',
+    surfaceTexture: 'asphalt',
+    markingTexture: 'marking',
+    laneWidth: 3.5,
+    hasSidewalk: true,
+    hasCurb: true,
+  },
+  country_2x1: {
+    type: 'country_2x1',
+    surfaceTexture: 'asphalt',
+    markingTexture: 'marking',
+    laneWidth: 3.5,
+    hasSidewalk: false,
+    hasCurb: false,
+  },
+  highway_2x3: {
+    type: 'highway_2x3',
+    surfaceTexture: 'asphalt',
+    markingTexture: 'marking',
+    laneWidth: 3.75,
+    hasSidewalk: false,
+    hasCurb: false,
+  },
+  custom: {
+    type: 'custom',
+    surfaceTexture: 'asphalt',
+    markingTexture: 'marking',
+    laneWidth: 3.5,
+    hasSidewalk: false,
+    hasCurb: false,
+  },
+};
 
 /** Available editing tools */
 export type Tool = 'select' | 'line' | 'pen';
