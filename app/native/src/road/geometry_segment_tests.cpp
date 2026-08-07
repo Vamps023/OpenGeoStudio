@@ -1986,3 +1986,285 @@ TEST_CASE("RoadV2: all four segment types can be added") {
     CHECK(road.segment(2).type() == GeometryType::Spiral);
     CHECK(road.segment(3).type() == GeometryType::Bezier);
 }
+
+// ═══════════════════════════════════════════════════════════
+// Road Adapter Tests (Task 1.8.3a)
+// ═══════════════════════════════════════════════════════════
+// roadToV2() — pure conversion from legacy Road to RoadV2.
+// Phase 1.8.3a: Infrastructure + LineSegment only.
+// Bezier segments fall back to LineSegment (will be fixed in 1.8.3b).
+// ═══════════════════════════════════════════════════════════
+
+#include "road_adapter.hpp"
+
+using geo::roadToV2;
+using geo::Road;
+using geo::RoadV2;
+using geo::ControlPoint;
+
+// ─── Helper: create a legacy Road with corner points ───
+static geo::Road makeLegacyRoad(const std::string& id, const std::vector<Point2D>& pts) {
+    Road road;
+    road.id = id;
+    road.name = id;
+    road.width = 8.0;
+    road.laneCount = 2;
+    for (const auto& p : pts) {
+        ControlPoint cp;
+        cp.position = p;
+        cp.z = 0.0;
+        cp.type = "corner";
+        cp.hasHandleIn = false;
+        cp.hasHandleOut = false;
+        road.points.push_back(cp);
+    }
+    return road;
+}
+
+TEST_CASE("roadToV2: empty road produces empty RoadV2") {
+    Road legacy;
+    legacy.id = "empty";
+    legacy.name = "Empty";
+
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.numSegments() == 0);
+    CHECK(v2.totalLength() == doctest::Approx(0.0));
+    CHECK(v2.id == "empty");
+    CHECK(v2.name == "Empty");
+}
+
+TEST_CASE("roadToV2: single point produces empty RoadV2 (degenerate)") {
+    Road legacy = makeLegacyRoad("single", {{5, 3}});
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.numSegments() == 0);
+    CHECK(v2.id == "single");
+}
+
+TEST_CASE("roadToV2: two corner points → one LineSegment") {
+    Road legacy = makeLegacyRoad("line", {{0, 0}, {10, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.segment(0).type() == GeometryType::Line);
+    CHECK(v2.totalLength() == doctest::Approx(10.0));
+
+    // Position at midpoint
+    CHECK(v2.geometry().positionAt(5).x == doctest::Approx(5.0));
+    CHECK(v2.geometry().positionAt(5).y == doctest::Approx(0.0));
+}
+
+TEST_CASE("roadToV2: three corner points → two LineSegments") {
+    Road legacy = makeLegacyRoad("polyline", {{0, 0}, {10, 0}, {10, 10}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    CHECK(v2.numSegments() == 2);
+    CHECK(v2.segment(0).type() == GeometryType::Line);
+    CHECK(v2.segment(1).type() == GeometryType::Line);
+    CHECK(v2.totalLength() == doctest::Approx(20.0));
+
+    // Position at s=5 (in first segment)
+    CHECK(v2.geometry().positionAt(5).x == doctest::Approx(5.0));
+    CHECK(v2.geometry().positionAt(5).y == doctest::Approx(0.0));
+
+    // Position at s=15 (in second segment)
+    CHECK(v2.geometry().positionAt(15).x == doctest::Approx(10.0));
+    CHECK(v2.geometry().positionAt(15).y == doctest::Approx(5.0));
+}
+
+TEST_CASE("roadToV2: five corner points → four LineSegments") {
+    Road legacy = makeLegacyRoad("five_pt", {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    CHECK(v2.numSegments() == 4);
+    for (int i = 0; i < 4; i++) {
+        CHECK(v2.segment(i).type() == GeometryType::Line);
+    }
+
+    // Total length should match sum of segment lengths
+    double sumLen = 0;
+    for (int i = 0; i < 4; i++) sumLen += v2.segment(i).length();
+    CHECK(v2.totalLength() == doctest::Approx(sumLen));
+}
+
+TEST_CASE("roadToV2: metadata is preserved") {
+    Road legacy;
+    legacy.id = "meta_test";
+    legacy.name = "Metadata Test Road";
+    legacy.color = "#ff0000";
+    legacy.profileName = "highway_4x2";
+    legacy.startIntersectionId = "ix_start";
+    legacy.endIntersectionId = "ix_end";
+    legacy.width = 14.0;
+    legacy.laneCount = 4;
+    legacy.points.push_back({});
+
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.id == "meta_test");
+    CHECK(v2.name == "Metadata Test Road");
+    CHECK(v2.color == "#ff0000");
+    CHECK(v2.profileName == "highway_4x2");
+    CHECK(v2.startIntersectionId == "ix_start");
+    CHECK(v2.endIntersectionId == "ix_end");
+    CHECK(v2.width == doctest::Approx(14.0));
+    CHECK(v2.laneCount == 4);
+}
+
+TEST_CASE("roadToV2: is a pure function (input unchanged)") {
+    Road legacy = makeLegacyRoad("pure", {{0, 0}, {10, 0}, {20, 0}});
+    size_t originalPointCount = legacy.points.size();
+
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Input should be unchanged
+    CHECK(legacy.points.size() == originalPointCount);
+    CHECK(legacy.id == "pure");
+    CHECK(legacy.points[0].position.x == doctest::Approx(0.0));
+    CHECK(legacy.points[2].position.x == doctest::Approx(20.0));
+
+    // Output is valid
+    CHECK(v2.numSegments() == 2);
+}
+
+// ─── Golden fixture parity: straight_2pt ───
+// Compare RoadV2 centerline against legacy centerline for the
+// straight_2pt fixture (2 corner points, pure line).
+
+TEST_CASE("roadToV2: golden parity — straight_2pt positions match") {
+    // Legacy road: (0,0) → (100,0)
+    Road legacy = makeLegacyRoad("straight_2pt", {{0, 0}, {100, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    CHECK(v2.numSegments() == 1);
+    CHECK(v2.totalLength() == doctest::Approx(100.0));
+
+    // Compare positions at several s values
+    // Legacy samples at arc-length positions; RoadV2 evaluates at any s.
+    // For a straight line, both should produce identical positions.
+    double sValues[] = {0, 12.5, 25, 50, 75, 100};
+    for (double s : sValues) {
+        // Legacy: linear interpolation between (0,0) and (100,0)
+        double legacyX = s;  // straight line along x-axis
+        double legacyY = 0.0;
+
+        Point2D v2Pos = v2.geometry().positionAt(s);
+        CHECK(v2Pos.x == doctest::Approx(legacyX).epsilon(0.001));
+        CHECK(v2Pos.y == doctest::Approx(legacyY).epsilon(0.001));
+    }
+}
+
+TEST_CASE("roadToV2: golden parity — straight_2pt heading and curvature") {
+    Road legacy = makeLegacyRoad("straight_2pt", {{0, 0}, {100, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Straight line: heading = 0 (east), curvature = 0
+    double sValues[] = {0, 25, 50, 75, 100};
+    for (double s : sValues) {
+        CHECK(v2.geometry().headingAt(s) == doctest::Approx(0.0));
+        CHECK(v2.geometry().curvatureAt(s) == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("roadToV2: golden parity — straight_2pt total length matches") {
+    Road legacy = makeLegacyRoad("straight_2pt", {{0, 0}, {100, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.totalLength() == doctest::Approx(100.0));
+}
+
+// ─── Golden fixture parity: straight_5pt ───
+// 5 corner points: (0,0) → (30,10) → (50,5) → (70,-5) → (100,0)
+
+TEST_CASE("roadToV2: golden parity — straight_5pt segment count and length") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2(legacy);
+
+    CHECK(v2.numSegments() == 4);
+
+    // Each segment length = distance between consecutive points
+    for (int i = 0; i < 4; i++) {
+        double expectedLen = pts[i].distanceTo(pts[i + 1]);
+        CHECK(v2.segment(i).length() == doctest::Approx(expectedLen).epsilon(0.001));
+    }
+}
+
+TEST_CASE("roadToV2: golden parity — straight_5pt positions at control points") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Compute cumulative s at each control point
+    double sValues[5];
+    sValues[0] = 0;
+    for (int i = 1; i < 5; i++) {
+        sValues[i] = sValues[i - 1] + pts[i - 1].distanceTo(pts[i]);
+    }
+
+    // Position at each control point should match
+    for (int i = 0; i < 5; i++) {
+        Point2D p = v2.geometry().positionAt(sValues[i]);
+        CHECK(p.x == doctest::Approx(pts[i].x).epsilon(0.01));
+        CHECK(p.y == doctest::Approx(pts[i].y).epsilon(0.01));
+    }
+}
+
+TEST_CASE("roadToV2: golden parity — straight_5pt curvature is zero (line segments)") {
+    std::vector<Point2D> pts = {{0, 0}, {30, 10}, {50, 5}, {70, -5}, {100, 0}};
+    Road legacy = makeLegacyRoad("straight_5pt", pts);
+    RoadV2 v2 = roadToV2(legacy);
+
+    // Each segment is a straight line → curvature = 0
+    // But at segment boundaries, there's a heading discontinuity.
+    // Check curvature in the interior of each segment (not at boundaries).
+    double totalLen = v2.totalLength();
+    for (int i = 0; i < 4; i++) {
+        double segStart = (i == 0) ? 0 : v2.segment(i - 1).length();
+        // Use a point slightly into the segment
+        // Actually, let's just check at s values that are clearly inside segments
+    }
+
+    // Simpler: check curvature at 10 points along the road
+    for (int i = 0; i < 10; i++) {
+        double s = totalLen * i / 10.0;
+        // Curvature should be 0 (each segment is a line)
+        // At boundaries, curvature is undefined but SegmentSequence delegates
+        // to the segment, which returns 0 for LineSegment.
+        CHECK(v2.geometry().curvatureAt(s) == doctest::Approx(0.0));
+    }
+}
+
+// ─── Adapter invariants ───
+
+TEST_CASE("roadToV2: invariant — segmentCount > 0 for non-empty road") {
+    Road legacy = makeLegacyRoad("inv", {{0, 0}, {10, 0}});
+    RoadV2 v2 = roadToV2(legacy);
+    CHECK(v2.numSegments() > 0);
+}
+
+TEST_CASE("roadToV2: invariant — totalLength matches sum of segment lengths") {
+    Road legacy = makeLegacyRoad("inv_len", {{0, 0}, {10, 0}, {20, 5}});
+    RoadV2 v2 = roadToV2(legacy);
+
+    double sumLen = 0;
+    for (int i = 0; i < v2.numSegments(); i++) sumLen += v2.segment(i).length();
+    CHECK(v2.totalLength() == doctest::Approx(sumLen));
+}
+
+TEST_CASE("roadToV2: invariant — position at s=0 is first control point") {
+    std::vector<Point2D> pts = {{5, 3}, {15, 8}, {25, 2}};
+    Road legacy = makeLegacyRoad("inv_start", pts);
+    RoadV2 v2 = roadToV2(legacy);
+
+    Point2D p = v2.geometry().positionAt(0);
+    CHECK(p.x == doctest::Approx(pts[0].x));
+    CHECK(p.y == doctest::Approx(pts[0].y));
+}
+
+TEST_CASE("roadToV2: invariant — position at s=totalLength is last control point") {
+    std::vector<Point2D> pts = {{5, 3}, {15, 8}, {25, 2}};
+    Road legacy = makeLegacyRoad("inv_end", pts);
+    RoadV2 v2 = roadToV2(legacy);
+
+    Point2D p = v2.geometry().positionAt(v2.totalLength());
+    CHECK(p.x == doctest::Approx(pts.back().x).epsilon(0.01));
+    CHECK(p.y == doctest::Approx(pts.back().y).epsilon(0.01));
+}

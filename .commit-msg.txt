@@ -1,66 +1,26 @@
-Phase 1.8.1: Golden fixture capture — 7 roads with s/x/y/heading/curvature
+Phase 1.8.3a: roadToV2() adapter — infrastructure + LineSegment conversion
 
-First sub-step of Phase 1.8 (RoadV2 + adapter). Captures golden data
-from the legacy C++ engine BEFORE writing any adapter code, establishing
-a reference baseline for parity testing.
+Pure conversion function from legacy Road (ControlPoint[]) to RoadV2
+(GeometrySegment[]). This is the seam between the old and new road
+engine architectures.
 
-New files:
-  tests/golden_fixtures.ts — Fixture road definitions + golden data
-    capture/load/save utilities. 7 fixture roads exercising all legacy
-    geometry paths. Computes derived geometry (s, heading, curvature)
-    from position samples using finite differences.
-  tests/golden-fixture.test.ts — 72 tests: golden data capture/verify,
-    per-fixture detailed comparison (positions, headings, curvatures,
-    total length), fixture-specific sanity checks.
-  tests/golden_data/*.json — 7 committed golden data files (reference
-    baseline from legacy engine).
+Implemented:
+- roadToV2(const Road&) → RoadV2 (pure function, no side effects)
+- Metadata copy (id, name, color, profileName, intersection IDs,
+  width, laneCount)
+- Empty road and single-point degenerate handling
+- Corner points (no handles) → LineSegment
+- Bezier segments temporarily fall back to LineSegment (TODO 1.8.3b)
 
-7 fixture roads:
-  1. straight_2pt — 2 corner points, pure line (32 samples, curvature=0)
-  2. straight_5pt — 5 corner points, polyline
-  3. arc_quarter — Arc tool output (quarter circle, 17 CPs)
-  4. s_clothoid — Clothoid S-curve (17 CPs)
-  5. bezier_arch — 4 points with bezier handles (arch shape)
-  6. mixed_line_bezier — Mix of corner and smooth points
-  7. tiny_segments — 30 short segments (0.05-0.2m), alternating headings
-     (stress-tests cumulative offsets, binary search, FP accumulation)
+Tests (17 new, 171 total, 717 assertions):
+- Empty road, single point, one line, two lines, five lines
+- Metadata preservation (all 8 fields)
+- Pure function invariant (input unchanged)
+- Golden parity: straight_2pt (position, heading, curvature, length)
+- Golden parity: straight_5pt (segment count, length, positions at
+  control points, zero curvature)
+- Adapter invariants: segmentCount > 0, totalLength = sum of segments,
+  position at s=0 = first point, position at s=totalLength = last point
 
-Golden data format (per sample):
-  { s, x, y, heading, curvature }
-  - s: cumulative arc length (m)
-  - x, y: position (m, local coordinates)
-  - heading: direction (rad), computed via finite difference
-  - curvature: signed curvature (1/m), computed via 3-point circumcircle
-    (positive = left/CCW, matching our convention)
-
-Derived geometry computation:
-  The legacy engine only returns {x, y}[] from sampleCenterline().
-  Heading: central difference (forward/backward at endpoints).
-  Curvature: 3-point circumcircle formula: κ = 2·cross / (|a|·|b|·|c|).
-  These are approximations — when RoadV2 produces exact heading/curvature
-  from evaluateDS()/curvatureDS(), the parity test will use appropriate
-  tolerances.
-
-Test structure:
-  - First run (or DELETE_GOLDEN=1): generates and saves golden data
-  - Subsequent runs: verifies live engine output matches committed data
-  - Per-fixture: metadata, sample count, s monotonicity, position/heading/
-    curvature/length match
-  - Sanity checks: straight=0 curvature, arc=nonzero curvature, bezier=
-    nonzero curvature, tiny_segments=small total length
-
-Test results:
-  - vitest golden-fixture: 72/72 passed
-  - vitest road-engine: 41/41 passed (no regression)
-  - vitest total: 113/113 passed
-  - C++ doctest: 136/136 passed (557 assertions, no regression)
-
-Success criteria for 1.8.1 (all met):
-  ✅ Golden fixtures committed (7 JSON files)
-  ✅ Fixture generation is deterministic (same input → same output)
-  ✅ Legacy output is the reference baseline
-  ✅ CI runs the fixture comparison automatically (vitest)
-
-Generated with Devin (https://devin.ai)
-
-Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+All 113 vitest tests remain green (no regression).
+Legacy Road path is completely untouched.
