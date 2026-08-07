@@ -138,6 +138,61 @@ export interface RoadBuildResult {
   adapter: BuildAdapterReport;
 }
 
+// ─── Phase 3: Road Graph + Junction Builder types ────────
+
+export interface RoadNodeData {
+  id: string;
+  position: { x: number; y: number };
+  z: number;
+  type: number; // 0=Junction, 1=EndPoint, 2=Merge, 3=Split
+  typeName: string;
+  connectedRoadIds: string[];
+}
+
+export interface RoadEdgeData {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  roadId: string;
+  length: number;
+  laneCount: number;
+  width: number;
+  isOneWay: boolean;
+}
+
+export interface RoadGraphData {
+  numNodes: number;
+  numEdges: number;
+  nodes: RoadNodeData[];
+  edges: RoadEdgeData[];
+}
+
+export interface JunctionStripeData {
+  type: number; // 0=Solid, 1=Dashed, 2=None
+  color: string;
+  samples: Array<{ x: number; y: number }>;
+}
+
+export interface JunctionMeshData {
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  indices: Uint32Array;
+  vertexCount: number;
+  triangleCount: number;
+}
+
+export interface JunctionResultData {
+  junctionId: string;
+  center: { x: number; y: number };
+  polygon: Array<{ x: number; y: number }>;
+  laneStripes: JunctionStripeData[];
+  asphaltMesh: JunctionMeshData;
+  markingMesh: JunctionMeshData;
+  numLaneConnections: number;
+  numApproaches: number;
+}
+
 // ─── Global window type augmentation ───────────────────────
 declare global {
   interface Window {
@@ -166,6 +221,9 @@ declare global {
         convertFromV2(road: unknown): Promise<unknown>;
         // Phase 2.8 — Full lane engine pipeline
         buildRoad(road: unknown): Promise<unknown>;
+        // Phase 3 — Road Graph + Junction Builder
+        buildRoadGraph(roads: unknown[], intersections: unknown[]): Promise<unknown>;
+        buildJunction(junctionId: string, roadGraph: unknown, laneNetworks: unknown): Promise<unknown>;
       };
     };
   }
@@ -450,6 +508,25 @@ class NativeRoadEngine implements RoadEngineAPI {
     const cppRoad = toCppRoad(road, refLat, refLon);
     return this.api.buildRoad(cppRoad) as Promise<RoadBuildResult>;
   }
+
+  // Phase 3 — Road Graph + Junction Builder
+  async buildRoadGraph(
+    roads: Road[],
+    intersections: unknown[],
+    refLat: number,
+    refLon: number,
+  ): Promise<RoadGraphData> {
+    const cppRoads = roads.map((r) => toCppRoad(r, refLat, refLon));
+    return this.api.buildRoadGraph(cppRoads, intersections) as Promise<RoadGraphData>;
+  }
+
+  async buildJunction(
+    junctionId: string,
+    roadGraph: RoadGraphData,
+    laneNetworks: Record<string, LaneNetworkData>,
+  ): Promise<JunctionResultData> {
+    return this.api.buildJunction(junctionId, roadGraph, laneNetworks) as Promise<JunctionResultData>;
+  }
 }
 
 // ─── Lazy singleton ────────────────────────────────────────
@@ -524,4 +601,9 @@ export const roadEngine = {
   // Phase 2.8 — Full lane engine pipeline
   buildRoad: (road: Road, refLat: number, refLon: number) =>
     getRoadEngine().buildRoad(road, refLat, refLon),
+  // Phase 3 — Road Graph + Junction Builder
+  buildRoadGraph: (roads: Road[], intersections: unknown[], refLat: number, refLon: number) =>
+    getRoadEngine().buildRoadGraph(roads, intersections, refLat, refLon),
+  buildJunction: (junctionId: string, roadGraph: RoadGraphData, laneNetworks: Record<string, LaneNetworkData>) =>
+    getRoadEngine().buildJunction(junctionId, roadGraph, laneNetworks),
 };

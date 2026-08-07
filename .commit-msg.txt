@@ -1,27 +1,33 @@
-Phase 3 prep: 3D debug overlays + Road Inspector panel
+Phase 3.4: Bridge + TS integration for RoadGraph and Junction Builder
 
-Track 1 — Debug Overlays (RoadViewport.tsx):
-  - 4 new debug layers: laneCenters, laneBoundaryLines, laneIds, meshWireframe
-  - Lane centerlines rendered as colored lines (yellow=center, green=right, red=left)
-  - Lane boundaries rendered as lines (white=road edge, teal=inner boundaries)
-  - Lane IDs rendered as colored spheres at centerline midpoints
-  - Mesh wireframe rendered as magenta line overlay on asphalt triangles
-  - All overlays use cached buildRoad() data (no extra C++ calls)
-  - Toggle via Debug mode in toolbar
+C++ Bridge (road_bridge.cpp):
+  - Added roadBuildRoadGraph(roads[], intersections[]) → RoadGraph
+    Parses roads and intersections, converts to RoadV2, builds RoadGraph
+    via buildFromRoads(), serializes nodes/edges to JS objects
+  - Added roadBuildJunction(junctionId, roadGraph, laneNetworks) → JunctionResult
+    Reconstructs RoadGraph and LaneNetworks from JS objects, builds
+    LaneGraph via LaneGraphBuilder::build(), builds junction geometry
+    via JunctionBuilder::build(), serializes as typed arrays
+  - Both functions registered in InitRoadBridge
 
-Track 2 — Road Inspector Panel (RoadInspector.tsx):
-  - New right-dock panel registered as 'road-inspector'
-  - Shows road metadata: name, ID, width, lanes, length, control points
-  - Shows road profile: type, surface, lane width, sidewalk, curb toggles
-  - Shows lane engine data: lane sections, centerlines, boundaries, road marks
-  - Shows per-lane details: ID, length, sample count
-  - Shows mesh statistics: vertices, triangles, sections per material
-  - Shows adapter report: exact/legacy/unsupported segment counts + warnings
-  - Shows intersection connections: start/end node IDs
-  - Uses existing FormSection, NumberField, TextField, SelectField, BooleanField
-  - Live-updates when road selection changes
+IPC Channels (ipcChannels-electron.ts):
+  - ROAD_BUILD_ROAD_GRAPH = 'road:buildRoadGraph'
+  - ROAD_BUILD_JUNCTION = 'road:buildJunction'
 
-Track 3 — Phase 3 C++ (in progress):
-  - road_graph.hpp being created (RoadGraph, RoadNode, RoadEdge)
+IPC Handler (roadEngineHandler.ts):
+  - Handles ROAD_BUILD_ROAD_GRAPH and ROAD_BUILD_JUNCTION
+  - Added roadBuildRoadGraph and roadBuildJunction to addon interface
 
-Build: clean. Tests: 141/141 pass.
+Preload (preload.ts):
+  - Added buildRoadGraph and buildJunction to roadEngine API
+  - Type declarations and ipcRenderer.invoke bindings
+
+TypeScript Client (roadEngineClient.ts):
+  - New types: RoadNodeData, RoadEdgeData, RoadGraphData,
+    JunctionStripeData, JunctionMeshData, JunctionResultData
+  - NativeRoadEngine.buildRoadGraph() and buildJunction() methods
+  - Convenience exports on roadEngine object
+  - Window type augmentation for new methods
+
+Native addon rebuilt successfully against Electron 42.5.1 ABI.
+All builds pass. 141 vitest + 493 doctest (463 existing + 30 new) all pass.

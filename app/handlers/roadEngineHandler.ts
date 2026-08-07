@@ -32,6 +32,8 @@ import {
   ROAD_GET_ADAPTER_REPORT,
   ROAD_CONVERT_FROM_V2,
   ROAD_BUILD_ROAD,
+  ROAD_BUILD_ROAD_GRAPH,
+  ROAD_BUILD_JUNCTION,
 } from '../../shared/ipcChannels-electron';
 
 // ─── Native Addon Interface ────────────────────────────────
@@ -77,6 +79,8 @@ export interface RoadEngineAddon {
   roadConvertFromV2(road: unknown): unknown;
   // Phase 2.8 — Full lane engine pipeline
   roadBuildRoad(road: unknown): unknown;
+  roadBuildRoadGraph(roads: unknown[], intersections: unknown[]): unknown;
+  roadBuildJunction(junctionId: string, roadGraph: unknown, laneNetworks: unknown): unknown;
 }
 
 // ─── Lazy-loaded addon singleton ───────────────────────────
@@ -267,5 +271,18 @@ export async function registerRoadEngineHandlers(): Promise<void> {
     console.log(tag, 'buildRoad()');
     if (!addon) throw new Error('Road engine native addon not available');
     return addon.roadBuildRoad(road);
+  });
+
+  // Phase 3 — Road Graph + Junction Builder
+  ipcMain.handle(ROAD_BUILD_ROAD_GRAPH, async (_event, roads, intersections) => {
+    console.log(tag, 'buildRoadGraph()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadBuildRoadGraph(roads, intersections);
+  });
+
+  ipcMain.handle(ROAD_BUILD_JUNCTION, async (_event, junctionId, roadGraph, laneNetworks) => {
+    console.log(tag, 'buildJunction()');
+    if (!addon) throw new Error('Road engine native addon not available');
+    return addon.roadBuildJunction(junctionId, roadGraph, laneNetworks);
   });
 }

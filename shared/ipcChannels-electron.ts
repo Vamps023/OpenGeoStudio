@@ -48,6 +48,10 @@ export const ROAD_CONVERT_FROM_V2 = 'road:convertFromV2' as const;
 // Phase 2.8 — Full lane engine pipeline
 export const ROAD_BUILD_ROAD = 'road:buildRoad' as const;
 
+// Phase 3 — Road Graph + Junction Builder
+export const ROAD_BUILD_ROAD_GRAPH = 'road:buildRoadGraph' as const;
+export const ROAD_BUILD_JUNCTION = 'road:buildJunction' as const;
+
 // ─── Dialog ───────────────────────────────────────────────────
 export const DIALOG_SELECT_FOLDER = 'dialog:selectFolder' as const;
 export const DIALOG_SELECT_PACKAGE = 'dialog:selectPackage' as const;

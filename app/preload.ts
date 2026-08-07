@@ -51,6 +51,8 @@ import {
   ROAD_GET_ADAPTER_REPORT,
   ROAD_CONVERT_FROM_V2,
   ROAD_BUILD_ROAD,
+  ROAD_BUILD_ROAD_GRAPH,
+  ROAD_BUILD_JUNCTION,
 } from '../shared/ipcChannels-electron';
 
 /**
@@ -139,6 +141,9 @@ export interface ElectronAPI {
     convertFromV2: (road: unknown) => Promise<unknown>;
     // Phase 2.8 — Full lane engine pipeline
     buildRoad: (road: unknown) => Promise<unknown>;
+    // Phase 3 — Road Graph + Junction Builder
+    buildRoadGraph: (roads: unknown[], intersections: unknown[]) => Promise<unknown>;
+    buildJunction: (junctionId: string, roadGraph: unknown, laneNetworks: unknown) => Promise<unknown>;
   };
 }
 
@@ -236,6 +241,11 @@ const api: ElectronAPI = {
     // Phase 2.8 — Full lane engine pipeline
     buildRoad: (road) =>
       ipcRenderer.invoke(ROAD_BUILD_ROAD, road),
+    // Phase 3 — Road Graph + Junction Builder
+    buildRoadGraph: (roads, intersections) =>
+      ipcRenderer.invoke(ROAD_BUILD_ROAD_GRAPH, roads, intersections),
+    buildJunction: (junctionId, roadGraph, laneNetworks) =>
+      ipcRenderer.invoke(ROAD_BUILD_JUNCTION, junctionId, roadGraph, laneNetworks),
   },
 };
 

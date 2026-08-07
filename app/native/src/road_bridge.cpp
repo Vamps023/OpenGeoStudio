@@ -11,6 +11,9 @@
 #include "road/lane_network.hpp"
 #include "road/road_mark_generator.hpp"
 #include "road/road_mesh_generator.hpp"
+#include "road/road_graph.hpp"
+#include "road/lane_graph.hpp"
+#include "road/junction_builder.hpp"
 #include <sstream>
 #include <iostream>
 
@@ -1044,6 +1047,365 @@ static Napi::Value RoadBuildRoad(const Napi::CallbackInfo& info) {
     return result;
 }
 
+// ═══════════════════════════════════════════════════════════
+// Phase 3 — Road Graph + Junction Builder
+// ═══════════════════════════════════════════════════════════
+
+// roadBuildRoadGraph(roads[], intersections[]) → RoadGraph
+// Builds the road network topology from all roads and intersections.
+static Napi::Value RoadBuildRoadGraph(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 2 || !info[0].IsArray() || !info[1].IsArray()) {
+        Napi::TypeError::New(env, "Expected (roads[], intersections[])").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    auto roadsArr = info[0].As<Napi::Array>();
+    auto intersectionsArr = info[1].As<Napi::Array>();
+
+    // Parse roads
+    std::vector<Road> roads;
+    for (uint32_t i = 0; i < roadsArr.Length(); i++) {
+        if (roadsArr.Get(i).IsObject()) {
+            roads.push_back(parseRoad(roadsArr.Get(i).As<Napi::Object>()));
+        }
+    }
+
+    // Parse intersections (GeneratedIntersection)
+    std::vector<GeneratedIntersection> intersections;
+    for (uint32_t i = 0; i < intersectionsArr.Length(); i++) {
+        if (!intersectionsArr.Get(i).IsObject()) continue;
+        auto ixObj = intersectionsArr.Get(i).As<Napi::Object>();
+        GeneratedIntersection gen;
+        if (ixObj.Has("center")) {
+            auto c = ixObj.Get("center").As<Napi::Object>();
+            gen.center.x = c.Get("x").As<Napi::Number>().DoubleValue();
+            gen.center.y = c.Get("y").As<Napi::Number>().DoubleValue();
+        }
+        if (ixObj.Has("polygon")) {
+            auto poly = ixObj.Get("polygon").As<Napi::Array>();
+            for (uint32_t j = 0; j < poly.Length(); j++) {
+                auto p = poly.Get(j).As<Napi::Object>();
+                gen.polygon.push_back({ p.Get("x").As<Napi::Number>().DoubleValue(),
+                                        p.Get("y").As<Napi::Number>().DoubleValue() });
+            }
+        }
+        if (ixObj.Has("approaches")) {
+            auto apps = ixObj.Get("approaches").As<Napi::Array>();
+            for (uint32_t j = 0; j < apps.Length(); j++) {
+                auto a = apps.Get(j).As<Napi::Object>();
+                ApproachRoad app;
+                if (a.Has("roadId")) app.roadId = a.Get("roadId").As<Napi::String>().Utf8Value();
+                if (a.Has("width"))  app.width  = a.Get("width").As<Napi::Number>().DoubleValue();
+                if (a.Has("laneCount")) app.laneCount = a.Get("laneCount").As<Napi::Number>().Int32Value();
+                if (a.Has("z"))     app.z      = a.Get("z").As<Napi::Number>().DoubleValue();
+                gen.approaches.push_back(std::move(app));
+            }
+        }
+        intersections.push_back(std::move(gen));
+    }
+
+    // Convert roads to RoadV2 for the graph builder
+    std::vector<RoadV2> v2Roads;
+    for (const auto& road : roads) {
+        AdapterReport report;
+        v2Roads.push_back(roadToV2Auto(road, report));
+    }
+
+    // Build the road graph
+    RoadGraph graph = buildFromRoads(v2Roads, intersections);
+
+    // Serialize
+    auto result = Napi::Object::New(env);
+    result.Set("numNodes", Napi::Number::New(env, graph.numNodes()));
+    result.Set("numEdges", Napi::Number::New(env, graph.numEdges()));
+
+    auto nodes = Napi::Array::New(env, graph.nodes.size());
+    for (size_t i = 0; i < graph.nodes.size(); i++) {
+        auto node = Napi::Object::New(env);
+        node.Set("id", Napi::String::New(env, graph.nodes[i].id));
+        auto pos = Napi::Object::New(env);
+        pos.Set("x", Napi::Number::New(env, graph.nodes[i].position.x));
+        pos.Set("y", Napi::Number::New(env, graph.nodes[i].position.y));
+        node.Set("position", pos);
+        node.Set("z", Napi::Number::New(env, graph.nodes[i].z));
+        node.Set("type", Napi::Number::New(env, static_cast<int>(graph.nodes[i].type)));
+        node.Set("typeName", Napi::String::New(env, graph.nodes[i].typeName()));
+
+        auto connRoads = Napi::Array::New(env, graph.nodes[i].connectedRoadIds.size());
+        for (size_t j = 0; j < graph.nodes[i].connectedRoadIds.size(); j++) {
+            connRoads.Set(j, Napi::String::New(env, graph.nodes[i].connectedRoadIds[j]));
+        }
+        node.Set("connectedRoadIds", connRoads);
+        nodes.Set(i, node);
+    }
+    result.Set("nodes", nodes);
+
+    auto edges = Napi::Array::New(env, graph.edges.size());
+    for (size_t i = 0; i < graph.edges.size(); i++) {
+        auto edge = Napi::Object::New(env);
+        edge.Set("id", Napi::String::New(env, graph.edges[i].id));
+        edge.Set("fromNodeId", Napi::String::New(env, graph.edges[i].fromNodeId));
+        edge.Set("toNodeId", Napi::String::New(env, graph.edges[i].toNodeId));
+        edge.Set("roadId", Napi::String::New(env, graph.edges[i].roadId));
+        edge.Set("length", Napi::Number::New(env, graph.edges[i].length));
+        edge.Set("laneCount", Napi::Number::New(env, graph.edges[i].laneCount));
+        edge.Set("width", Napi::Number::New(env, graph.edges[i].width));
+        edge.Set("isOneWay", Napi::Boolean::New(env, graph.edges[i].isOneWay));
+        edges.Set(i, edge);
+    }
+    result.Set("edges", edges);
+
+    ROAD_LOG("buildRoadGraph() → " + std::to_string(graph.numNodes()) + " nodes, " +
+             std::to_string(graph.numEdges()) + " edges");
+
+    return result;
+}
+
+// roadBuildJunction(junctionNodeId, roadGraph, laneNetworks) → JunctionResult
+// Builds junction geometry from lane connections.
+static Napi::Value RoadBuildJunction(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 3 || !info[0].IsString() || !info[1].IsObject() || !info[2].IsObject()) {
+        Napi::TypeError::New(env, "Expected (junctionNodeId, roadGraph, laneNetworks)").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    std::string junctionId = info[0].As<Napi::String>().Utf8Value();
+    auto graphObj = info[1].As<Napi::Object>();
+    auto laneNetsObj = info[2].As<Napi::Object>();
+
+    // Reconstruct RoadGraph (minimal — just need the junction node)
+    RoadGraph graph;
+    if (graphObj.Has("nodes")) {
+        auto nodes = graphObj.Get("nodes").As<Napi::Array>();
+        for (uint32_t i = 0; i < nodes.Length(); i++) {
+            auto n = nodes.Get(i).As<Napi::Object>();
+            RoadNode node;
+            if (n.Has("id")) node.id = n.Get("id").As<Napi::String>().Utf8Value();
+            if (n.Has("position")) {
+                auto p = n.Get("position").As<Napi::Object>();
+                node.position.x = p.Get("x").As<Napi::Number>().DoubleValue();
+                node.position.y = p.Get("y").As<Napi::Number>().DoubleValue();
+            }
+            if (n.Has("z")) node.z = n.Get("z").As<Napi::Number>().DoubleValue();
+            if (n.Has("type")) node.type = static_cast<RoadNodeType>(n.Get("type").As<Napi::Number>().Int32Value());
+            if (n.Has("connectedRoadIds")) {
+                auto cr = n.Get("connectedRoadIds").As<Napi::Array>();
+                for (uint32_t j = 0; j < cr.Length(); j++) {
+                    node.connectedRoadIds.push_back(cr.Get(j).As<Napi::String>().Utf8Value());
+                }
+            }
+            graph.nodes.push_back(std::move(node));
+        }
+    }
+    if (graphObj.Has("edges")) {
+        auto edges = graphObj.Get("edges").As<Napi::Array>();
+        for (uint32_t i = 0; i < edges.Length(); i++) {
+            auto e = edges.Get(i).As<Napi::Object>();
+            RoadEdge edge;
+            if (e.Has("id")) edge.id = e.Get("id").As<Napi::String>().Utf8Value();
+            if (e.Has("fromNodeId")) edge.fromNodeId = e.Get("fromNodeId").As<Napi::String>().Utf8Value();
+            if (e.Has("toNodeId")) edge.toNodeId = e.Get("toNodeId").As<Napi::String>().Utf8Value();
+            if (e.Has("roadId")) edge.roadId = e.Get("roadId").As<Napi::String>().Utf8Value();
+            if (e.Has("length")) edge.length = e.Get("length").As<Napi::Number>().DoubleValue();
+            if (e.Has("laneCount")) edge.laneCount = e.Get("laneCount").As<Napi::Number>().Int32Value();
+            if (e.Has("width")) edge.width = e.Get("width").As<Napi::Number>().DoubleValue();
+            if (e.Has("isOneWay")) edge.isOneWay = e.Get("isOneWay").As<Napi::Boolean>().Value();
+            graph.edges.push_back(std::move(edge));
+        }
+    }
+
+    // Find the junction node
+    const RoadNode* junction = graph.findNode(junctionId);
+    if (!junction || !junction->isJunction()) {
+        ROAD_LOG("buildJunction() — junction not found or not a junction: " + junctionId);
+        return env.Null();
+    }
+
+    // Reconstruct LaneNetworks from the laneNetworks map object
+    std::map<std::string, LaneNetwork> laneNets;
+    auto keys = laneNetsObj.GetPropertyNames();
+    for (uint32_t i = 0; i < keys.Length(); i++) {
+        std::string roadId = keys.Get(i).As<Napi::String>().Utf8Value();
+        auto netObj = laneNetsObj.Get(roadId).As<Napi::Object>();
+
+        LaneNetwork net;
+        net.roadId = roadId;
+        if (netObj.Has("totalLength")) net.totalLength = netObj.Get("totalLength").As<Napi::Number>().DoubleValue();
+        if (netObj.Has("numLaneSections")) net.numLaneSections = netObj.Get("numLaneSections").As<Napi::Number>().Int32Value();
+
+        // Parse centerlines
+        if (netObj.Has("centerlines")) {
+            auto cls = netObj.Get("centerlines").As<Napi::Array>();
+            for (uint32_t j = 0; j < cls.Length(); j++) {
+                auto cl = cls.Get(j).As<Napi::Object>();
+                LaneCenterline centerline;
+                if (cl.Has("laneId")) centerline.laneId = cl.Get("laneId").As<Napi::Number>().Int32Value();
+                if (cl.Has("startS")) centerline.startS = cl.Get("startS").As<Napi::Number>().DoubleValue();
+                if (cl.Has("endS")) centerline.endS = cl.Get("endS").As<Napi::Number>().DoubleValue();
+                if (cl.Has("length")) centerline.length = cl.Get("length").As<Napi::Number>().DoubleValue();
+                if (cl.Has("samples")) {
+                    auto samples = cl.Get("samples").As<Napi::Array>();
+                    for (uint32_t k = 0; k < samples.Length(); k++) {
+                        auto s = samples.Get(k).As<Napi::Object>();
+                        SamplePoint sp;
+                        if (s.Has("position")) {
+                            auto p = s.Get("position").As<Napi::Object>();
+                            sp.position.x = p.Get("x").As<Napi::Number>().DoubleValue();
+                            sp.position.y = p.Get("y").As<Napi::Number>().DoubleValue();
+                        }
+                        if (s.Has("s")) sp.s = s.Get("s").As<Napi::Number>().DoubleValue();
+                        if (s.Has("heading")) sp.heading = s.Get("heading").As<Napi::Number>().DoubleValue();
+                        if (s.Has("laneOffset")) sp.laneOffset = s.Get("laneOffset").As<Napi::Number>().DoubleValue();
+                        centerline.samples.push_back(sp);
+                    }
+                }
+                net.centerlines.push_back(std::move(centerline));
+            }
+        }
+
+        // Parse boundaries
+        if (netObj.Has("boundaries")) {
+            auto bs = netObj.Get("boundaries").As<Napi::Array>();
+            for (uint32_t j = 0; j < bs.Length(); j++) {
+                auto b = bs.Get(j).As<Napi::Object>();
+                LaneBoundary boundary;
+                if (b.Has("innerLaneId")) boundary.innerLaneId = b.Get("innerLaneId").As<Napi::Number>().Int32Value();
+                if (b.Has("outerLaneId")) boundary.outerLaneId = b.Get("outerLaneId").As<Napi::Number>().Int32Value();
+                if (b.Has("isRoadEdge")) boundary.isRoadEdge = b.Get("isRoadEdge").As<Napi::Boolean>().Value();
+                if (b.Has("startS")) boundary.startS = b.Get("startS").As<Napi::Number>().DoubleValue();
+                if (b.Has("endS")) boundary.endS = b.Get("endS").As<Napi::Number>().DoubleValue();
+                if (b.Has("length")) boundary.length = b.Get("length").As<Napi::Number>().DoubleValue();
+                if (b.Has("markColor")) boundary.markColor = b.Get("markColor").As<Napi::String>().Utf8Value();
+                if (b.Has("markWidth")) boundary.markWidth = b.Get("markWidth").As<Napi::Number>().DoubleValue();
+                if (b.Has("samples")) {
+                    auto samples = b.Get("samples").As<Napi::Array>();
+                    for (uint32_t k = 0; k < samples.Length(); k++) {
+                        auto s = samples.Get(k).As<Napi::Object>();
+                        SamplePoint sp;
+                        if (s.Has("position")) {
+                            auto p = s.Get("position").As<Napi::Object>();
+                            sp.position.x = p.Get("x").As<Napi::Number>().DoubleValue();
+                            sp.position.y = p.Get("y").As<Napi::Number>().DoubleValue();
+                        }
+                        if (s.Has("s")) sp.s = s.Get("s").As<Napi::Number>().DoubleValue();
+                        if (s.Has("heading")) sp.heading = s.Get("heading").As<Napi::Number>().DoubleValue();
+                        if (s.Has("laneOffset")) sp.laneOffset = s.Get("laneOffset").As<Napi::Number>().DoubleValue();
+                        boundary.samples.push_back(sp);
+                    }
+                }
+                net.boundaries.push_back(std::move(boundary));
+            }
+        }
+
+        laneNets[roadId] = std::move(net);
+    }
+
+    // Build lane graph
+    LaneGraph laneGraph = LaneGraphBuilder::build(*junction, graph, laneNets);
+
+    // Build junction geometry
+    JunctionResult junctionResult = JunctionBuilder::build(*junction, graph, laneGraph, laneNets);
+
+    // Serialize
+    auto result = Napi::Object::New(env);
+    result.Set("junctionId", Napi::String::New(env, junctionResult.junctionId));
+    result.Set("numLaneConnections", Napi::Number::New(env, junctionResult.numLaneConnections));
+    result.Set("numApproaches", Napi::Number::New(env, junctionResult.numApproaches));
+
+    auto center = Napi::Object::New(env);
+    center.Set("x", Napi::Number::New(env, junctionResult.center.x));
+    center.Set("y", Napi::Number::New(env, junctionResult.center.y));
+    result.Set("center", center);
+
+    // Polygon
+    auto poly = Napi::Array::New(env, junctionResult.polygon.size());
+    for (size_t i = 0; i < junctionResult.polygon.size(); i++) {
+        auto p = Napi::Object::New(env);
+        p.Set("x", Napi::Number::New(env, junctionResult.polygon[i].x));
+        p.Set("y", Napi::Number::New(env, junctionResult.polygon[i].y));
+        poly.Set(i, p);
+    }
+    result.Set("polygon", poly);
+
+    // Lane stripes
+    auto stripes = Napi::Array::New(env, junctionResult.laneStripes.size());
+    for (size_t i = 0; i < junctionResult.laneStripes.size(); i++) {
+        auto s = Napi::Object::New(env);
+        const auto& stripe = junctionResult.laneStripes[i];
+        s.Set("type", Napi::Number::New(env, static_cast<int>(stripe.type)));
+        s.Set("color", Napi::String::New(env, stripe.color));
+
+        auto samples = Napi::Array::New(env, stripe.samples.size());
+        for (size_t j = 0; j < stripe.samples.size(); j++) {
+            auto p = Napi::Object::New(env);
+            p.Set("x", Napi::Number::New(env, stripe.samples[j].x));
+            p.Set("y", Napi::Number::New(env, stripe.samples[j].y));
+            samples.Set(j, p);
+        }
+        s.Set("samples", samples);
+        stripes.Set(i, s);
+    }
+    result.Set("laneStripes", stripes);
+
+    // Asphalt mesh
+    auto asphalt = Napi::Object::New(env);
+    {
+        const auto& m = junctionResult.asphaltMesh;
+        auto positions = Napi::Float32Array::New(env, m.positions.size());
+        for (size_t i = 0; i < m.positions.size(); i++) positions[i] = m.positions[i];
+        asphalt.Set("positions", positions);
+
+        auto normals = Napi::Float32Array::New(env, m.normals.size());
+        for (size_t i = 0; i < m.normals.size(); i++) normals[i] = m.normals[i];
+        asphalt.Set("normals", normals);
+
+        auto uvs = Napi::Float32Array::New(env, m.uvs.size());
+        for (size_t i = 0; i < m.uvs.size(); i++) uvs[i] = m.uvs[i];
+        asphalt.Set("uvs", uvs);
+
+        auto indices = Napi::Uint32Array::New(env, m.indices.size());
+        for (size_t i = 0; i < m.indices.size(); i++) indices[i] = m.indices[i];
+        asphalt.Set("indices", indices);
+
+        asphalt.Set("vertexCount", Napi::Number::New(env, m.vertexCount));
+        asphalt.Set("triangleCount", Napi::Number::New(env, m.triangleCount));
+    }
+    result.Set("asphaltMesh", asphalt);
+
+    // Marking mesh
+    auto marking = Napi::Object::New(env);
+    {
+        const auto& m = junctionResult.markingMesh;
+        auto positions = Napi::Float32Array::New(env, m.positions.size());
+        for (size_t i = 0; i < m.positions.size(); i++) positions[i] = m.positions[i];
+        marking.Set("positions", positions);
+
+        auto normals = Napi::Float32Array::New(env, m.normals.size());
+        for (size_t i = 0; i < m.normals.size(); i++) normals[i] = m.normals[i];
+        marking.Set("normals", normals);
+
+        auto uvs = Napi::Float32Array::New(env, m.uvs.size());
+        for (size_t i = 0; i < m.uvs.size(); i++) uvs[i] = m.uvs[i];
+        marking.Set("uvs", uvs);
+
+        auto indices = Napi::Uint32Array::New(env, m.indices.size());
+        for (size_t i = 0; i < m.indices.size(); i++) indices[i] = m.indices[i];
+        marking.Set("indices", indices);
+
+        marking.Set("vertexCount", Napi::Number::New(env, m.vertexCount));
+        marking.Set("triangleCount", Napi::Number::New(env, m.triangleCount));
+    }
+    result.Set("markingMesh", marking);
+
+    ROAD_LOG("buildJunction() → " + std::to_string(junctionResult.numLaneConnections) +
+             " connections, " + std::to_string(junctionResult.asphaltMesh.triangleCount) + " asphalt tris, " +
+             std::to_string(junctionResult.markingMesh.triangleCount) + " marking tris");
+
+    return result;
+}
+
 Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadGetVersion", Napi::Function::New(env, RoadGetVersion));
     exports.Set("roadGenerateIntersection", Napi::Function::New(env, RoadGenerateIntersection));
@@ -1068,6 +1430,9 @@ Napi::Object InitRoadBridge(Napi::Env env, Napi::Object exports) {
     exports.Set("roadConvertFromV2", Napi::Function::New(env, RoadConvertFromV2));
     // Phase 2.8 — Full pipeline API
     exports.Set("roadBuildRoad", Napi::Function::New(env, RoadBuildRoad));
+    // Phase 3 — Road Graph + Junction Builder
+    exports.Set("roadBuildRoadGraph", Napi::Function::New(env, RoadBuildRoadGraph));
+    exports.Set("roadBuildJunction", Napi::Function::New(env, RoadBuildJunction));
     return exports;
 }
 
