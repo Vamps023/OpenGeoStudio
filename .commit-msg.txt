@@ -1,69 +1,80 @@
-Phase 2.3: World-space lane evaluation
+Phase 2.4: Lane boundary & centerline sampling
 
-Introduces the evaluation layer that combines SegmentSequence
-(Phase 1), LaneSection (2.1), and Polynomial3 (2.2) to produce
-world-space lane positions. Pure evaluation — no sampling, no
-mesh, no allocations.
+Introduces the sampling layer that converts lane evaluation (2.3)
+into polylines with adaptive refinement. First production feature
+— produces visible output (polylines) from the lane engine.
 
-New file: lane_geometry.hpp
+New file: lane_sampling.hpp
   Separation of concerns:
-    lane_engine.hpp = data model
-    lane_geometry.hpp = math (world-space evaluation)
+    lane_engine.hpp   = Data model
+    lane_geometry.hpp = Evaluation (single point)
+    lane_sampling.hpp = Sampling (polyline generation)
 
-  LanePoint struct:
+  SamplePoint struct:
     - position (Point2D): world-space x, y
-    - tangent (Vec2): unit tangent (direction of travel)
-    - normal (Vec2): unit normal (left = 90° CCW from tangent)
-    - heading (double): heading angle in radians
-    - laneOffset (double): lateral offset from reference line (right-positive)
+    - s: arc-length along reference line (for UV, OpenDRIVE)
+    - heading: heading angle (for lane markings, debug)
+    - laneOffset: lateral offset (for mesh generation)
 
-  evaluateLaneCenter(road, laneId, s):
-    World-space center of lane at arc-length s.
-    Uses active LaneSection at s, or synthesized legacy section.
-    C¹ continuous if geometry and width polynomials are C¹.
-    O(log N) per call, no allocations.
+  LanePolyline struct:
+    - laneId, isBoundary, isOuter metadata
+    - vector<SamplePoint> points
+    - positions() convenience accessor
+    - length() total polyline length
 
-  evaluateLaneBoundary(road, laneId, outer, s):
-    World-space position of lane edge (inner or outer).
+  SamplingParams:
+    - maxError: 0.25m chord error tolerance
+    - maxSpacing: 10m maximum spacing between samples
+    - minSamples, maxSamples bounds
 
-  evaluateLaneAtOffset(road, lateralOffset, s):
-    Most general form — arbitrary lateral offset.
+  Functions:
+    - sampleLaneCenter(road, laneId, params): lane centerline polyline
+    - sampleLaneBoundary(road, laneId, outer, params): lane edge polyline
+    - sampleAllBoundaries(road, params): all lane boundaries
+    - sampleAllCenterlines(road, params): all lane centerlines
 
-  World-space equation:
-    Pworld = positionAt(s) - normalAt(s) * lateralOffset
-  (normalAt returns left-positive; laneOffset is right-positive)
+  Adaptive sampling:
+    - Curvature-based recursive midpoint displacement
+    - More samples in high-curvature regions (arcs, spirals, bezier)
+    - Fewer samples in straight regions
+    - maxSpacing ensures minimum sampling density
+    - Reuses Phase 1 sampleAdaptive philosophy
 
-Tests (22 new doctest, 361 total, 3108 assertions):
-  Straight road (6):
-    - Lane +1 at constant -y offset
-    - Lane -1 at constant +y offset
-    - Center lane at reference line
-    - Heading/tangent/normal correct
+Tests (26 new doctest, 387 total, 3492 assertions):
+  Basic sampling (7):
+    - Straight road correct points
+    - Straight road few samples
+    - All points at correct y offset
     - Inner/outer boundary edges
-    - Legacy synthesis (no explicit LaneSection)
-  Arc road (3):
-    - Outer lane has larger radius (left turn)
-    - Right turn reverses inner/outer
-    - Lane offset constant along arc
-  Spiral road (2):
-    - Lane center continuous (no discontinuities)
-    - Left/right symmetric about center
-  Bezier road (2):
-    - Normal direction consistent (unit, perpendicular to tangent)
-    - Lane offset constant
-  Mixed road (2):
-    - Continuous across line→arc boundary
-    - Variable width taper moves center toward reference line
-  evaluateLaneAtOffset (3):
-    - Matches evaluateLaneCenter
-    - Zero offset = reference line
-    - Negative offset = left
-  4-lane road (2):
-    - All lane centers on straight road
-    - All boundaries on straight road
+    - positions() accessor
+    - length() computation
+  Adaptive sampling (3):
+    - Arc produces more samples than straight
+    - Bezier produces more samples than straight
+    - Custom error tolerance affects sample count
+  Continuity (3):
+    - Line→arc continuous
+    - Arc→spiral continuous (computed arc endpoint)
+    - Line→bezier continuous
+  Multi-section (2):
+    - 2→4 lane transition
+    - Lane boundary continuity at section change
+  Legacy (1):
+    - Synthesized lanes sample correctly
+  sampleAll (3):
+    - 2-lane: 6 boundaries, 3 centerlines
+    - 4-lane: 10 boundaries
+  SamplePoint metadata (3):
+    - s values monotonic
+    - heading correct on straight road
+    - laneOffset constant for constant width
   Performance (1):
-    - 1000-segment road, 1000 evaluations (target <2ms release)
-  Multiple sections (1):
-    - Lane count changes at section boundary
+    - 1000-segment road, 8 lanes, 18 polylines
+  Variable width (1):
+    - Tapering lane centerline moves toward reference
+  Edge cases (2):
+    - Empty road returns empty polyline
+    - Single point road
 
+No mesh generation, no markings, no rendering. Those are 2.6+.
 All 130 vitest tests pass (no regression).

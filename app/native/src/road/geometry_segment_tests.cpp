@@ -6151,3 +6151,570 @@ TEST_CASE("2.3 Multiple sections: lane count changes at boundary") {
     CHECK(lane1_s1.laneOffset == doctest::Approx(1.75));
     CHECK(lane1_s2.laneOffset == doctest::Approx(1.75));
 }
+
+// ═══════════════════════════════════════════════════════════
+// Phase 2.4 — Lane Sampling Tests
+// ═══════════════════════════════════════════════════════════
+//
+// Tests for sampleLaneCenter, sampleLaneBoundary, sampleAllBoundaries,
+// sampleAllCenterlines. Uses adaptive sampling with curvature-based
+// refinement.
+// ═══════════════════════════════════════════════════════════
+
+#include "lane_sampling.hpp"
+#include <chrono>
+
+using geo::SamplePoint;
+using geo::LanePolyline;
+using geo::SamplingParams;
+using geo::sampleLaneCenter;
+using geo::sampleLaneBoundary;
+using geo::sampleAllBoundaries;
+using geo::sampleAllCenterlines;
+
+// ═══════════════════════════════════════════════════════════
+// Basic Sampling Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 sampleLaneCenter: straight road produces correct points") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    CHECK(pl.laneId == 1);
+    CHECK(pl.isBoundary == false);
+    CHECK(pl.numPoints() >= 2);
+
+    // First point at s=0
+    CHECK(pl.points[0].s == doctest::Approx(0.0));
+    CHECK(pl.points[0].position.y == doctest::Approx(-1.75));
+
+    // Last point at s=100
+    CHECK(pl.points.back().s == doctest::Approx(100.0));
+    CHECK(pl.points.back().position.x == doctest::Approx(100.0));
+    CHECK(pl.points.back().position.y == doctest::Approx(-1.75));
+}
+
+TEST_CASE("2.4 sampleLaneCenter: straight road needs few samples") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    // Straight line with 10m max spacing → ~17 points for 100m road
+    CHECK(pl.numPoints() <= 25);
+    CHECK(pl.numPoints() >= 2);
+}
+
+TEST_CASE("2.4 sampleLaneCenter: all points at correct y offset") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (const auto& p : pl.points) {
+        CHECK(p.position.y == doctest::Approx(-1.75));
+        CHECK(p.laneOffset == doctest::Approx(1.75));
+    }
+}
+
+TEST_CASE("2.4 sampleLaneBoundary: inner edge at center") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneBoundary(road, 1, false);
+
+    CHECK(pl.laneId == 1);
+    CHECK(pl.isBoundary == true);
+    CHECK(pl.isOuter == false);
+
+    // Inner edge of lane 1 = boundary with center = y=0
+    for (const auto& p : pl.points) {
+        CHECK(p.position.y == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("2.4 sampleLaneBoundary: outer edge at lane edge") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneBoundary(road, 1, true);
+
+    CHECK(pl.isOuter == true);
+
+    // Outer edge of lane 1 = boundary with lane 2 = y=-3.5
+    for (const auto& p : pl.points) {
+        CHECK(p.position.y == doctest::Approx(-3.5));
+    }
+}
+
+TEST_CASE("2.4 LanePolyline: positions() extracts just points") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+    auto pts = pl.positions();
+
+    CHECK(pts.size() == pl.points.size());
+    CHECK(pts[0].y == doctest::Approx(-1.75));
+}
+
+TEST_CASE("2.4 LanePolyline: length() computes total") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+    double len = pl.length();
+
+    // Polyline length should be approximately 100m (horizontal road)
+    CHECK(len == doctest::Approx(100.0).epsilon(0.01));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Adaptive Sampling Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Adaptive: arc road produces more samples than straight") {
+    // Straight road
+    RoadV2 straightRoad = makeStraightRoad(100.0, 3.5);
+    LanePolyline straightPl = sampleLaneCenter(straightRoad, 1);
+
+    // Arc road (high curvature)
+    RoadV2 arcRoad;
+    arcRoad.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.05, 100.0);  // R=20
+    arcRoad.width = 7.0;
+    arcRoad.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    arcRoad.addLaneSection(std::move(ls));
+
+    LanePolyline arcPl = sampleLaneCenter(arcRoad, 1);
+
+    // Arc should need more samples than straight line
+    CHECK(arcPl.numPoints() > straightPl.numPoints());
+}
+
+TEST_CASE("2.4 Adaptive: bezier produces more samples than straight") {
+    RoadV2 straightRoad = makeStraightRoad(100.0, 3.5);
+    LanePolyline straightPl = sampleLaneCenter(straightRoad, 1);
+
+    RoadV2 bezierRoad;
+    bezierRoad.addSegment<BezierSegment>(
+        Point2D(0, 0), Point2D(25, 50), Point2D(75, -50), Point2D(100, 0));
+    bezierRoad.width = 7.0;
+    bezierRoad.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    bezierRoad.addLaneSection(std::move(ls));
+
+    LanePolyline bezierPl = sampleLaneCenter(bezierRoad, 1);
+
+    CHECK(bezierPl.numPoints() > straightPl.numPoints());
+}
+
+TEST_CASE("2.4 Adaptive: custom error tolerance affects sample count") {
+    RoadV2 arcRoad;
+    arcRoad.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.05, 100.0);
+    arcRoad.width = 7.0;
+    arcRoad.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    arcRoad.addLaneSection(std::move(ls));
+
+    // Loose tolerance → fewer samples
+    SamplingParams loose;
+    loose.maxError = 1.0;
+
+    // Tight tolerance → more samples
+    SamplingParams tight;
+    tight.maxError = 0.01;
+
+    LanePolyline loosePl = sampleLaneCenter(arcRoad, 1, loose);
+    LanePolyline tightPl = sampleLaneCenter(arcRoad, 1, tight);
+
+    CHECK(tightPl.numPoints() > loosePl.numPoints());
+}
+
+// ═══════════════════════════════════════════════════════════
+// Continuity Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Continuity: line→arc boundary is continuous") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(50, 0));
+    road.addSegment<ArcSegment>(Point2D(50, 0), 0.0, 0.02, 50.0);
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    // Check no large jumps between consecutive points
+    for (size_t i = 1; i < pl.points.size(); i++) {
+        double dx = pl.points[i].position.x - pl.points[i - 1].position.x;
+        double dy = pl.points[i].position.y - pl.points[i - 1].position.y;
+        double jump = std::hypot(dx, dy);
+        CHECK(jump < 15.0);  // max spacing is 10m, allow tolerance for curvature  // no huge jumps
+    }
+}
+
+TEST_CASE("2.4 Continuity: arc→spiral boundary is continuous") {
+    RoadV2 road;
+    // Arc: start (0,0), heading 0, curvature 0.02, length 50
+    // Endpoint: ~(42.07, 22.99), heading 1.0 rad
+    road.addSegment<ArcSegment>(Point2D(0, 0), 0.0, 0.02, 50.0);
+
+    // Compute arc endpoint for spiral start
+    double arcEndX, arcEndY, arcEndHeading;
+    {
+        // Manually compute: center=(0,50), R=50, startAngle=-PI/2
+        double angle = -M_PI / 2.0 + 0.02 * 50.0;  // -PI/2 + 1.0
+        arcEndX = 0 + 50 * std::cos(angle);
+        arcEndY = 50 + 50 * std::sin(angle);
+        arcEndHeading = 0.0 + 0.02 * 50.0;  // 1.0 rad
+    }
+
+    // Spiral starts at arc endpoint with matching heading and curvature
+    road.addSegment<SpiralSegment>(
+        Point2D(arcEndX, arcEndY), arcEndHeading, 0.02, 0.01, 50.0);
+
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (size_t i = 1; i < pl.points.size(); i++) {
+        double dx = pl.points[i].position.x - pl.points[i - 1].position.x;
+        double dy = pl.points[i].position.y - pl.points[i - 1].position.y;
+        double jump = std::hypot(dx, dy);
+        CHECK(jump < 15.0);  // max spacing is 10m, allow tolerance for curvature
+    }
+}
+
+TEST_CASE("2.4 Continuity: line→bezier boundary is continuous") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(50, 0));
+    // Bezier starts at (50, 0) — position continuous with line
+    road.addSegment<BezierSegment>(
+        Point2D(50, 0), Point2D(75, 20), Point2D(125, 20), Point2D(150, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (size_t i = 1; i < pl.points.size(); i++) {
+        double dx = pl.points[i].position.x - pl.points[i - 1].position.x;
+        double dy = pl.points[i].position.y - pl.points[i - 1].position.y;
+        double jump = std::hypot(dx, dy);
+        CHECK(jump < 15.0);  // max spacing is 10m, allow tolerance for curvature
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Multi-Section Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Multi-section: 2→4 lane transition") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    // Section 1: 2 lanes (s=0 to 100)
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    // Section 2: 4 lanes (s=100 to 200)
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    // Lane 1 exists in both sections
+    LanePolyline lane1 = sampleLaneCenter(road, 1);
+    CHECK(lane1.numPoints() >= 2);
+
+    // Lane 2 only exists in section 2 — should still sample
+    // (offset=0 where it doesn't exist)
+    LanePolyline lane2 = sampleLaneCenter(road, 2);
+    CHECK(lane2.numPoints() >= 2);
+
+    // Lane 1 should be at y=-1.75 throughout
+    for (const auto& p : lane1.points) {
+        CHECK(p.position.y == doctest::Approx(-1.75));
+    }
+}
+
+TEST_CASE("2.4 Multi-section: lane boundary continuity at section change") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(200, 0));
+
+    LaneSection ls1(0.0);
+    ls1.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls1.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls1.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls1));
+
+    LaneSection ls2(100.0);
+    ls2.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls2.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls2.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls2));
+
+    // Sample lane 1 outer boundary — should be continuous
+    LanePolyline boundary = sampleLaneBoundary(road, 1, true);
+
+    // No large jumps
+    for (size_t i = 1; i < boundary.points.size(); i++) {
+        double dx = boundary.points[i].position.x - boundary.points[i - 1].position.x;
+        double dy = boundary.points[i].position.y - boundary.points[i - 1].position.y;
+        double jump = std::hypot(dx, dy);
+        CHECK(jump < 15.0);  // max spacing is 10m, allow tolerance for curvature
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Legacy Synthesis Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Legacy: synthesized lanes sample correctly") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+    // No explicit LaneSection
+
+    LanePolyline center = sampleLaneCenter(road, 0);
+    LanePolyline right = sampleLaneCenter(road, 1);
+    LanePolyline left = sampleLaneCenter(road, -1);
+
+    CHECK(center.numPoints() >= 2);
+    CHECK(right.numPoints() >= 2);
+    CHECK(left.numPoints() >= 2);
+
+    // Center at y=0
+    for (const auto& p : center.points) {
+        CHECK(p.position.y == doctest::Approx(0.0));
+    }
+
+    // Right at y=-1.75
+    for (const auto& p : right.points) {
+        CHECK(p.position.y == doctest::Approx(-1.75));
+    }
+
+    // Left at y=+1.75
+    for (const auto& p : left.points) {
+        CHECK(p.position.y == doctest::Approx(1.75));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// sampleAllBoundaries / sampleAllCenterlines Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 sampleAllBoundaries: 2-lane road produces 6 boundaries") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    auto boundaries = sampleAllBoundaries(road);
+
+    // 3 lanes × 2 boundaries (inner + outer) = 6
+    CHECK(boundaries.size() == 6);
+
+    for (const auto& b : boundaries) {
+        CHECK(b.numPoints() >= 2);
+        CHECK(b.isBoundary == true);
+    }
+}
+
+TEST_CASE("2.4 sampleAllCenterlines: 2-lane road produces 3 centerlines") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    auto centerlines = sampleAllCenterlines(road);
+
+    // 3 lanes (center + left + right)
+    CHECK(centerlines.size() == 3);
+
+    for (const auto& c : centerlines) {
+        CHECK(c.numPoints() >= 2);
+        CHECK(c.isBoundary == false);
+    }
+}
+
+TEST_CASE("2.4 sampleAllBoundaries: 4-lane road produces 10 boundaries") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+    road.width = 14.0;
+    road.laneCount = 4;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-2, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(2, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    auto boundaries = sampleAllBoundaries(road);
+
+    // 5 lanes × 2 = 10
+    CHECK(boundaries.size() == 10);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SamplePoint Metadata Tests
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 SamplePoint: s values are monotonic") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (size_t i = 1; i < pl.points.size(); i++) {
+        CHECK(pl.points[i].s >= pl.points[i - 1].s);
+    }
+}
+
+TEST_CASE("2.4 SamplePoint: heading is correct on straight road") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (const auto& p : pl.points) {
+        CHECK(p.heading == doctest::Approx(0.0));
+    }
+}
+
+TEST_CASE("2.4 SamplePoint: laneOffset is constant for constant width") {
+    RoadV2 road = makeStraightRoad(100.0, 3.5);
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    for (const auto& p : pl.points) {
+        CHECK(p.laneOffset == doctest::Approx(1.75));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Performance Benchmark
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Performance: 1000-segment road, 8 lanes, all boundaries") {
+    // Build a 1000-segment road
+    RoadV2 road;
+    road.reserveSegments(1000);
+    for (int i = 0; i < 1000; i++) {
+        double x1 = i * 10.0;
+        double y1 = (i % 2 == 0) ? 0.0 : 1.0;
+        double x2 = (i + 1) * 10.0;
+        double y2 = (i % 2 == 0) ? 1.0 : 0.0;
+        road.addSegment<LineSegment>(Point2D(x1, y1), Point2D(x2, y2));
+    }
+    road.width = 28.0;
+    road.laneCount = 8;
+
+    // 4 left + center + 4 right = 9 lanes
+    LaneSection ls(0.0);
+    for (int i = 4; i >= 1; i--) {
+        ls.addLane(Lane(-i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    for (int i = 1; i <= 4; i++) {
+        ls.addLane(Lane(i, LaneType::Driving, Polynomial3(3.5)));
+    }
+    road.addLaneSection(std::move(ls));
+
+    auto start = std::chrono::high_resolution_clock::now();
+    auto boundaries = sampleAllBoundaries(road);
+    auto end = std::chrono::high_resolution_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    INFO("9 lanes × 2 boundaries = 18 polylines in " << ms << " ms");
+    CHECK(boundaries.size() == 18);  // 9 lanes × 2
+
+    // Should be well under interactive budget (generous for debug)
+    CHECK(ms < 500.0);
+
+    // Each polyline should have points
+    for (const auto& b : boundaries) {
+        CHECK(b.numPoints() >= 2);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Variable Width Sampling
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Variable width: tapering lane centerline moves toward reference") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(100, 0));
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    // Taper from 3.5 to 0 over 100m: p(ds) = 3.5 - 0.035*ds
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5, -0.035, 0, 0)));
+    road.addLaneSection(std::move(ls));
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+
+    // At s=0: y=-1.75, at s=100: y=0
+    CHECK(pl.points.front().position.y == doctest::Approx(-1.75));
+    CHECK(pl.points.back().position.y == doctest::Approx(0.0));
+
+    // Y should be monotonically increasing (approaching 0)
+    for (size_t i = 1; i < pl.points.size(); i++) {
+        CHECK(pl.points[i].position.y >= pl.points[i - 1].position.y - 0.01);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Edge Cases
+// ═══════════════════════════════════════════════════════════
+
+TEST_CASE("2.4 Edge case: empty road returns empty polyline") {
+    RoadV2 road;  // no segments
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+    CHECK(pl.numPoints() == 0);
+}
+
+TEST_CASE("2.4 Edge case: single point road") {
+    RoadV2 road;
+    road.addSegment<LineSegment>(Point2D(0, 0), Point2D(0.001, 0));
+    road.width = 7.0;
+    road.laneCount = 2;
+
+    LaneSection ls(0.0);
+    ls.addLane(Lane(-1, LaneType::Driving, Polynomial3(3.5)));
+    ls.addLane(Lane(0, LaneType::Border, Polynomial3(0.0)));
+    ls.addLane(Lane(1, LaneType::Driving, Polynomial3(3.5)));
+    road.addLaneSection(std::move(ls));
+
+    LanePolyline pl = sampleLaneCenter(road, 1);
+    CHECK(pl.numPoints() >= 2);  // at least start and end
+}
