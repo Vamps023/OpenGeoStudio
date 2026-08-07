@@ -9,7 +9,7 @@
 import React from 'react';
 import {
   MousePointer2, Spline, PenTool, Undo2, Redo2, Trash2,
-  Check, Mountain, Grid3x3, Magnet, Square, Box,
+  Check, Mountain, Grid3x3, Magnet, Square, Box, GitMerge, X,
 } from 'lucide-react';
 import { useRoadStudioStore } from './store/roadStudioStore';
 import { ROAD_PROFILES } from '../shared/types';
@@ -73,6 +73,10 @@ export const RoadToolbar: React.FC = () => {
   const viewMode = useRoadStudioStore((s) => s.viewMode);
   const setViewMode = useRoadStudioStore((s) => s.setViewMode);
   const setRoadProfile = useRoadStudioStore((s) => s.setRoadProfile);
+  const selectedRoadIds = useRoadStudioStore((s) => s.selectedRoadIds);
+  const toggleRoadSelection = useRoadStudioStore((s) => s.toggleRoadSelection);
+  const clearRoadSelection = useRoadStudioStore((s) => s.clearRoadSelection);
+  const createIntersectionAtClosestPoint = useRoadStudioStore((s) => s.createIntersectionAtClosestPoint);
 
   // Selected control point
   const selectedRoad = roads.find((r) => r.id === selection.roadId);
@@ -229,8 +233,38 @@ export const RoadToolbar: React.FC = () => {
         </>
       )}
 
-      {/* ─── Delete ───────────────────────────── */}
+      {/* ─── Intersection creation ─────────────── */}
       <div className="ml-auto flex items-center gap-1">
+        {selectedRoadIds.length === 1 && (
+          <div className="flex items-center gap-1.5 px-2 h-8 rounded-md bg-accent/10 text-accent border border-accent/30 text-xs">
+            <GitMerge size={14} />
+            <span>Select 2nd road (Shift+Click)</span>
+            <button
+              onClick={clearRoadSelection}
+              className="ml-1 hover:bg-accent/20 rounded p-0.5"
+              title="Cancel"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+        {selectedRoadIds.length === 2 && (
+          <button
+            onClick={() => createIntersectionAtClosestPoint(selectedRoadIds[0], selectedRoadIds[1])}
+            className="flex items-center gap-1.5 px-3 h-8 rounded-md bg-accent/20 text-accent border border-accent/40 text-xs font-medium hover:bg-accent/30 transition-colors"
+            title="Create intersection at closest point between the 2 selected roads"
+          >
+            <GitMerge size={14} />
+            Create Intersection
+          </button>
+        )}
+        {selectedRoadIds.length > 0 && (
+          <IconButton
+            onClick={clearRoadSelection}
+            icon={<X size={16} />}
+            label="Clear road selection"
+          />
+        )}
         {selection.roadId && (
           <IconButton
             onClick={() => {

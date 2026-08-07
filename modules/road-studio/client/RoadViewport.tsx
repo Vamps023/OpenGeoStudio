@@ -65,6 +65,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   });
   const roadsRef = useRef<Road[]>([]);
   const intersectionsRef = useRef<Intersection[]>([]);
+  const selectedRoadIdsRef = useRef<string[]>([]);
   const refLatRef = useRef(18.52);
   const refLonRef = useRef(73.85);
   const gridSizeRef = useRef(10);
@@ -83,6 +84,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
   useEffect(() => { toolRef.current = store.tool; }, [store.tool]);
   useEffect(() => { selectionRef.current = store.selection; }, [store.selection]);
+  useEffect(() => { selectedRoadIdsRef.current = store.selectedRoadIds; updateAllViews(); }, [store.selectedRoadIds]);
   useEffect(() => {
     roadsRef.current = store.roads;
     // Recompute intersections whenever roads change
@@ -322,7 +324,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       const surfaceSrcId = `rd-surface-src-${road.id}`;
       map.addSource(surfaceSrcId, {
         type: 'geojson',
-        data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: roadPolygon } },
+        data: { type: 'Feature', properties: { roadId: road.id, name: road.name }, geometry: { type: 'Polygon', coordinates: roadPolygon } },
       });
       map.addLayer({
         id: `rd-surface-${road.id}`,
@@ -332,6 +334,24 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
           'fill-color': '#3a3a3a',
           'fill-opacity': 0.9,
         },
+      });
+
+      // Shift+click on road surface = toggle road selection (for intersection)
+      map.on('click', `rd-surface-${road.id}`, (e: any) => {
+        if (e.originalEvent.shiftKey) {
+          e.originalEvent.stopPropagation();
+          const feature = e.features?.[0];
+          if (feature) {
+            const rid = feature.properties.roadId;
+            store.toggleRoadSelection(rid);
+          }
+        }
+      });
+      map.on('mouseenter', `rd-surface-${road.id}`, () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', `rd-surface-${road.id}`, () => {
+        map.getCanvas().style.cursor = '';
       });
 
       // ─── Layer 4: Road outline (thin line on edges) ────────────
@@ -430,6 +450,28 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             'line-color': '#4ecca3',
             'line-width': 2,
             'line-opacity': 0.8,
+          },
+        });
+      }
+
+      // ─── Multi-selection highlight (blue, for intersection creation) ──
+      if (selectedRoadIdsRef.current.includes(road.id)) {
+        const msHalf = halfWidth + 2;
+        const msPolygon = buildRoadPolygon(samples, msHalf);
+        const msSrcId = `rd-msel-src-${road.id}`;
+        map.addSource(msSrcId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: msPolygon } },
+        });
+        map.addLayer({
+          id: `rd-msel-${road.id}`,
+          type: 'line',
+          source: msSrcId,
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#3b82f6',
+            'line-width': 3,
+            'line-opacity': 0.9,
           },
         });
       }
@@ -767,12 +809,19 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         const button = (evt as any).button;
         const pickResult = scene.pick(scene.pointerX, scene.pointerY, (m) => m.metadata?.type === 'control-point' || m.metadata?.type === 'handle');
         const groundPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === ground);
+        // Also try picking road meshes (for shift+click intersection selection)
+        const roadPick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.name?.startsWith('road_'));
         lastX = evt.clientX; lastY = evt.clientY;
 
         if (button === 1) { isMiddleDown = true; dragStateRef.current.mode = 'rotate'; }
         else if (button === 2) { dragStateRef.current.mode = 'pan'; }
         else if (button === 0) {
-          if (pickResult?.hit && pickResult.pickedMesh?.metadata?.type === 'control-point') {
+          // Shift+click on road mesh = toggle road selection (for intersection)
+          if ((evt as any).shiftKey && roadPick?.hit && roadPick.pickedMesh) {
+            const roadName = roadPick.pickedMesh.name; // "road_<id>"
+            const roadId = roadName.replace('road_', '');
+            store.toggleRoadSelection(roadId);
+          } else if (pickResult?.hit && pickResult.pickedMesh?.metadata?.type === 'control-point') {
             const meta = pickResult.pickedMesh.metadata;
             dragStateRef.current = { mode: 'move-point', roadId: meta.roadId, pointIndex: meta.pointIndex, handle: null };
             store.setSelection({ roadId: meta.roadId, pointIndices: [meta.pointIndex], handle: null });
@@ -1047,7 +1096,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       roadMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
       roadMat.specularColor = new Color3(0.05, 0.05, 0.05);
       roadMesh.material = roadMat;
-      roadMesh.isPickable = false;
+      roadMesh.isPickable = true; // Enable picking for shift+click road selection
       roadMeshesRef.current.set(road.id, roadMesh);
 
       // ─── Center line marking (dashed yellow) ──────────────────

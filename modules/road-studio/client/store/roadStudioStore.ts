@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection } from '../../shared/types';
-import { generateId, ROAD_PROFILES, detectIntersections } from '../../shared/types';
+import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo } from '../../shared/types';
 
 interface RoadStudioState {
   /** All roads in the project */
@@ -16,6 +16,8 @@ interface RoadStudioState {
   tool: Tool;
   /** Current selection */
   selection: Selection;
+  /** Multi-selected road IDs (for intersection creation, etc.) */
+  selectedRoadIds: string[];
   /** Reference origin (lat/lon) for local coordinate conversion */
   refLat: number;
   refLon: number;
@@ -104,6 +106,15 @@ interface RoadStudioState {
   /** Recompute intersections from current roads */
   recomputeIntersections: () => void;
 
+  /** Toggle a road in multi-selection (shift-click) */
+  toggleRoadSelection: (roadId: string) => void;
+
+  /** Clear multi-selection */
+  clearRoadSelection: () => void;
+
+  /** Manually create an intersection between 2 roads at their closest point */
+  createIntersectionAtClosestPoint: (roadId1: string, roadId2: string) => void;
+
   /** Get the currently drawing road */
   getDrawingRoad: () => Road | null;
 }
@@ -120,6 +131,7 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
   roads: [],
   tool: 'select',
   selection: { roadId: null, pointIndices: [], handle: null },
+  selectedRoadIds: [],
   refLat: 18.52,
   refLon: 73.85,
   defaultWidth: 8,
@@ -440,6 +452,120 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     const state = get();
     const intersections = detectIntersections(state.roads);
     set({ intersections });
+  },
+
+  toggleRoadSelection: (roadId) => {
+    const state = get();
+    if (state.selectedRoadIds.includes(roadId)) {
+      // Remove if already selected
+      set({ selectedRoadIds: state.selectedRoadIds.filter((id) => id !== roadId) });
+    } else {
+      // Add (limit to 2 for intersection creation)
+      set({ selectedRoadIds: [...state.selectedRoadIds, roadId].slice(-2) });
+    }
+  },
+
+  clearRoadSelection: () => set({ selectedRoadIds: [] }),
+
+  createIntersectionAtClosestPoint: (roadId1, roadId2) => {
+    const state = get();
+    const road1 = state.roads.find((r) => r.id === roadId1);
+    const road2 = state.roads.find((r) => r.id === roadId2);
+    if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return;
+
+    // Sample both roads
+    const samples1 = sampleRoad(road1, state.refLat, state.refLon, 16);
+    const samples2 = sampleRoad(road2, state.refLat, state.refLon, 16);
+
+    // Find the closest pair of points between the two roads
+    let minDist = Infinity;
+    let bestS1 = samples1[0];
+    let bestS2 = samples2[0];
+    let bestIdx1 = 0;
+    let bestIdx2 = 0;
+
+    for (let i = 0; i < samples1.length; i++) {
+      for (let j = 0; j < samples2.length; j++) {
+        const dx = samples1[i].x - samples2[j].x;
+        const dy = samples1[i].y - samples2[j].y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < minDist) {
+          minDist = d;
+          bestS1 = samples1[i];
+          bestS2 = samples2[j];
+          bestIdx1 = i;
+          bestIdx2 = j;
+        }
+      }
+    }
+
+    // Intersection center = midpoint of closest points
+    const centerLat = (bestS1.x + bestS2.x) / 2;
+    const centerLon = (bestS1.y + bestS2.y) / 2;
+    const centerZ = (bestS1.z + bestS2.z) / 2;
+
+    // Convert local meters back to lat/lon
+    const geo = localToGeo(centerLat, centerLon, state.refLat, state.refLon);
+
+    // Determine which end of each road is closest to the intersection
+    const dist1Start = Math.sqrt(
+      (samples1[0].x - centerLat) ** 2 + (samples1[0].y - centerLon) ** 2
+    );
+    const dist1End = Math.sqrt(
+      (samples1[samples1.length - 1].x - centerLat) ** 2 +
+      (samples1[samples1.length - 1].y - centerLon) ** 2
+    );
+    const dist2Start = Math.sqrt(
+      (samples2[0].x - centerLat) ** 2 + (samples2[0].y - centerLon) ** 2
+    );
+    const dist2End = Math.sqrt(
+      (samples2[samples2.length - 1].x - centerLat) ** 2 +
+      (samples2[samples2.length - 1].y - centerLon) ** 2
+    );
+
+    const end1 = dist1Start < dist1End ? 'start' : 'end';
+    const end2 = dist2Start < dist2End ? 'start' : 'end';
+
+    // Create the intersection
+    const newIntersection: Intersection = {
+      id: `ix_${generateId()}`,
+      name: `Intersection ${state.intersections.length + 1}`,
+      lat: geo.lat,
+      lon: geo.lon,
+      z: centerZ,
+      connections: [
+        { roadId: roadId1, end: end1 },
+        { roadId: roadId2, end: end2 },
+      ],
+      bannedLinks: [],
+      autoDetected: false,
+    };
+
+    // Also update the road endpoints to actually meet at the intersection
+    // (snap the closest endpoint to the intersection center)
+    const snapEndpoint = (road: Road, end: 'start' | 'end', lat: number, lon: number, z: number): Road => {
+      const points = [...road.points];
+      if (end === 'start') {
+        points[0] = { ...points[0], lat, lon, z };
+      } else {
+        points[points.length - 1] = { ...points[points.length - 1], lat, lon, z };
+      }
+      return { ...road, points };
+    };
+
+    const updatedRoads = state.roads.map((r) => {
+      if (r.id === roadId1) return snapEndpoint(r, end1, geo.lat, geo.lon, centerZ);
+      if (r.id === roadId2) return snapEndpoint(r, end2, geo.lat, geo.lon, centerZ);
+      return r;
+    });
+
+    get().pushHistory('Create intersection');
+    set({
+      roads: updatedRoads,
+      intersections: [...state.intersections, newIntersection],
+      selectedRoadIds: [],
+      selection: { roadId: null, pointIndices: [], handle: null },
+    });
   },
 
   getDrawingRoad: () => {
