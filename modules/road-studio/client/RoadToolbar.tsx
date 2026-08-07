@@ -266,8 +266,8 @@ export const RoadToolbar: React.FC = () => {
         )}
         {selectedRoadIds.length === 2 && (
           <button
-            onClick={() => {
-              const success = detectIntersection(selectedRoadIds[0], selectedRoadIds[1]);
+            onClick={async () => {
+              const success = await detectIntersection(selectedRoadIds[0], selectedRoadIds[1]);
               if (!success) {
                 alert('No intersection found between the selected roads. Make sure their centerlines cross or come close together.');
               }

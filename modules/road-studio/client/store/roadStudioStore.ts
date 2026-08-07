@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection, Point2D, CircleArc } from '../../shared/types';
 import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal, computeCircleArc } from '../../shared/types';
+import { roadEngine } from '../../shared/roadEngineClient';
 
 /** Compute tangent direction at a sample index */
 function computeTangentAtSamples(samples: Array<{ x: number; y: number; z: number }>, idx: number): Point2D {
@@ -155,7 +156,7 @@ interface RoadStudioState {
   createIntersectionAtClosestPoint: (roadId1: string, roadId2: string) => void;
 
   /** Detect intersection between 2 roads (full algorithm: split, trim, generate) */
-  detectIntersection: (roadId1: string, roadId2: string) => boolean;
+  detectIntersection: (roadId1: string, roadId2: string) => Promise<boolean>;
 
   /** Get the currently drawing road */
   getDrawingRoad: () => Road | null;
@@ -675,14 +676,20 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
     });
   },
 
-  detectIntersection: (roadId1, roadId2) => {
+  detectIntersection: async (roadId1, roadId2) => {
     const state = get();
     const road1 = state.roads.find((r) => r.id === roadId1);
     const road2 = state.roads.find((r) => r.id === roadId2);
     if (!road1 || !road2 || road1.points.length < 2 || road2.points.length < 2) return false;
 
-    // Run the full intersection generation algorithm
-    const generated = generateIntersection(road1, road2, state.refLat, state.refLon);
+    // Run the full intersection generation algorithm via C++ engine (or TS fallback)
+    let generated: GeneratedIntersection | null;
+    try {
+      generated = await roadEngine.generateIntersection(road1, road2, state.refLat, state.refLon);
+    } catch {
+      // Fallback to TypeScript implementation if C++ engine fails
+      generated = generateIntersection(road1, road2, state.refLat, state.refLon);
+    }
     if (!generated) return false;
 
     // Step 3 (split): Split each road into two halves at the intersection,

@@ -10,7 +10,8 @@
  *   const intersection = await roadEngine.generateIntersection(road1, road2, refLat, refLon);
  */
 
-import type { Road, GeneratedIntersection, CircleArc } from './types';
+import type { Road, GeneratedIntersection, CircleArc, ControlPoint } from './types';
+import { geoToLocal as tsGeoToLocal, localToGeo as tsLocalToGeo } from './types';
 
 // ─── Global window type augmentation ───────────────────────
 declare global {
@@ -26,6 +27,54 @@ declare global {
       };
     };
   }
+}
+
+// ─── Road format conversion (TS lat/lon → C++ local x/y) ──
+interface CppControlPoint {
+  x: number;
+  y: number;
+  z: number;
+  type: string;
+  handleIn: { x: number; y: number } | null;
+  handleOut: { x: number; y: number } | null;
+}
+
+interface CppRoad {
+  id: string;
+  name: string;
+  width: number;
+  laneCount: number;
+  points: CppControlPoint[];
+}
+
+/** Convert a TS Road (lat/lon) to C++ Road format (local x/y meters) */
+function toCppRoad(road: Road, refLat: number, refLon: number): CppRoad {
+  return {
+    id: road.id,
+    name: road.name,
+    width: road.width,
+    laneCount: road.laneCount,
+    points: road.points.map((cp) => {
+      const local = tsGeoToLocal(cp.lat, cp.lon, refLat, refLon);
+      const cppCp: CppControlPoint = {
+        x: local.x,
+        y: local.y,
+        z: cp.z,
+        type: cp.type,
+        handleIn: null,
+        handleOut: null,
+      };
+      if (cp.handleIn) {
+        const hLocal = tsGeoToLocal(cp.lat + cp.handleIn.lat, cp.lon + cp.handleIn.lon, refLat, refLon);
+        cppCp.handleIn = { x: hLocal.x - local.x, y: hLocal.y - local.y };
+      }
+      if (cp.handleOut) {
+        const hLocal = tsGeoToLocal(cp.lat + cp.handleOut.lat, cp.lon + cp.handleOut.lon, refLat, refLon);
+        cppCp.handleOut = { x: hLocal.x - local.x, y: hLocal.y - local.y };
+      }
+      return cppCp;
+    }),
+  };
 }
 
 // ─── Type definitions for the C++ addon return types ───────
@@ -67,7 +116,9 @@ class NativeRoadEngine implements RoadEngineAPI {
   }
 
   async generateIntersection(road1: Road, road2: Road, refLat: number, refLon: number): Promise<GeneratedIntersection> {
-    return this.api.generateIntersection(road1, road2, refLat, refLon) as Promise<GeneratedIntersection>;
+    const cppRoad1 = toCppRoad(road1, refLat, refLon);
+    const cppRoad2 = toCppRoad(road2, refLat, refLon);
+    return this.api.generateIntersection(cppRoad1, cppRoad2, refLat, refLon) as Promise<GeneratedIntersection>;
   }
 
   async computeCircleArc(
@@ -80,7 +131,13 @@ class NativeRoadEngine implements RoadEngineAPI {
   }
 
   async sampleCenterline(road: Road, numSamples?: number): Promise<Array<{ x: number; y: number }>> {
-    return this.api.sampleCenterline(road, numSamples) as Promise<Array<{ x: number; y: number }>>;
+    // Convert road to C++ format using 0,0 as reference (points are already in local if pre-converted)
+    // For the general case, we need refLat/refLon — but sampleCenterline is mainly used internally
+    // with already-converted roads. If the road has lat/lon points, convert them.
+    const refLat = 0;
+    const refLon = 0;
+    const cppRoad = toCppRoad(road, refLat, refLon);
+    return this.api.sampleCenterline(cppRoad, numSamples) as Promise<Array<{ x: number; y: number }>>;
   }
 
   async geoToLocal(lat: number, lon: number, refLat: number, refLon: number): Promise<{ x: number; y: number }> {
@@ -120,8 +177,6 @@ import {
   generateIntersection as tsGenerateIntersection,
   computeCircleArc as tsComputeCircleArc,
   sampleRoad as tsSampleRoad,
-  geoToLocal as tsGeoToLocal,
-  localToGeo as tsLocalToGeo,
 } from './types';
 
 class TypeScriptRoadEngineFallback implements RoadEngineAPI {

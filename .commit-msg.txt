@@ -1,0 +1,12 @@
+Phase 3: Migrate store to call C++ via IPC
+
+- detectIntersection() is now async, calls C++ roadEngine.generateIntersection()
+- Falls back to TypeScript generateIntersection() if C++ engine unavailable
+- roadEngineClient.ts: Added toCppRoad() conversion (lat/lon to local x/y)
+- RoadToolbar.tsx: Updated onClick handler to be async
+- Both builds pass (electron + vite)
+- All 7 tests pass
+
+Generated with Devin (https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>
