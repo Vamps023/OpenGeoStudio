@@ -713,6 +713,49 @@ describeIfAddon('C++ Geometry Algorithm Unit Tests', () => {
     }
   });
 
+  it('intersection polygon: should extend to road boundaries (not just center)', () => {
+    // Two perpendicular 8m-wide roads crossing at origin
+    const road1 = {
+      id: 'r1', width: 8, laneCount: 2,
+      points: [{ x: -50, y: 0, z: 0, type: 'corner' }, { x: 50, y: 0, z: 0, type: 'corner' }],
+    };
+    const road2 = {
+      id: 'r2', width: 8, laneCount: 2,
+      points: [{ x: 0, y: -50, z: 0, type: 'corner' }, { x: 0, y: 50, z: 0, type: 'corner' }],
+    };
+    const ix = addon.roadGenerateIntersection(road1, road2, 37.7749, -122.4194);
+    expect(ix.polygon.length).toBeGreaterThanOrEqual(4);
+
+    // Compute polygon area via shoelace formula
+    let area = 0;
+    for (let i = 0; i < ix.polygon.length; i++) {
+      const j = (i + 1) % ix.polygon.length;
+      area += ix.polygon[i].x * ix.polygon[j].y - ix.polygon[j].x * ix.polygon[i].y;
+    }
+    area = Math.abs(area / 2);
+
+    // For a perpendicular intersection of two 8m roads with corner radius R:
+    // The polygon should span at least 8m × 8m = 64m²
+    // With fillets, it should be larger
+    // The old "star" polygon had area ~20-30m²
+    // The correct polygon should have area > 64m²
+    expect(area).toBeGreaterThan(50);
+
+    // The polygon should extend at least ±4m (halfWidth) from center
+    let maxX = 0, maxY = 0, minX = 0, minY = 0;
+    for (const p of ix.polygon) {
+      maxX = Math.max(maxX, p.x);
+      minX = Math.min(minX, p.x);
+      maxY = Math.max(maxY, p.y);
+      minY = Math.min(minY, p.y);
+    }
+    // Should extend at least 4m in each direction (halfWidth = 4)
+    expect(maxX).toBeGreaterThan(3);
+    expect(maxY).toBeGreaterThan(3);
+    expect(minX).toBeLessThan(-3);
+    expect(minY).toBeLessThan(-3);
+  });
+
   it('mesh generation: should produce consistent winding', () => {
     const road = {
       id: 'winding-test', width: 8, laneCount: 2,

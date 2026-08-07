@@ -106,6 +106,23 @@ inline std::vector<Point2D> buildApproachCenterline(
 }
 
 // ─── Generate edge-based polygon ───────────────────────────
+// Builds the intersection polygon from road boundary intersections.
+//
+// Algorithm:
+// 1. For each approach, compute the left and right edge lines (infinite lines
+//    along the road direction, offset by ±halfWidth from the centerline)
+// 2. Sort approaches by angle around the center
+// 3. For each pair of adjacent approaches (i, i+1):
+//    a. Find the corner = intersection of right edge line of approach i
+//       and left edge line of approach i+1
+//    b. Compute a fillet arc at the corner
+// 4. Build the polygon as:
+//    - Right edge of approach i at trim line
+//    - Along right edge toward center → to corner
+//    - Fillet arc at corner
+//    - Along left edge of approach i+1 from corner → to trim line
+//    - Straight across the road (left edge to right edge at trim line)
+//    - Repeat for next pair
 inline std::vector<Point2D> generateEdgeBasedPolygon(
     const std::vector<ApproachRoad>& approaches,
     const Point2D& center,
@@ -113,40 +130,49 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
 ) {
     if (approaches.size() < 2) return {};
 
-    struct EdgeInfo {
+    struct ApproachEdges {
         const ApproachRoad* approach;
         double angle;
-        Point2D leftEdge;
-        Point2D rightEdge;
+        // Edge points at the trim line (approach start)
+        Point2D leftEdgeAtTrim;
+        Point2D rightEdgeAtTrim;
+        // Edge direction (infinite line direction)
         Vec2 tangent;
         Vec2 normal;
         double halfWidth;
     };
 
-    std::vector<EdgeInfo> edges;
+    std::vector<ApproachEdges> edges;
 
     for (const auto& approach : approaches) {
         if (approach.centerline.size() < 2) continue;
 
-        Point2D edgePt = approach.centerline[0];
+        // The approach centerline goes from trim line → toward center
+        // First point is at trim line, last point is closest to center
+        Point2D trimPt = approach.centerline[0];
+        // Direction from trim toward center
         Vec2 tangent = (approach.centerline[1] - approach.centerline[0]).normalized();
-        Vec2 normal = tangent.perp();
+        Vec2 normal = tangent.perp();  // left normal
         double halfW = approach.width / 2.0;
+
+        // Left and right edge points at the trim line
+        Point2D leftAtTrim = {trimPt.x + normal.x * halfW, trimPt.y + normal.y * halfW};
+        Point2D rightAtTrim = {trimPt.x - normal.x * halfW, trimPt.y - normal.y * halfW};
 
         edges.push_back({
             &approach,
             std::atan2(tangent.y, tangent.x),
-            {edgePt.x + normal.x * halfW, edgePt.y + normal.y * halfW},
-            {edgePt.x - normal.x * halfW, edgePt.y - normal.y * halfW},
+            leftAtTrim,
+            rightAtTrim,
             tangent, normal, halfW
         });
     }
 
     if (edges.size() < 2) return {};
 
-    // Sort by angle
+    // Sort by angle (CCW order around center)
     std::sort(edges.begin(), edges.end(),
-              [](const EdgeInfo& a, const EdgeInfo& b) { return a.angle < b.angle; });
+              [](const ApproachEdges& a, const ApproachEdges& b) { return a.angle < b.angle; });
 
     // Build polygon
     std::vector<Point2D> polygon;
@@ -156,47 +182,75 @@ inline std::vector<Point2D> generateEdgeBasedPolygon(
         const auto& current = edges[i];
         const auto& next = edges[(i + 1) % edges.size()];
 
-        // Corner = intersection of right edge line of current and left edge line of next
-        Point2D corner = lineIntersection(current.rightEdge, current.tangent,
-                                           next.leftEdge, next.tangent);
+        // ─── Corner = intersection of right edge line of current
+        //     and left edge line of next ──────────────────────
+        // Right edge line of current: passes through rightEdgeAtTrim, direction = tangent
+        // Left edge line of next: passes through leftEdgeAtTrim, direction = tangent
+        Point2D corner = lineIntersection(current.rightEdgeAtTrim, current.tangent,
+                                           next.leftEdgeAtTrim, next.tangent);
 
-        // Add right edge of current approach
-        polygon.push_back(current.rightEdge);
+        // ─── Add polygon vertices ─────────────────────────────
+        // 1. Right edge of current approach at trim line
+        polygon.push_back(current.rightEdgeAtTrim);
 
         if (isValid(corner)) {
-            // Check if corner is reasonable (not too far from center)
             double cornerDist = corner.distanceTo(center);
-            double maxCornerDist = 100.0;  // sanity limit
+            double maxCornerDist = 200.0;  // sanity limit
 
             if (cornerDist < maxCornerDist) {
-                Vec2 dirIn = (current.rightEdge - corner).normalized();
-                Vec2 dirOut = (next.leftEdge - corner).normalized();
-                double lenIn = current.rightEdge.distanceTo(corner);
-                double lenOut = next.leftEdge.distanceTo(corner);
-                double r = std::min({cornerRadius, lenIn * 0.9, lenOut * 0.9});
+                // 2. Corner point (boundary intersection)
+                // Check if corner is between trim line and center (along the edge)
+                double distTrimToCorner = current.rightEdgeAtTrim.distanceTo(corner);
+                double distTrimToCenter = current.rightEdgeAtTrim.distanceTo(
+                    {center.x + current.normal.x * current.halfWidth,
+                     center.y + current.normal.y * current.halfWidth});
 
-                if (r > 0.1) {
-                    auto arc = filletArc(corner, dirIn, dirOut, r, filletSegments);
-                    for (size_t j = 1; j < arc.size() - 1; j++) {
-                        polygon.push_back(arc[j]);
+                // Only add corner if it's reasonable
+                if (distTrimToCorner < distTrimToCenter * 3.0) {
+                    // 3. Fillet arc at corner
+                    Vec2 dirIn = (current.rightEdgeAtTrim - corner).normalized();
+                    Vec2 dirOut = (next.leftEdgeAtTrim - corner).normalized();
+                    double lenIn = current.rightEdgeAtTrim.distanceTo(corner);
+                    double lenOut = next.leftEdgeAtTrim.distanceTo(corner);
+                    double r = std::min({cornerRadius, lenIn * 0.9, lenOut * 0.9});
+
+                    if (r > 0.1) {
+                        auto arc = filletArc(corner, dirIn, dirOut, r, filletSegments);
+                        // Add arc points (excluding endpoints which are the corner itself)
+                        for (size_t j = 1; j < arc.size() - 1; j++) {
+                            polygon.push_back(arc[j]);
+                        }
+                    } else {
+                        // Sharp corner — just add the corner point
+                        polygon.push_back(corner);
                     }
                 }
             }
-            // If corner is invalid/too far, just connect directly (sharp corner)
         }
 
-        // Add left edge of next approach
-        polygon.push_back(next.leftEdge);
+        // 4. Left edge of next approach at trim line
+        polygon.push_back(next.leftEdgeAtTrim);
+
+        // 5. Straight across the road at trim line (left → right of next)
+        // This connects the left edge to the right edge of the same approach
+        // (the road continues beyond the intersection)
+        polygon.push_back(next.rightEdgeAtTrim);
     }
 
-    // Validate polygon: remove duplicate consecutive points
+    // Remove the last point if it duplicates the first
+    // (the loop adds rightEdgeAtTrim of the last approach, which connects back)
+    if (polygon.size() > 1 && polygon.front().distanceTo(polygon.back()) < EPSILON) {
+        polygon.pop_back();
+    }
+
+    // Clean: remove duplicate consecutive points
     std::vector<Point2D> cleaned;
     for (const auto& p : polygon) {
         if (cleaned.empty() || p.distanceTo(cleaned.back()) > EPSILON) {
             cleaned.push_back(p);
         }
     }
-    // Check first/last duplicate
+    // Check first/last duplicate again after cleaning
     if (cleaned.size() > 1 && cleaned.front().distanceTo(cleaned.back()) < EPSILON) {
         cleaned.pop_back();
     }
@@ -300,12 +354,26 @@ inline GeneratedIntersection generateIntersection(
     double halfAngle = angleBetweenVal / 2.0;
 
     // Step 4: Trim distances
+    // The trim distance is how far from the center each road is cut.
+    // It must be large enough that the road edges clear the intersection polygon.
+    // Formula: trimDist = halfWidth_other / sin(angle) + cornerRadius / tan(halfAngle)
+    // Simplified: trimDist = halfWidth_other + cornerRadius * tan(halfAngle)
+    // But we also need to account for the road's own halfWidth.
     double halfW1 = road1.width / 2.0;
     double halfW2 = road2.width / 2.0;
     double maxHalfW = std::max(halfW1, halfW2);
-    double cornerRadius = std::min(maxHalfW, 5.0);
-    double trimDist1 = halfW2 + cornerRadius * std::tan(halfAngle);
-    double trimDist2 = halfW1 + cornerRadius * std::tan(halfAngle);
+    // Corner radius: use the smaller halfWidth, clamped to [3, 15]
+    double cornerRadius = std::clamp(std::min(halfW1, halfW2), 3.0, 15.0);
+    // For perpendicular roads (90°), tan(45°) = 1, so trimDist = halfW + R
+    // For acute angles, tan(halfAngle) is larger, so trimDist is larger
+    double tanHalf = std::tan(halfAngle);
+    if (tanHalf > 10.0) tanHalf = 10.0;  // clamp for very acute angles
+    double trimDist1 = halfW2 + cornerRadius * tanHalf;
+    double trimDist2 = halfW1 + cornerRadius * tanHalf;
+    // Ensure minimum trim distance
+    double minTrim = maxHalfW + cornerRadius;
+    trimDist1 = std::max(trimDist1, minTrim);
+    trimDist2 = std::max(trimDist2, minTrim);
 
     // Step 5: Build approaches
     auto r1Start = buildApproachCenterline(s1, center, idx1, trimDist1, true);

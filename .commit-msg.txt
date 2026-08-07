@@ -1,59 +1,48 @@
-Stabilize geometry engine: fix mesh, tools, intersection, pipeline
+Add Geometry Debug Mode and polygon validation
 
-Major stabilization effort across the entire geometry pipeline.
+Implements the geometry audit and debug visualization system requested
+for stabilizing the geometry engine.
 
-C++ Engine Fixes:
-- offsetPolyline: replaced simple perpendicular offset with miter-joint
-  algorithm (correct for curves, prevents edge self-intersection)
-- triangulatePolygon: added winding order normalization (handles both
-  CCW and CW polygons via shoelace formula)
-- generateRoadMesh: miter-joint edge offsets, arc-length UV mapping
-  (tiles every 10m), proper vertex/index counts
-- generateIntersectionMesh: local UV mapping (bounding box based)
-  instead of world-space
-- sampleCenterline: arc-length parameterization (uniform sample density
-  regardless of segment curvature)
-- sampleCenterline3D: z interpolation by arc length, not by sample index
-- buildApproachCenterline: fixed gap issue, always produces valid trim
-  point at exact trimDist from center
-- generateEdgeBasedPolygon: added corner distance validation, duplicate
-  point cleanup
-- MeshData struct: added vertexCount, indexCount, triangleCount fields
-- generateLaneBoundaries: new function for lane boundary polylines
+Geometry Debug Mode (Ctrl+Shift+G):
+- Toggleable debug overlays in the map viewport
+- 14 individual layer toggles in the toolbar:
+  centerline, leftEdge, rightEdge, laneBoundaries, offsetCurves,
+  roadPolygon, filletArcs, tangentPoints, trimPoints,
+  intersectionPolygon, triangulation, vertexNormals, uvGrid,
+  samplePoints
+- Color-coded overlays:
+  - Cyan: centerline, tangent points
+  - Green: left edge
+  - Red: right edge, trim points
+  - Orange: lane boundaries, fillet arcs
+  - Blue: road polygon
+  - Magenta: intersection polygon, triangulation
+  - Yellow: sample points
+- Debug button in toolbar with layer toggle chips
 
-Build Fix:
-- build:electron script now copies native addon to dist-electron/native/
-  (was missing, causing "addon not available" error at runtime)
-
-Tool Implementation (RoadViewport.tsx):
-- All 6 tools now have click handlers: Segment, Arc, Clothoid, Polyline,
-  Bezier, Spline
-- Real-time preview for all tools (line-to-cursor, arc, clothoid,
-  polyline points, spline points)
-- Right-click to finish drawing (SCANeR-style)
-- Escape to cancel any in-progress operation
-- Enter to finish current operation
-- Snapping helper for all tools
+C++ Polygon Validation (geometry.hpp):
+- validatePolygon(): checks for duplicate vertices, self-intersections,
+  zero-length edges, invalid winding, degenerate area
+- cleanPolygon(): removes duplicate consecutive vertices
+- PolygonValidationResult struct with detailed diagnostics
+- Integrated into intersection generation (validates + cleans polygon)
 
 Store (roadStudioStore.ts):
-- New state: previewPoint, clothoidPreview, polylinePoints, splinePoints
-- New actions: setPreviewPoint, startClothoid/updateClothoidPreview/
-  finishClothoid/cancelClothoid, startPolyline/addPolylinePoint/
-  finishPolyline/cancelPolyline, startSpline/addSplinePoint/
-  finishSpline/cancelSpline, cancelDrawing
-- Fixed addControlPoint: now selects the newly added point (was always
-  selecting point 0)
-- All new tool actions use C++ engine for geometry computation
+- New state: debugMode, debugLayers (14 toggles)
+- New actions: toggleDebugMode, toggleDebugLayer, setDebugMode
 
-Tests: 28/28 pass (20 existing + 8 new validation tests)
-- Miter-joint edge generation
-- Arc-length UV mapping
-- CW polygon triangulation
-- CCW polygon triangulation
-- Arc-length sample distribution
-- Arc-length z interpolation
-- Intersection polygon no duplicate points
-- Multi-lane road mesh vertex count
+Tests: 40/40 pass (28 existing + 12 new algorithm unit tests)
+- Line intersection (parallel, perpendicular)
+- Offset (curved road edges, no self-intersection)
+- Trim (correct distance from center)
+- Fillet (smooth corners in intersection polygon)
+- Circle arc (smooth curve, finite points)
+- Clothoid (continuous curvature)
+- Bezier (passes through endpoints)
+- Polygon validation (no duplicate points)
+- Mesh winding (consistent CCW)
+- Mesh normals (all pointing up)
+- UV mapping (tiles every 10m)
 
 Generated with Devin (https://devin.ai)
 

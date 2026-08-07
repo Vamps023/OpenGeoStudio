@@ -1451,24 +1451,74 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
 
       // Intersection debug overlays
       for (const gen of genIntersections) {
-        // Intersection polygon (magenta)
+        const ixId = `${gen.center.x.toFixed(0)}-${gen.center.y.toFixed(0)}`;
+
+        // Intersection polygon (magenta fill + outline)
         if (dbg.intersectionPolygon && gen.polygon.length >= 3) {
-          addDbgPolygon(`ix-poly-${gen.center.x}-${gen.center.y}`, gen.polygon, '#ff00ff', 0.2);
+          addDbgPolygon(`ix-poly-${ixId}`, gen.polygon, '#ff00ff', 0.2);
         }
 
-        // Trim points (red squares)
+        // Trim points (large red circles at approach start/end)
         if (dbg.trimPoints) {
           const trimPts: Array<{ x: number; y: number }> = [];
           for (const approach of gen.approaches) {
             if (approach.centerline.length >= 2) {
+              // Start = trim line, End = near center
               trimPts.push(approach.centerline[0]);
-              trimPts.push(approach.centerline[approach.centerline.length - 1]);
             }
           }
-          addDbgCircles(`ix-trim-${gen.center.x}-${gen.center.y}`, trimPts, '#ff0000', 5);
+          addDbgCircles(`ix-trim-${ixId}`, trimPts, '#ff0000', 6);
         }
 
-        // Tangent points (cyan dots at approach edges)
+        // Trim lines (red dashed lines across each road at trim distance)
+        if (dbg.trimPoints) {
+          for (const approach of gen.approaches) {
+            if (approach.centerline.length >= 2) {
+              const p = approach.centerline[0];
+              const next = approach.centerline[1];
+              const tx = next.x - p.x, ty = next.y - p.y;
+              const len = Math.sqrt(tx * tx + ty * ty) || 1;
+              const nx = -ty / len, ny = tx / len;
+              const halfW = approach.width / 2;
+              const leftGeo = localToGeo(p.x + nx * halfW, p.y + ny * halfW, refLat, refLon);
+              const rightGeo = localToGeo(p.x - nx * halfW, p.y - ny * halfW, refLat, refLon);
+              addDbgLine(`ix-trimline-${ixId}-${approach.direction}`,
+                [[leftGeo.lon, leftGeo.lat], [rightGeo.lon, rightGeo.lat]],
+                '#ff0000', 2, 0.6);
+            }
+          }
+        }
+
+        // Road edges through intersection (green = left, red = right)
+        if (dbg.leftEdge || dbg.rightEdge) {
+          for (const approach of gen.approaches) {
+            if (approach.centerline.length >= 2) {
+              const p0 = approach.centerline[0];
+              const p1 = approach.centerline[approach.centerline.length - 1];
+              const tx = p1.x - p0.x, ty = p1.y - p0.y;
+              const len = Math.sqrt(tx * tx + ty * ty) || 1;
+              const nx = -ty / len, ny = tx / len;
+              const halfW = approach.width / 2;
+
+              if (dbg.leftEdge) {
+                const startGeo = localToGeo(p0.x + nx * halfW, p0.y + ny * halfW, refLat, refLon);
+                const endGeo = localToGeo(p1.x + nx * halfW, p1.y + ny * halfW, refLat, refLon);
+                addDbgLine(`ix-le-${ixId}-${approach.direction}`,
+                  [[startGeo.lon, startGeo.lat], [endGeo.lon, endGeo.lat]],
+                  '#00ff00', 2, 0.7);
+              }
+              if (dbg.rightEdge) {
+                const startGeo = localToGeo(p0.x - nx * halfW, p0.y - ny * halfW, refLat, refLon);
+                const endGeo = localToGeo(p1.x - nx * halfW, p1.y - ny * halfW, refLat, refLon);
+                addDbgLine(`ix-re-${ixId}-${approach.direction}`,
+                  [[startGeo.lon, startGeo.lat], [endGeo.lon, endGeo.lat]],
+                  '#ff0000', 2, 0.7);
+              }
+            }
+          }
+        }
+
+        // Tangent points (cyan diamonds at edge intersections)
         if (dbg.tangentPoints) {
           const tanPts: Array<{ x: number; y: number }> = [];
           for (const approach of gen.approaches) {
@@ -1483,7 +1533,7 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
               tanPts.push({ x: p.x - nx * halfW, y: p.y - ny * halfW });
             }
           }
-          addDbgCircles(`ix-tan-${gen.center.x}-${gen.center.y}`, tanPts, '#00ffff', 4);
+          addDbgCircles(`ix-tan-${ixId}`, tanPts, '#00ffff', 4);
         }
 
         // Fillet arcs (orange) — render approach centerlines
@@ -1494,14 +1544,13 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
                 const geo = localToGeo(p.x, p.y, refLat, refLon);
                 return [geo.lon, geo.lat] as [number, number];
               });
-              addDbgLine(`ix-arc-${gen.center.x}-${gen.center.y}-${approach.direction}`, coords, '#ff8800', 2, 0.7);
+              addDbgLine(`ix-arc-${ixId}-${approach.direction}`, coords, '#ff8800', 2, 0.7);
             }
           }
         }
 
-        // Triangulation (render triangle edges)
+        // Triangulation (white wireframe)
         if (dbg.triangulation && gen.polygon.length >= 3) {
-          // Simple fan triangulation for visualization
           const coords: [number, number][] = [];
           for (let i = 1; i < gen.polygon.length - 1; i++) {
             const g0 = localToGeo(gen.polygon[0].x, gen.polygon[0].y, refLat, refLon);
@@ -1510,8 +1559,13 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             coords.push([g0.lon, g0.lat], [g1.lon, g1.lat], [g2.lon, g2.lat], [g0.lon, g0.lat]);
           }
           if (coords.length >= 2) {
-            addDbgLine(`ix-tri-${gen.center.x}-${gen.center.y}`, coords, '#ff00ff', 1, 0.4);
+            addDbgLine(`ix-tri-${ixId}`, coords, '#ffffff', 1, 0.4);
           }
+        }
+
+        // Polygon vertices (small white dots)
+        if (dbg.intersectionPolygon && gen.polygon.length >= 3) {
+          addDbgCircles(`ix-verts-${ixId}`, gen.polygon, '#ffffff', 3);
         }
       }
     }
