@@ -32,6 +32,7 @@ import {
 import {
   Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight, DirectionalLight,
   MeshBuilder, StandardMaterial, Color3, Color4, Mesh, LinesMesh, Texture,
+  VertexData, VertexBuffer,
   PointerEventTypes, PointerInfo,
 } from '@babylonjs/core';
 
@@ -738,29 +739,132 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
         return { nx: -ty / len, ny: tx / len };
       };
 
-      // Road surface — ribbon mesh with proper double-sided rendering
+      // ─── Helper: build a custom road strip mesh with proper UVs ──
+      // Creates a strip from two edge paths with UVs that tile correctly:
+      // U goes along the road length (0 to roadLength/tileSize)
+      // V goes across the road width (0 to 1)
+      function buildStripMesh(
+        name: string,
+        leftPath: Vector3[],
+        rightPath: Vector3[],
+        uTileSize: number,  // meters per U tile
+        vRepeat: number,    // V repeats across width
+        scene: Scene,
+      ): Mesh {
+        const n = leftPath.length;
+        const positions: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+
+        // Compute cumulative distance along path for U coordinate
+        const cumDist: number[] = [0];
+        for (let i = 1; i < n; i++) {
+          const d = Vector3.Distance(leftPath[i], leftPath[i - 1]);
+          cumDist[i] = cumDist[i - 1] + d;
+        }
+
+        for (let i = 0; i < n; i++) {
+          // Left vertex
+          positions.push(leftPath[i].x, leftPath[i].y, leftPath[i].z);
+          uvs.push(cumDist[i] / uTileSize, 0);
+          // Right vertex
+          positions.push(rightPath[i].x, rightPath[i].y, rightPath[i].z);
+          uvs.push(cumDist[i] / uTileSize, vRepeat);
+        }
+
+        // Build triangles between consecutive segments
+        for (let i = 0; i < n - 1; i++) {
+          const li = i * 2;       // left current
+          const ri = i * 2 + 1;   // right current
+          const li2 = (i + 1) * 2;     // left next
+          const ri2 = (i + 1) * 2 + 1; // right next
+          // Two triangles per quad
+          indices.push(li, ri, li2);
+          indices.push(ri, ri2, li2);
+        }
+
+        const mesh = new Mesh(name, scene);
+        const vertexData = new VertexData();
+        vertexData.positions = positions;
+        vertexData.indices = indices;
+        vertexData.uvs = uvs;
+        // Compute normals
+        const normals: number[] = [];
+        VertexData.ComputeNormals(positions, indices, normals);
+        vertexData.normals = normals;
+        vertexData.applyToMesh(mesh, true);
+        return mesh;
+      }
+
+      // ─── Helper: build dashed marking stripes ─────────────────
+      // Creates a series of thin rectangular meshes along an offset path
+      function buildDashedMarking(
+        name: string,
+        samples: Array<{ x: number; y: number; z: number }>,
+        offsetMeters: number,
+        normalAt: (i: number) => { nx: number; ny: number },
+        dashLength: number,   // meters
+        gapLength: number,    // meters
+        markingWidth: number, // meters
+        yOffset: number,      // height above road
+        color: Color3,
+        scene: Scene,
+      ) {
+        // Compute cumulative distance
+        const cumDist: number[] = [0];
+        for (let i = 1; i < samples.length; i++) {
+          const d = Math.sqrt((samples[i].x - samples[i-1].x) ** 2 + (samples[i].y - samples[i-1].y) ** 2);
+          cumDist[i] = cumDist[i - 1] + d;
+        }
+        const totalLength = cumDist[cumDist.length - 1];
+
+        // Generate dashes at regular intervals
+        let pos = 0;
+        let dashIdx = 0;
+        while (pos < totalLength) {
+          const dashEnd = Math.min(pos + dashLength, totalLength);
+          // Find sample indices for this dash segment
+          const startIdx = cumDist.findIndex((d) => d >= pos);
+          const endIdx = cumDist.findIndex((d) => d >= dashEnd);
+          if (startIdx < 0 || endIdx < 0) break;
+
+          // Build dash as a thin strip
+          const dashLeft: Vector3[] = [];
+          const dashRight: Vector3[] = [];
+          for (let i = startIdx; i <= endIdx; i++) {
+            const s = samples[i];
+            const { nx, ny } = normalAt(i);
+            const halfMw = markingWidth / 2;
+            dashLeft.push(new Vector3(s.x + nx * (offsetMeters + halfMw), s.z + yOffset, s.y + ny * (offsetMeters + halfMw)));
+            dashRight.push(new Vector3(s.x + nx * (offsetMeters - halfMw), s.z + yOffset, s.y + ny * (offsetMeters - halfMw)));
+          }
+          const dashMesh = buildStripMesh(`${name}_${dashIdx}`, dashLeft, dashRight, 1, 1, scene);
+          const dashMat = new StandardMaterial(`${name}_mat_${dashIdx}`, scene);
+          dashMat.diffuseColor = color;
+          dashMat.emissiveColor = color.scale(0.15);
+          dashMat.specularColor = new Color3(0, 0, 0);
+          dashMesh.material = dashMat;
+          dashMesh.isPickable = false;
+          roadMeshesRef.current.set(`${name}_${dashIdx}`, dashMesh);
+
+          pos = dashEnd + gapLength;
+          dashIdx++;
+        }
+      }
+
+      // ─── Road surface with proper UV mapping ──────────────────
       const pL: Vector3[] = [], pR: Vector3[] = [];
       for (let i = 0; i < samples.length; i++) {
         const s = samples[i]; const { nx, ny } = normalAt(i);
         pL.push(new Vector3(s.x + nx * halfW, s.z + 0.02, s.y + ny * halfW));
         pR.push(new Vector3(s.x - nx * halfW, s.z + 0.02, s.y - ny * halfW));
       }
-      const roadMesh = MeshBuilder.CreateRibbon(`road_${road.id}`, {
-        pathArray: [pL, pR],
-        sideOrientation: Mesh.DOUBLESIDE,
-      }, scene);
+      const roadMesh = buildStripMesh(`road_${road.id}`, pL, pR, 5, 1, scene);
       const roadMat = new StandardMaterial(`rmat_${road.id}`, scene);
       const tex = getTexture(road.profile?.surfaceTexture || 'asphalt', scene);
       if (tex) {
         roadMat.diffuseTexture = tex;
         roadMat.diffuseColor = new Color3(1, 1, 1);
-        // UV: repeat texture along road length (every 10m) and across width (1x)
-        const roadLength = samples.reduce((sum, s, i) => {
-          if (i === 0) return 0;
-          return sum + Math.sqrt((s.x - samples[i-1].x) ** 2 + (s.y - samples[i-1].y) ** 2);
-        }, 0);
-        tex.uScale = Math.max(1, roadLength / 10);
-        tex.vScale = 1;
         tex.wrapU = Texture.WRAP_ADDRESSMODE;
         tex.wrapV = Texture.WRAP_ADDRESSMODE;
       } else {
@@ -771,31 +875,37 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
       roadMesh.isPickable = false;
       roadMeshesRef.current.set(road.id, roadMesh);
 
-      // Center line (dashed yellow)
-      const cp: Vector3[] = samples.map((s) => new Vector3(s.x, s.z + 0.05, s.y));
-      if (cp.length >= 2) {
-        const cl = MeshBuilder.CreateLines(`cl_${road.id}`, { points: cp }, scene);
-        cl.color = new Color3(1, 0.9, 0.3); cl.isPickable = false;
-      }
+      // ─── Center line marking (dashed yellow) ──────────────────
+      buildDashedMarking(
+        `center_${road.id}`, samples, 0, normalAt,
+        3, 3, 0.15, 0.05,  // 3m dash, 3m gap, 15cm wide, 5cm above road
+        new Color3(1, 0.85, 0.2), scene
+      );
 
-      // Lane divider lines (white, offset by lane spacing)
+      // ─── Lane divider markings (dashed white) ─────────────────
       if (road.laneCount > 1) {
         const laneSpacing = road.width / road.laneCount;
         for (let lane = 1; lane < road.laneCount; lane++) {
           const offset = -halfW + laneSpacing * lane;
-          const divPoints: Vector3[] = [];
-          for (let i = 0; i < samples.length; i++) {
-            const s = samples[i]; const { nx, ny } = normalAt(i);
-            divPoints.push(new Vector3(s.x + nx * offset, s.z + 0.04, s.y + ny * offset));
-          }
-          if (divPoints.length >= 2) {
-            const dl = MeshBuilder.CreateLines(`div_${road.id}_${lane}`, { points: divPoints }, scene);
-            dl.color = new Color3(1, 1, 1); dl.isPickable = false;
-          }
+          buildDashedMarking(
+            `div_${road.id}_${lane}`, samples, offset, normalAt,
+            3, 3, 0.12, 0.04,  // 3m dash, 3m gap, 12cm wide
+            new Color3(1, 1, 1), scene
+          );
         }
       }
 
-      // Curbs — raised edges on both sides
+      // ─── Edge lines (solid white at road edges) ───────────────
+      for (const side of [-1, 1]) {
+        const edgeOffset = halfW * side - (0.1 * side); // 10cm inside edge
+        buildDashedMarking(
+          `edge_${road.id}_${side}`, samples, edgeOffset, normalAt,
+          9999, 0, 0.1, 0.04,  // continuous (long dash, no gap)
+          new Color3(1, 1, 1), scene
+        );
+      }
+
+      // ─── Curbs — raised edges on both sides ───────────────────
       if (road.profile?.hasCurb) {
         const cw = 0.3, ch = 0.15;
         for (const side of [-1, 1]) {
@@ -805,18 +915,24 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             cL.push(new Vector3(s.x + nx * halfW * side, s.z + ch, s.y + ny * halfW * side));
             cR.push(new Vector3(s.x + nx * (halfW + cw) * side, s.z + ch, s.y + ny * (halfW + cw) * side));
           }
-          const cm = MeshBuilder.CreateRibbon(`curb_${road.id}_${side}`, {
-            pathArray: [cL, cR], sideOrientation: Mesh.DOUBLESIDE,
-          }, scene);
+          const cm = buildStripMesh(`curb_${road.id}_${side}`, cL, cR, 1, 1, scene);
           const cmMat = new StandardMaterial(`curbM_${road.id}_${side}`, scene);
-          cmMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+          const curbTex = getTexture('pavement', scene);
+          if (curbTex) {
+            cmMat.diffuseTexture = curbTex;
+            cmMat.diffuseColor = new Color3(0.7, 0.7, 0.7);
+            curbTex.wrapU = Texture.WRAP_ADDRESSMODE;
+            curbTex.wrapV = Texture.WRAP_ADDRESSMODE;
+          } else {
+            cmMat.diffuseColor = new Color3(0.5, 0.5, 0.5);
+          }
           cmMat.specularColor = new Color3(0, 0, 0);
           cm.material = cmMat; cm.isPickable = false;
           roadMeshesRef.current.set(`curb_${road.id}_${side}`, cm);
         }
       }
 
-      // Sidewalks — wider walking surface outside curbs
+      // ─── Sidewalks with proper UV tiling ──────────────────────
       if (road.profile?.hasSidewalk) {
         const sw = 2.0, sh = 0.15, cw = road.profile?.hasCurb ? 0.3 : 0;
         for (const side of [-1, 1]) {
@@ -826,14 +942,14 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
             sL.push(new Vector3(s.x + nx * (halfW + cw) * side, s.z + sh, s.y + ny * (halfW + cw) * side));
             sR.push(new Vector3(s.x + nx * (halfW + cw + sw) * side, s.z + sh, s.y + ny * (halfW + cw + sw) * side));
           }
-          const sm = MeshBuilder.CreateRibbon(`sw_${road.id}_${side}`, {
-            pathArray: [sL, sR], sideOrientation: Mesh.DOUBLESIDE,
-          }, scene);
+          const sm = buildStripMesh(`sw_${road.id}_${side}`, sL, sR, 2, 1, scene);
           const smMat = new StandardMaterial(`swM_${road.id}_${side}`, scene);
           const stex = getTexture('sidewalk', scene);
           if (stex) {
             smMat.diffuseTexture = stex;
             smMat.diffuseColor = new Color3(0.85, 0.85, 0.85);
+            stex.wrapU = Texture.WRAP_ADDRESSMODE;
+            stex.wrapV = Texture.WRAP_ADDRESSMODE;
           } else {
             smMat.diffuseColor = new Color3(0.65, 0.65, 0.65);
           }
