@@ -447,18 +447,19 @@ export const RoadViewport: React.FC<RoadViewportProps> = ({ className }) => {
   function updateMapRoads(map: maplibregl.Map) {
     if (!map.loaded()) return;
 
-    // Remove old layers/sources
+    // Remove old layers/sources (including all preview layers)
     const style = map.getStyle();
+    const previewPrefixes = ['rd-', 'cp-', 'ix-', 'cw-', 'gi-', 'arc-', 'line-', 'clothoid-', 'polyline-', 'spline-'];
     if (style?.layers) {
       for (const layer of style.layers) {
-        if (layer.id.startsWith('rd-') || layer.id.startsWith('cp-') || layer.id.startsWith('ix-') || layer.id.startsWith('cw-') || layer.id.startsWith('gi-') || layer.id.startsWith('arc-')) {
+        if (previewPrefixes.some((p) => layer.id.startsWith(p))) {
           map.removeLayer(layer.id);
         }
       }
     }
     if (style?.sources) {
       for (const src of Object.keys(style.sources)) {
-        if (src.startsWith('rd-') || src.startsWith('cp-') || src.startsWith('ix-') || src.startsWith('cw-') || src.startsWith('gi-') || src.startsWith('arc-')) {
+        if (previewPrefixes.some((p) => src.startsWith(p))) {
           map.removeSource(src);
         }
       }
