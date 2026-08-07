@@ -9,6 +9,23 @@ import { create } from 'zustand';
 import type { Road, ControlPoint, Tool, Selection, HistorySnapshot, Vec2, RoadProfile, Intersection, GeneratedIntersection, Point2D, CircleArc } from '../../shared/types';
 import { generateId, ROAD_PROFILES, detectIntersections, distanceMeters, sampleRoad, localToGeo, generateIntersection, geoToLocal, computeCircleArc } from '../../shared/types';
 
+/** Compute tangent direction at a sample index */
+function computeTangentAtSamples(samples: Array<{ x: number; y: number; z: number }>, idx: number): Point2D {
+  let dx: number, dy: number;
+  if (idx === 0) {
+    dx = samples[1].x - samples[0].x;
+    dy = samples[1].y - samples[0].y;
+  } else if (idx === samples.length - 1) {
+    dx = samples[idx].x - samples[idx - 1].x;
+    dy = samples[idx].y - samples[idx - 1].y;
+  } else {
+    dx = samples[idx + 1].x - samples[idx - 1].x;
+    dy = samples[idx + 1].y - samples[idx - 1].y;
+  }
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  return { x: dx / len, y: dy / len };
+}
+
 interface RoadStudioState {
   /** All roads in the project */
   roads: Road[];
@@ -670,12 +687,38 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
 
     // Step 3 (split): Split each road into two halves at the intersection,
     // trimming each end so roads stop well before the junction.
-    // Trim distance = max half-width + corner radius + margin
-    const maxHalfWidth = Math.max(road1.width, road2.width) / 2;
+    // Trim distance is angle-dependent: trimDist = halfWidth_other + R × tan(θ/2)
+    const halfWidth1 = road1.width / 2;
+    const halfWidth2 = road2.width / 2;
+    const maxHalfWidth = Math.max(halfWidth1, halfWidth2);
     const cornerRadius = Math.min(maxHalfWidth, 5);
-    const trimDist = maxHalfWidth + cornerRadius + 3;
 
-    const splitAndTrimRoad = (road: Road): Road[] => {
+    // Compute angle between the two roads at the intersection
+    const s1Angle = sampleRoad(road1, state.refLat, state.refLon, 32);
+    const s2Angle = sampleRoad(road2, state.refLat, state.refLon, 32);
+    let idx1Angle = 0, idx2Angle = 0;
+    let minD1 = Infinity, minD2 = Infinity;
+    for (let i = 0; i < s1Angle.length; i++) {
+      const d = Math.sqrt((s1Angle[i].x - generated.center.x) ** 2 + (s1Angle[i].y - generated.center.y) ** 2);
+      if (d < minD1) { minD1 = d; idx1Angle = i; }
+    }
+    for (let i = 0; i < s2Angle.length; i++) {
+      const d = Math.sqrt((s2Angle[i].x - generated.center.x) ** 2 + (s2Angle[i].y - generated.center.y) ** 2);
+      if (d < minD2) { minD2 = d; idx2Angle = i; }
+    }
+    // Tangents at intersection
+    const t1 = computeTangentAtSamples(s1Angle, idx1Angle);
+    const t2 = computeTangentAtSamples(s2Angle, idx2Angle);
+    const dot = t1.x * t2.x + t1.y * t2.y;
+    const angleBetween = Math.acos(Math.min(1, Math.max(-1, Math.abs(dot))));
+    const halfAngle = angleBetween / 2;
+
+    // Trim distance for each road (along its centerline)
+    // Road 1 stops where road 2's edge + corner arc begins
+    const trimDist1 = halfWidth2 + cornerRadius * Math.tan(halfAngle);
+    const trimDist2 = halfWidth1 + cornerRadius * Math.tan(halfAngle);
+
+    const splitAndTrimRoad = (road: Road, trimDist: number): Road[] => {
       const samples = sampleRoad(road, state.refLat, state.refLon, 32);
       if (samples.length < 2) return [road];
 
@@ -780,8 +823,8 @@ export const useRoadStudioStore = create<RoadStudioState>((set, get) => ({
       return newRoads;
     };
 
-    const roads1 = splitAndTrimRoad(road1);
-    const roads2 = splitAndTrimRoad(road2);
+    const roads1 = splitAndTrimRoad(road1, trimDist1);
+    const roads2 = splitAndTrimRoad(road2, trimDist2);
     const updatedRoads = state.roads
       .filter((r) => r.id !== roadId1 && r.id !== roadId2)
       .concat(roads1, roads2);
