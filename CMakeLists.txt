@@ -48,6 +48,31 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+# ─── MapLibre Native Qt (Phase 2c rendering spike) ───────────
+# Built from source at D:/git/maplibre-native-qt and installed to
+# D:/git/maplibre-native-qt/install. Provides QMapLibre::Widgets
+# (GLWidget) for 2D map rendering with Esri World Imagery tiles.
+#
+# If MapLibre is not found, the map viewport is disabled and the
+# app falls back to a placeholder widget.
+#
+option(ENABLE_MAPLIBRE "Enable MapLibre Native Qt map viewport" ON)
+
+if(ENABLE_MAPLIBRE)
+    find_package(QMapLibre COMPONENTS Widgets QUIET
+        HINTS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../maplibre-native-qt/install
+            $ENV{QMAPLIBRE_DIR}
+            "D:/git/maplibre-native-qt/install"
+    )
+    if(QMapLibre_FOUND)
+        message(STATUS "MapLibre Native Qt found: ${QMapLibre_DIR}")
+    else()
+        message(WARNING "MapLibre Native Qt not found — map viewport disabled. "
+                        "Build maplibre-native-qt first: https://github.com/maplibre/maplibre-native-qt")
+    endif()
+endif()
+
 # ─── Road Engine Library (header-only, requires nlohmann-json) ──
 # The road engine is a header-only C++20 library. We create a
 # static library target with a dummy source to establish the
@@ -149,8 +174,23 @@ target_include_directories(plugin_api INTERFACE
 target_link_libraries(plugin_api INTERFACE Qt6::Core)
 
 # ─── Main Application Executable ─────────────────────────────
-add_executable(OpenGeoStudio
+set(APP_SOURCES
     src/app/main.cpp
+)
+
+if(QMapLibre_FOUND)
+    list(APPEND APP_SOURCES
+        src/app/MapViewportWidget.hpp
+        src/app/MapViewportWidget.cpp
+    )
+endif()
+
+add_executable(OpenGeoStudio
+    ${APP_SOURCES}
+)
+
+target_include_directories(OpenGeoStudio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
@@ -160,6 +200,11 @@ target_link_libraries(OpenGeoStudio PRIVATE
     road_engine::core
     plugin_api
 )
+
+if(QMapLibre_FOUND)
+    target_link_libraries(OpenGeoStudio PRIVATE QMapLibre::Widgets)
+    target_compile_definitions(OpenGeoStudio PRIVATE HAVE_MAPLIBRE=1)
+endif()
 
 if(ENABLE_LANEMAKER)
     target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
@@ -204,6 +249,19 @@ if(WIN32)
             "$<TARGET_FILE:OpenGeoStudio>"
         COMMENT "Running windeployqt to collect Qt runtime dependencies..."
     )
+
+    # Copy QMapLibre DLLs to deploy directory (windeployqt doesn't know about them)
+    if(QMapLibre_FOUND)
+        add_custom_command(TARGET OpenGeoStudio POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:QMapLibre::Core>"
+                "$<TARGET_FILE_DIR:OpenGeoStudio>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:QMapLibre::Widgets>"
+                "$<TARGET_FILE_DIR:OpenGeoStudio>"
+            COMMENT "Copying QMapLibre DLLs to deploy directory..."
+        )
+    endif()
 endif()
 
 # ─── doctest Tests (C++ road engine unit tests) ──────────────
@@ -241,6 +299,7 @@ message(STATUS "  Build Type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Generator:         ${CMAKE_GENERATOR}")
 message(STATUS "  Qt6 Found:         ${Qt6_FOUND}")
 message(STATUS "  LaneMaker:         ${ENABLE_LANEMAKER}")
+message(STATUS "  MapLibre:          ${QMapLibre_FOUND}")
 message(STATUS "  Tests:             ${BUILD_TESTS}")
 if(WIN32)
     message(STATUS "  windeployqt:       ${WINDEPLOYQT_EXECUTABLE}")

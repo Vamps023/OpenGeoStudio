@@ -26,6 +26,11 @@
 // Road engine — direct C++ include, no N-API bridge
 #include "road_engine.hpp"
 
+// Phase 2c: MapLibre Native Qt map viewport
+#if defined(HAVE_MAPLIBRE)
+#include "MapViewportWidget.hpp"
+#endif
+
 // ═══════════════════════════════════════════════════════════
 // MainWindow — the application shell
 // ═══════════════════════════════════════════════════════════
@@ -136,16 +141,34 @@ private:
         rightDock->setWidget(rightPlaceholder);
         addDockWidget(Qt::RightDockWidgetArea, rightDock);
 
-        // Central widget — placeholder for the viewport
+        // Central widget — MapLibre map viewport (Phase 2c rendering spike)
+        // Uses Esri World Imagery raster tiles, same as the reference
+        // Electron app's SkiaViewport.tsx
+#if defined(HAVE_MAPLIBRE)
+        auto* mapViewport = new MapViewportWidget(this);
+        setCentralWidget(mapViewport);
+
+        // Wire map click → status bar (demonstrates coordinate conversion works)
+        connect(mapViewport, &MapViewportWidget::mapClicked,
+                this, [this](double lat, double lon) {
+                    m_statusLabel->setText(
+                        QStringLiteral("Clicked: %1, %2  |  Road Engine v%3")
+                            .arg(lat, 0, 'f', 6)
+                            .arg(lon, 0, 'f', 6)
+                            .arg(QString::fromLatin1(road_engine::versionString())));
+                });
+#else
+        // Fallback: placeholder when MapLibre is not available
         QLabel* centerPlaceholder = new QLabel(
             tr("OpenGeoStudio\n\n"
                "Road Engine v%1 loaded successfully.\n\n"
-               "Viewport will appear here (Phase 4: Road Studio).")
+               "MapLibre not found — build maplibre-native-qt to enable map viewport.")
             .arg(QString::fromLatin1(road_engine::versionString())));
         centerPlaceholder->setAlignment(Qt::AlignCenter);
         centerPlaceholder->setStyleSheet(QStringLiteral(
             "QLabel { font-size: 18px; color: #888; background-color: #2b2b2b; }"));
         setCentralWidget(centerPlaceholder);
+#endif
     }
 
 private slots:

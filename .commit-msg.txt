@@ -1,21 +1,22 @@
-Initial commit: Qt 6 native application skeleton
+Phase 2c: MapLibre Native Qt rendering spike - Option A prototype
 
-- C++20 / Qt 6 (Core, Gui, Widgets) application shell
-- QMainWindow with menu bar, toolbar, dock widgets, dark theme
-- Direct C++ road engine integration (no N-API, no IPC, no Node.js)
-- Top-level CMakeLists.txt with vcpkg manifest integration
-- windeployqt POST_BUILD step for portable Windows .exe deployment
-- C++ road engine (header-only, 46K LOC) preserved from reference repo
-- LaneMaker/libOpenDRIVE vendored (optional, requires CGAL/Boost/spdlog)
-- Plugin API header skeleton (QPluginLoader-based, Phase 2a)
-- doctest test suite (geometry_segment_tests) builds and passes
-- vcpkg dependencies: curl, tiff, libpng, nlohmann-json
-- License: MIT (app) + Apache-2.0 (libOpenDRIVE, LaneMaker) + MIT (pugixml) + ISC (earcut)
-- .ogproj JSON Schema (Draft 2020-12) for project file interop
-- CI workflow (GitHub Actions, Windows + Ubuntu matrix)
+- Built maplibre-native-qt from source (473 targets, Qt 6.8.0 + OpenGL)
+- Installed to D:/git/maplibre-native-qt/install (QMapLibre + QMapLibreWidgets)
+- Created MapViewportWidget wrapping QMapLibre::MapWidget
+- Esri World Imagery raster tiles (same as reference app's SkiaViewport)
+- Centered on Pune, India (lat=18.52, lon=73.85, zoom=15) for parity
+- Map click -> status bar coordinate display (proves geo conversion works)
+- CMake finds QMapLibre via find_package(QMapLibre COMPONENTS Widgets)
+- Post-build copies QMapLibre.dll + QMapLibreWidgets.dll to deploy dir
+- App launches and runs with live satellite map background
+- HAVE_MAPLIBRE compile-time guard with placeholder fallback
 
-Reference implementation: D:/git/OpenGeoStudio (Electron/React/TS)
-preserved as behavioral reference for feature-parity validation.
+Key finding: MapLibre Native Qt builds and works with Qt 6.8.0 on Windows.
+The GLWidget (QRhiWidget subclass) renders Esri raster tiles correctly.
+Option A is viable - no need for Option B (QGraphicsView) fallback.
+
+moc issue resolved: raw string literals in class body confuse moc.
+Moved kEsriImageryStyle constexpr to .cpp file.
 
 Generated with [Devin](https://devin.ai)
 
