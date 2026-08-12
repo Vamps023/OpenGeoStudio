@@ -14,12 +14,9 @@
 // RoadViewport2D
 // ============================================================
 
-RoadViewport2D::RoadViewport2D(ApplicationContext* ctx, QWidget* parent)
-    : QWidget(parent), m_ctx(ctx) {
-    // Get or create the RoadStudioStore from the context
-    // For now, we create it locally — Phase 4 will integrate it into ApplicationContext
-    m_store = new RoadStudioStore(&m_ctx->events(), this);
-
+RoadViewport2D::RoadViewport2D(ApplicationContext* ctx, RoadStudioStore* store,
+                                 RoadEngineService* engine, QWidget* parent)
+    : QWidget(parent), m_ctx(ctx), m_store(store), m_engine(engine) {
     setupUi();
 
     // Connect store signals to trigger overlay repaint
@@ -39,7 +36,7 @@ void RoadViewport2D::setupUi() {
     layout->addWidget(m_mapWidget, 1);
 
     // Create transparent overlay on top of the map
-    m_overlay = new RoadOverlayWidget(m_store, m_mapWidget, this);
+    m_overlay = new RoadOverlayWidget(m_store, m_engine, m_mapWidget, this);
     m_overlay->setAttribute(Qt::WA_TransparentForMouseEvents, false);
     m_overlay->setAttribute(Qt::WA_NoSystemBackground, true);
     m_overlay->setAttribute(Qt::WA_TranslucentBackground, true);
@@ -75,10 +72,9 @@ void RoadViewport2D::onLmRoadStateChanged() {
 // RoadOverlayWidget
 // ============================================================
 
-RoadOverlayWidget::RoadOverlayWidget(RoadStudioStore* store, MapViewportWidget* map,
-                                      QWidget* parent)
-    : QWidget(parent), m_store(store), m_map(map) {
-    m_engine = new RoadEngineService(this);
+RoadOverlayWidget::RoadOverlayWidget(RoadStudioStore* store, RoadEngineService* engine,
+                                      MapViewportWidget* map, QWidget* parent)
+    : QWidget(parent), m_store(store), m_map(map), m_engine(engine) {
     setAttribute(Qt::WA_TransparentForMouseEvents, false);
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAttribute(Qt::WA_TranslucentBackground, true);

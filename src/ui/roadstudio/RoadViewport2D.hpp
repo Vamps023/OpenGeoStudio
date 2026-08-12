@@ -31,7 +31,8 @@ class RoadViewport2D : public QWidget {
     Q_OBJECT
 
 public:
-    explicit RoadViewport2D(ApplicationContext* ctx, QWidget* parent = nullptr);
+    explicit RoadViewport2D(ApplicationContext* ctx, RoadStudioStore* store,
+                             RoadEngineService* engine, QWidget* parent = nullptr);
 
     // Get the map widget (for coordinate conversion)
     MapViewportWidget* mapWidget() { return m_mapWidget; }
@@ -50,6 +51,7 @@ private:
 
     ApplicationContext* m_ctx;
     RoadStudioStore* m_store;
+    RoadEngineService* m_engine;
     MapViewportWidget* m_mapWidget = nullptr;
     RoadOverlayWidget* m_overlay = nullptr;
 };
@@ -62,8 +64,8 @@ class RoadOverlayWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit RoadOverlayWidget(RoadStudioStore* store, MapViewportWidget* map,
-                                QWidget* parent = nullptr);
+    explicit RoadOverlayWidget(RoadStudioStore* store, RoadEngineService* engine,
+                                MapViewportWidget* map, QWidget* parent = nullptr);
 
     void refreshMapState();
 

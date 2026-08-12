@@ -1,24 +1,28 @@
-Phase 4f: Road Studio inspector panel
+Phase 4g: 3D mesh viewport with OpenGL
 
-Added RoadInspector dock widget that shows properties for the selected
-road and control point:
+Added RoadViewport3D using QOpenGLWidget with direct OpenGL calls
+(replaces Three.js renderer in the reference app):
 
-Road properties:
-- Name (editable text field)
-- Width (spin box, 2-30m)
-- Lane count (spin box, 1-8)
-- Color (color picker dialog)
-- Profile type (combo box: city_2x1, city_2x2, country_2x1, highway_2x3, custom)
+- Road surface mesh rendering from geo::generateRoadMesh data
+  (triangles with wireframe overlay)
+- Ground plane (1000x1000m)
+- Grid helper (50m spacing)
+- Green centerline debug line
+- Orbit camera: left-drag rotate, right-drag pan, scroll zoom
+- Camera distance clamped to 10-2000m
+- Pitch clamped to 5-85 degrees
 
-Control point properties:
-- Latitude (spin box, 8 decimal places)
-- Longitude (spin box, 8 decimal places)
-- Elevation/z (spin box, 3 decimal places)
-- Type (combo box: smooth, corner)
+Updated RoadStudioWidget to use QStackedWidget for 2D/3D view switching:
+- Page 0: 2D viewport (MapLibre + road overlay)
+- Page 1: 3D viewport (OpenGL mesh)
+- Switching is triggered by the toolbar's 2D/3D toggle (Tab key)
 
-The inspector is shown in the right dock widget when Road Studio is
-active. It updates live when the selection changes and edits are
-applied directly to the store.
+Refactored RoadViewport2D to accept store and engine from parent
+RoadStudioWidget instead of creating its own, so both 2D and 3D
+viewports share the same state.
+
+Added Qt6 OpenGL and OpenGLWidgets modules to CMake.
+Linked opengl32.lib on Windows.
 
 Generated with [Devin](https://devin.ai)
 

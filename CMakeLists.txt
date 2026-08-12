@@ -41,7 +41,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # package manager. Set CMAKE_PREFIX_PATH to point to your Qt install:
 #   cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.8.0/msvc2022_64"
 #
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 
 # Enable Qt MOC/UIC/RCC auto-processing
 set(CMAKE_AUTOMOC ON)
@@ -188,6 +188,7 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadViewport2D.cpp
     src/ui/roadstudio/RoadStudioWidget.cpp
     src/ui/roadstudio/RoadEngineService.cpp
+    src/ui/roadstudio/RoadViewport3D.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
 )
@@ -221,9 +222,16 @@ target_link_libraries(OpenGeoStudio PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     road_engine::core
     plugin_api
 )
+
+# Link OpenGL library for 3D viewport
+if(WIN32)
+    target_link_libraries(OpenGeoStudio PRIVATE opengl32)
+endif()
 
 if(QMapLibre_FOUND)
     target_link_libraries(OpenGeoStudio PRIVATE QMapLibre::Widgets)
