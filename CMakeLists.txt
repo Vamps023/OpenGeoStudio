@@ -189,6 +189,7 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadStudioWidget.cpp
     src/ui/roadstudio/RoadEngineService.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
+    src/ui/roadstudio/widgets/RoadInspector.cpp
 )
 
 if(QMapLibre_FOUND)

@@ -38,6 +38,7 @@
 // UI
 #include "ui/home/HomeWidget.hpp"
 #include "ui/roadstudio/RoadStudioWidget.hpp"
+#include "ui/roadstudio/widgets/RoadInspector.hpp"
 
 // Phase 2c: MapLibre Native Qt map viewport
 #if defined(HAVE_MAPLIBRE)
@@ -82,6 +83,9 @@ private:
     QStackedWidget* m_centerStack = nullptr;
     HomeWidget* m_homeWidget = nullptr;
     RoadStudioWidget* m_roadStudioWidget = nullptr;
+    QDockWidget* m_rightDock = nullptr;
+    QWidget* m_rightDockPlaceholder = nullptr;
+    RoadInspector* m_roadInspector = nullptr;
 #if defined(HAVE_MAPLIBRE)
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
@@ -223,12 +227,13 @@ private:
         addDockWidget(Qt::LeftDockWidgetArea, leftDock);
 
         // Right dock — inspector / properties
-        QDockWidget* rightDock = new QDockWidget(tr("Inspector"), this);
-        rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        auto* rightContent = new QLabel(tr("Properties\n(Phase 3)"));
-        rightContent->setAlignment(Qt::AlignCenter);
-        rightDock->setWidget(rightContent);
-        addDockWidget(Qt::RightDockWidgetArea, rightDock);
+        m_rightDock = new QDockWidget(tr("Inspector"), this);
+        m_rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        auto* placeholder = new QLabel(tr("Properties\n(Select a road)"));
+        placeholder->setAlignment(Qt::AlignCenter);
+        m_rightDockPlaceholder = placeholder;
+        m_rightDock->setWidget(m_rightDockPlaceholder);
+        addDockWidget(Qt::RightDockWidgetArea, m_rightDock);
     }
 
     void updateStatusBar() {
@@ -254,8 +259,22 @@ private slots:
             m_centerStack->setCurrentIndex(1); // Map
         } else if (ws.id == "road-studio") {
             m_centerStack->setCurrentIndex(2); // Road Studio
+            // Swap inspector to RoadInspector
+            if (m_roadStudioWidget && !m_roadInspector) {
+                m_roadInspector = new RoadInspector(m_roadStudioWidget->store(), this);
+            }
+            if (m_roadInspector) {
+                m_rightDock->setWidget(m_roadInspector);
+                m_rightDock->setWindowTitle("Road Inspector");
+            }
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train placeholder
+        }
+
+        // Reset inspector for non-road-studio workspaces
+        if (ws.id != "road-studio" && m_rightDockPlaceholder) {
+            m_rightDock->setWidget(m_rightDockPlaceholder);
+            m_rightDock->setWindowTitle("Inspector");
         }
 
         setWindowTitle(QStringLiteral("OpenGeoStudio — %1").arg(ws.name));

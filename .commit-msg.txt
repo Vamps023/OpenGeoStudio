@@ -1,27 +1,24 @@
-Phase 4e: Road engine integration — centerline sampling, edges, lane boundaries, mesh
+Phase 4f: Road Studio inspector panel
 
-Added RoadEngineService that calls the C++ road engine directly
-(no IPC, no N-API, no Node.js):
+Added RoadInspector dock widget that shows properties for the selected
+road and control point:
 
-- sampleCenterline: Uses geo::Road::sampleCenterline() member function
-  for proper bezier/arc/line sampling
-- sampleLeftEdge/sampleRightEdge: Computed from centerline + width offset
-  (the free functions are declared but not implemented in the engine)
-- generateLaneBoundaries: Uses geo::generateLaneBoundaries() from mesh.hpp
-- generateMesh: Uses geo::generateRoadMesh() from mesh.hpp
-- exportOpenDrive: Stub for now (opendrive.hpp has include conflicts)
+Road properties:
+- Name (editable text field)
+- Width (spin box, 2-30m)
+- Lane count (spin box, 1-8)
+- Color (color picker dialog)
+- Profile type (combo box: city_2x1, city_2x2, country_2x1, highway_2x3, custom)
 
-Updated RoadViewport2D::drawRoad to use the engine:
-- Centerline is now sampled by the C++ engine (64 samples)
-- Left/right edges are drawn in red/blue
-- Lane boundaries are drawn as white dashed lines for multi-lane roads
-- Fallback to straight line if engine sampling fails
+Control point properties:
+- Latitude (spin box, 8 decimal places)
+- Longitude (spin box, 8 decimal places)
+- Elevation/z (spin box, 3 decimal places)
+- Type (combo box: smooth, corner)
 
-Note: The public road_engine.hpp declares free functions like
-geo::sampleCenterline(const Road&, int) but only the member function
-Road::sampleCenterline(int) is implemented. The service uses the
-member function. This is a known issue with the header-only engine's
-API structure.
+The inspector is shown in the right dock widget when Road Studio is
+active. It updates live when the selection changes and edits are
+applied directly to the store.
 
 Generated with [Devin](https://devin.ai)
 
