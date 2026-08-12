@@ -179,7 +179,9 @@ void TerrainStore::fromJson(const QJsonObject& j) {
         m_exportSettings.albedoResolution = exp["albedoResolution"].toInt(1024);
     }
 
-    computeTileGrid();
+    if (m_bounds.isValid()) {
+        computeTileGrid();
+    }
     emit boundsChanged(m_bounds);
     emit exportSettingsChanged();
 }

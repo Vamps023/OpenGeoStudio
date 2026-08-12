@@ -1,4 +1,4 @@
-﻿// TrainStudioStore — State management implementation
+// TrainStudioStore — State management implementation
 
 #include "TrainStudioStore.hpp"
 #include "../roadstudio/GeoConvert.hpp"
@@ -187,14 +187,74 @@ void TrainStudioStore::finishArc(double lat, double lon) {
     track.kind = trains::Track::Kind::Arc;
     track.color = "#aa6622";
 
-    // Start and end points (simplified — no arc sampling for now)
-    track.points.append(*m_arcStart);
+    // Generate arc points using start direction
+    const auto& start = *m_arcStart;
+    const int numSamples = 16;
+    const double PI = 3.14159265358979323846;
+    const double refLat = m_refLat;
+    const double refLon = m_refLon;
+    auto toLocal = [refLat, refLon](double la, double lo, double& lx, double& ly) {
+        lx = (lo - refLon) * 111320.0 * cos(refLat * PI / 180.0);
+        ly = (la - refLat) * 111320.0;
+    };
+    auto fromLocal = [refLat, refLon](double lx, double ly, double& la, double& lo) {
+        lo = refLon + lx / (111320.0 * cos(refLat * PI / 180.0));
+        la = refLat + ly / 111320.0;
+    };
 
-    trains::ControlPoint end;
-    end.id = generateId();
-    end.lat = lat;
-    end.lon = lon;
-    track.points.append(end);
+    double sx, sy, ex, ey;
+    toLocal(start.lat, start.lon, sx, sy);
+    toLocal(lat, lon, ex, ey);
+
+    double dx = m_arcStartDir ? m_arcStartDir->x() : 0.0;
+    double dy = m_arcStartDir ? m_arcStartDir->y() : 0.0;
+    double dlen = std::hypot(dx, dy);
+    if (dlen < 1e-9) { dx = ex - sx; dy = ey - sy; dlen = std::hypot(dx, dy); }
+    if (dlen < 1e-9) { cancelArc(); return; }
+    dx /= dlen; dy /= dlen;
+
+    double cx = ex - sx, cy = ey - sy;
+    double chordLen = std::hypot(cx, cy);
+    if (chordLen < 1e-9) { cancelArc(); return; }
+
+    double px = -dy, py = dx;
+    double denom = dx * px + dy * py;
+    if (std::abs(denom) < 1e-9) {
+        // Direction parallel to chord — straight line
+        track.points.append(start);
+        trains::ControlPoint end2;
+        end2.id = generateId();
+        end2.lat = lat;
+        end2.lon = lon;
+        track.points.append(end2);
+    } else {
+        double t = (cx * px + cy * py) / denom;
+        double centerX = sx + t * px;
+        double centerY = sy + t * py;
+        double radius = std::hypot(sx - centerX, sy - centerY);
+        if (radius < 1e-9) radius = 1.0;
+        double startAngle = atan2(sy - centerY, sx - centerX);
+        double endAngle = atan2(ey - centerY, ex - centerX);
+        double cross = dx * cx + dy * cy;
+        if (cross >= 0) {
+            if (endAngle <= startAngle) endAngle += 2 * PI;
+        } else {
+            if (endAngle >= startAngle) endAngle -= 2 * PI;
+        }
+        for (int i = 0; i <= numSamples; ++i) {
+            double frac = static_cast<double>(i) / numSamples;
+            double angle = startAngle + frac * (endAngle - startAngle);
+            double ax = centerX + radius * cos(angle);
+            double ay = centerY + radius * sin(angle);
+            double plat, plon;
+            fromLocal(ax, ay, plat, plon);
+            trains::ControlPoint cp;
+            cp.id = generateId();
+            cp.lat = plat;
+            cp.lon = plon;
+            track.points.append(cp);
+        }
+    }
 
     m_tracks.append(track);
     emit tracksChanged();

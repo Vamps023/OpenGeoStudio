@@ -1,0 +1,38 @@
+Phase 18: Fix remaining audit bugs + add inspector/terrain features
+
+Fixed all remaining low-severity bugs from the audit and added
+missing inspector fields and terrain visibility toggles.
+
+Bug fixes:
+- RoadStudioStore: toggleRoadSelection now updates m_selection.roadId
+  (was only updating m_selectedRoadIds, causing UI state mismatch)
+- TrainStudioStore: addControlPoint/updateControlPoint now log warning
+  when trackId is not found (was silently failing)
+- TrainStudioStore: updateControlPoint now pushes history (was not undoable)
+- TrainStudioStore: finishArc now generates proper arc sampling using
+  m_arcStartDir direction (was just creating 2-point straight line)
+  - Computes arc center from start direction and end point
+  - Samples 16 points along the arc
+  - Handles edge cases: parallel direction, zero chord, zero radius
+- TerrainStore: fromJson now validates bounds before computeTileGrid
+  (was computing grid with invalid bounds)
+- ProjectManager: loadRecent now checks file existence before opening
+  (was relying on QFile::open failure)
+- WorkspaceManager: activate() no longer calls getById() twice
+  (was redundant, now stores result and reuses)
+
+New features:
+- Road Inspector: Added surface texture display (asphalt/gravel based
+  on profile type)
+- Road Inspector: Added sidewalk and curb checkboxes (auto-checked
+  based on profile type — city profiles get sidewalk, city_2x2 gets curb)
+- Terrain Studio: Added Grid/Labels/Selection visibility toggle buttons
+  in toolbar (checkable, default all on)
+- TerrainViewport: Added public overlay() accessor for visibility control
+
+Build: Clean, no errors
+Tests: 473/473 passed, 5308/5308 assertions
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

@@ -73,6 +73,20 @@ void RoadInspector::setupUi() {
     m_cpCountLabel->setStyleSheet("color: #7d8590;");
     roadLayout->addRow("Control Points:", m_cpCountLabel);
 
+    // Surface texture (read-only display)
+    m_surfaceLabel = new QLabel("—");
+    m_surfaceLabel->setStyleSheet("color: #7d8590;");
+    roadLayout->addRow("Surface:", m_surfaceLabel);
+
+    // Sidewalk/Curb toggles
+    m_sidewalkCheck = new QCheckBox("Sidewalk");
+    m_sidewalkCheck->setStyleSheet("QCheckBox { color: #e6edf3; }");
+    roadLayout->addRow("", m_sidewalkCheck);
+
+    m_curbCheck = new QCheckBox("Curb");
+    m_curbCheck->setStyleSheet("QCheckBox { color: #e6edf3; }");
+    roadLayout->addRow("", m_curbCheck);
+
     m_roadGroup->setVisible(false);
     mainLayout->addWidget(m_roadGroup);
 
@@ -165,6 +179,20 @@ void RoadInspector::updateFromSelection() {
     }
     m_lengthLabel->setText(QString::number(totalLen, 'f', 1) + " m");
     m_cpCountLabel->setText(QString::number(road->points.size()));
+
+    // Surface texture from profile
+    QString surface = "asphalt";
+    if (road->profile.type.contains("country")) surface = "gravel";
+    else if (road->profile.type.contains("highway")) surface = "asphalt";
+    m_surfaceLabel->setText(surface);
+
+    // Sidewalk/curb from profile type
+    m_sidewalkCheck->blockSignals(true);
+    m_curbCheck->blockSignals(true);
+    m_sidewalkCheck->setChecked(road->profile.type.contains("city"));
+    m_curbCheck->setChecked(road->profile.type.contains("city_2x2"));
+    m_sidewalkCheck->blockSignals(false);
+    m_curbCheck->blockSignals(false);
 
     m_nameEdit->blockSignals(false);
     m_widthSpin->blockSignals(false);

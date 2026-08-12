@@ -47,16 +47,14 @@ const Workspace* WorkspaceManager::getById(const QString& id) const {
 
 void WorkspaceManager::activate(const QString& id) {
     if (id == m_activeId) return;
-    if (!getById(id)) {
+    const Workspace* ws = getById(id);
+    if (!ws) {
         m_log.warn("Unknown workspace id:", id);
         return;
     }
 
     m_activeId = id;
-    const Workspace* ws = getById(id);
-    if (ws) {
-        m_log.info("Workspace activated:", ws->name);
-        m_bus->publish("workspace:activated", {{"id", id}, {"name", ws->name}});
-        emit workspaceActivated(*ws);
-    }
+    m_log.info("Workspace activated:", ws->name);
+    m_bus->publish("workspace:activated", {{"id", id}, {"name", ws->name}});
+    emit workspaceActivated(*ws);
 }

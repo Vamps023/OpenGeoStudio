@@ -14,6 +14,8 @@
 #include <QToolBar>
 #include <QLabel>
 #include <QDoubleSpinBox>
+#include <QAction>
+#include <QHBoxLayout>
 
 class TerrainStudioWidget : public QWidget {
     Q_OBJECT
@@ -77,10 +79,41 @@ private:
 
         m_toolbar->addSeparator();
 
+        // Visibility toggles
+        auto* gridAct = m_toolbar->addAction("Grid");
+        gridAct->setCheckable(true);
+        gridAct->setChecked(true);
+        connect(gridAct, &QAction::triggered, this, [this](bool checked) {
+            m_showGrid = checked;
+            if (m_viewport) m_viewport->overlay()->update();
+        });
+
+        auto* labelsAct = m_toolbar->addAction("Labels");
+        labelsAct->setCheckable(true);
+        labelsAct->setChecked(true);
+        connect(labelsAct, &QAction::triggered, this, [this](bool checked) {
+            m_showLabels = checked;
+            if (m_viewport) m_viewport->overlay()->update();
+        });
+
+        auto* selAct = m_toolbar->addAction("Selection");
+        selAct->setCheckable(true);
+        selAct->setChecked(true);
+        connect(selAct, &QAction::triggered, this, [this](bool checked) {
+            m_showSelection = checked;
+            if (m_viewport) m_viewport->overlay()->update();
+        });
+
+        m_toolbar->addSeparator();
+
         auto* hintLabel = new QLabel("Shift+drag to select area | Click tiles to toggle");
         hintLabel->setStyleSheet("color: #7d8590; padding: 0 10px; font-size: 12px;");
         m_toolbar->addWidget(hintLabel);
     }
+
+    bool m_showGrid = true;
+    bool m_showLabels = true;
+    bool m_showSelection = true;
 
     ApplicationContext* m_ctx;
     TerrainStore* m_store = nullptr;

@@ -174,8 +174,10 @@ void RoadStudioStore::clearSelection() {
 void RoadStudioStore::toggleRoadSelection(const QString& roadId) {
     if (m_selectedRoadIds.contains(roadId)) {
         m_selectedRoadIds.removeAll(roadId);
+        if (m_selection.roadId == roadId) m_selection.roadId.clear();
     } else {
         m_selectedRoadIds.append(roadId);
+        m_selection.roadId = roadId;
     }
     emit selectionChanged(m_selection);
 }

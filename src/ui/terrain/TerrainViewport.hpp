@@ -25,6 +25,7 @@ public:
     explicit TerrainViewport(ApplicationContext* ctx, TerrainStore* store,
                               QWidget* parent = nullptr);
     MapViewportWidget* mapWidget() { return m_mapWidget; }
+    TerrainOverlayWidget* overlay() { return m_overlay; }
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

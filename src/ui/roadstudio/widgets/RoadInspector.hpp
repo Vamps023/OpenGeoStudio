@@ -61,6 +61,9 @@ private:
     QComboBox* m_profileCombo = nullptr;
     QLabel* m_lengthLabel = nullptr;
     QLabel* m_cpCountLabel = nullptr;
+    QLabel* m_surfaceLabel = nullptr;
+    QCheckBox* m_sidewalkCheck = nullptr;
+    QCheckBox* m_curbCheck = nullptr;
 
     // Control point properties
     QGroupBox* m_pointGroup = nullptr;

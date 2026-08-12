@@ -267,6 +267,7 @@ QString ProjectManager::getExportPath() const {
 // --- Private ---
 
 void ProjectManager::loadRecent() {
+    if (!QFile::exists(m_recentFilePath)) return;
     QFile file(m_recentFilePath);
     if (!file.open(QIODevice::ReadOnly)) return;
 
