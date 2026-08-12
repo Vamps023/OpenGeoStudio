@@ -1,6 +1,13 @@
+// Prevent Windows min/max macros from conflicting with std::min/std::max
+// Must be before ANY includes that might pull in Windows headers
+#ifdef _WIN32
+#define NOMINMAX
+#endif
+
 #include "road.h"
 #include "junction.h"
 #include "constants.h"
+#include "spatial_indexer.h"
 
 #include <algorithm>
 #include <vector>

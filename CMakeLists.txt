@@ -142,10 +142,14 @@ if(ENABLE_LANEMAKER)
     file(GLOB LANEMAKER_LIBOPENDRIVE_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/*.cpp
     )
+    file(GLOB LANEMAKER_STUB_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/stubs/*.cpp
+    )
 
     add_library(lanemaker STATIC
         ${LANEMAKER_XODR_SOURCES}
         ${LANEMAKER_LIBOPENDRIVE_SOURCES}
+        ${LANEMAKER_STUB_SOURCES}
     )
 
     target_include_directories(lanemaker
@@ -153,7 +157,13 @@ if(ENABLE_LANEMAKER)
             ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr
             ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/stubs
     )
+
+    # NOMINMAX to prevent Windows min/max macros conflicting with std::min/std::max
+    # G_TEST is not defined — we're not building LaneMaker's own tests
+    target_compile_definitions(lanemaker PRIVATE NOMINMAX)
+    target_compile_definitions(lanemaker PUBLIC SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
 
     target_link_libraries(lanemaker
         PUBLIC
@@ -189,6 +199,7 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadStudioWidget.cpp
     src/ui/roadstudio/RoadEngineService.cpp
     src/ui/roadstudio/RoadViewport3D.cpp
+    src/ui/roadstudio/LaneMakerService.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
     # UI - Train Studio

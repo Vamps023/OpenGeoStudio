@@ -8,7 +8,11 @@
     "curl",
     "tiff",
     "libpng",
-    "nlohmann-json"
+    "nlohmann-json",
+    "spdlog",
+    "boost-optional",
+    "cgal",
+    "gtest"
   ],
   "builtin-baseline": "2f1d605400c8727cc00c15797aba796c88ccd523"
 }

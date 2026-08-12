@@ -2,6 +2,7 @@
 
 #include "RoadStudioStore.hpp"
 #include "GeoConvert.hpp"
+#include "LaneMakerService.hpp"
 
 RoadStudioStore::RoadStudioStore(EventBus* bus, QObject* parent)
     : QObject(parent), m_bus(bus), m_log("RoadStudioStore") {
@@ -319,26 +320,22 @@ void RoadStudioStore::finishLmRoad() {
     roads::localToGeo(m_lmRoadStart->x, m_lmRoadStart->y, m_refLat, m_refLon, startLat, startLon);
     roads::localToGeo(m_lmRoadEnd->x, m_lmRoadEnd->y, m_refLat, m_refLon, endLat, endLon);
 
-    roads::Road road;
-    road.id = generateId();
+    // Use LaneMaker's ConnectRays to generate proper road geometry
+    // (Line + Arc + Line, or Spiral, or Bezier with G1 continuity)
+    double startDirX = m_lmRoadStartDir ? m_lmRoadStartDir->x : 1.0;
+    double startDirY = m_lmRoadStartDir ? m_lmRoadStartDir->y : 0.0;
+    double endDirX = m_lmRoadEndDir ? m_lmRoadEndDir->x : (m_lmRoadEnd->x - m_lmRoadStart->x);
+    double endDirY = m_lmRoadEndDir ? m_lmRoadEndDir->y : (m_lmRoadEnd->y - m_lmRoadStart->y);
+
+    roads::Road road = LaneMakerService::generateRoad(
+        startLat, startLon, startDirX, startDirY,
+        endLat, endLon, endDirX, endDirY,
+        m_refLat, m_refLon, m_defaultWidth, m_defaultLaneCount, 32);
+
     road.name = "Road " + QString::number(m_roads.size() + 1);
-    road.width = m_defaultWidth;
-    road.laneCount = m_defaultLaneCount;
-
-    roads::ControlPoint p1;
-    p1.id = generateId();
-    p1.lat = startLat;
-    p1.lon = startLon;
-    road.points.append(p1);
-
-    roads::ControlPoint p2;
-    p2.id = generateId();
-    p2.lat = endLat;
-    p2.lon = endLon;
-    road.points.append(p2);
 
     m_roads.append(road);
-    m_log.info("Finished LaneMaker road:", road.id);
+    m_log.info("Finished LaneMaker road:", road.id, "with", road.points.size(), "control points");
     emit roadsChanged();
 
     cancelLmRoad();

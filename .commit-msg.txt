@@ -1,0 +1,50 @@
+Phase 10: LaneMaker integration — ConnectRays road generation
+
+Enabled and integrated the LaneMaker library (libOpenDRIVE + xodr)
+into the native C++/Qt application. LaneMaker generates proper road
+geometry with G1 continuity from the 3-click workflow.
+
+Build system changes:
+- Added vcpkg dependencies: spdlog, boost-optional, cgal, gtest
+- Enabled ENABLE_LANEMAKER=ON in CMake
+- Added stubs include path and stub source files to lanemaker target
+- Added NOMINMAX compile definition to prevent Windows min/max
+  macro conflicts with std::min/std::max
+- Linked lanemaker.lib into OpenGeoStudio executable
+
+Stub fixes for C++20 compatibility:
+- Added ObjectDisplayFlag enum to road_graphics.h stub
+- Created test/validation.h with static ValidateMap method
+- Added UserPreference typedef and g_preference global to preference.h
+- Added alwaysVerify field to Preference class
+- Added TQDM template wrapper to util.h (no-op progress bar)
+- Fixed shared_ptr::unique() → use_count() == 1 (removed in C++20)
+- Added spatial_indexer.h include to road.cpp
+- Moved NOMINMAX define before any includes in road.cpp
+
+LaneMakerService:
+- Wraps LM::ConnectRays for use by Road Studio
+- generateRoad: Takes start/end positions + directions in geo coords,
+  converts to local meters, calls ConnectRays, samples the generated
+  geometry, and converts back to geo coordinates
+- generateSimpleRoad: 2-point variant with auto-computed end direction
+- Falls back to straight line if LaneMaker is not available
+- Returns a roads::Road with properly sampled control points
+
+RoadStudioStore integration:
+- finishLmRoad now calls LaneMakerService::generateRoad instead of
+  creating a simple 2-point road
+- The generated road has 32 sampled control points following the
+  LaneMaker geometry (Line + Arc + Line, or Spiral, or Bezier)
+
+The LaneMaker library provides:
+- ConnectRays: Composes Segment + Arc + Segment to connect two rays
+  with tangent continuity
+- FitSpiral: Fits an Euler spiral (clothoid) for G2 continuity
+- FitArcOrLine: Simple arc or line fitting
+- libOpenDRIVE: OpenDRIVE XML parsing and mesh generation
+- xodr: Junction generation, curve fitting, road operations
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

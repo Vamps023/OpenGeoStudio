@@ -293,7 +293,7 @@ namespace LM
 
                     if (roadPtr->successorJunction != nullptr)
                     {
-                        if (roadPtr->successorJunction.unique())
+                        if (roadPtr->successorJunction.use_count() == 1)
                         {
                             tornDownJunctions.emplace(roadPtr->successorJunction->ID(), roadPtr->successorJunction->generated);
                             spdlog::trace("preserve successorJunction");
@@ -303,7 +303,7 @@ namespace LM
 
                     if (roadPtr->predecessorJunction != nullptr)
                     {
-                        if (roadPtr->predecessorJunction.unique())
+                        if (roadPtr->predecessorJunction.use_count() == 1)
                         {
                             tornDownJunctions.emplace(roadPtr->predecessorJunction->ID(), roadPtr->predecessorJunction->generated);
                             spdlog::trace("preserve predecessorJunction");

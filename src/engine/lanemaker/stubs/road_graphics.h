@@ -59,4 +59,11 @@ namespace LM
         void Hide(bool) {}
         ~JunctionGraphics() {}
     };
+
+    // Object display flags for road objects
+    enum class ObjectDisplayFlag : uint8_t {
+        Highlighted = 1 << 0,
+        Hidden = 1 << 1,
+        GreenLight = 1 << 2
+    };
 }
