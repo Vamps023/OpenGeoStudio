@@ -88,6 +88,7 @@ private:
     RoadStudioWidget* m_roadStudioWidget = nullptr;
     TrainStudioWidget* m_trainStudioWidget = nullptr;
     TerrainStudioWidget* m_terrainStudioWidget = nullptr;
+    QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
     RoadInspector* m_roadInspector = nullptr;
@@ -254,21 +255,31 @@ private:
 
     void setupDockWidgets() {
         // Left dock — project tree / explorer
-        QDockWidget* leftDock = new QDockWidget(tr("Project"), this);
-        leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        auto* leftContent = new QLabel(tr("Project tree\n(Phase 3)"));
+        m_leftDock = new QDockWidget(tr("Project"), this);
+        m_leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        m_leftDock->setStyleSheet(
+            "QDockWidget::title { background: #161b22; border-bottom: 1px solid #30363d; padding: 6px 12px; color: #e6edf3; }");
+        auto* leftContent = new QLabel(tr("No project open"));
         leftContent->setAlignment(Qt::AlignCenter);
-        leftDock->setWidget(leftContent);
-        addDockWidget(Qt::LeftDockWidgetArea, leftDock);
+        leftContent->setStyleSheet("color: #7d8590; font-size: 13px; padding: 20px;");
+        m_leftDock->setWidget(leftContent);
+        addDockWidget(Qt::LeftDockWidgetArea, m_leftDock);
 
         // Right dock — inspector / properties
         m_rightDock = new QDockWidget(tr("Inspector"), this);
         m_rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        auto* placeholder = new QLabel(tr("Properties\n(Select a road)"));
+        m_rightDock->setStyleSheet(
+            "QDockWidget::title { background: #161b22; border-bottom: 1px solid #30363d; padding: 6px 12px; color: #e6edf3; }");
+        auto* placeholder = new QLabel(tr("Select a road to\nview its properties"));
         placeholder->setAlignment(Qt::AlignCenter);
+        placeholder->setStyleSheet("color: #7d8590; font-size: 13px; padding: 20px;");
         m_rightDockPlaceholder = placeholder;
         m_rightDock->setWidget(m_rightDockPlaceholder);
         addDockWidget(Qt::RightDockWidgetArea, m_rightDock);
+
+        // Hide docks on Home (no side panels in Home workspace)
+        m_leftDock->setVisible(false);
+        m_rightDock->setVisible(false);
     }
 
     void updateStatusBar() {
@@ -290,15 +301,17 @@ private slots:
         // Switch center widget based on workspace
         if (ws.id == "home") {
             m_centerStack->setCurrentIndex(0);
+            // Home: no docks (matching reference)
+            m_leftDock->setVisible(false);
+            m_rightDock->setVisible(false);
         } else if (ws.id == "terrain") {
             m_centerStack->setCurrentIndex(1); // Terrain Studio
-            if (m_rightDockPlaceholder) {
-                m_rightDock->setWidget(m_rightDockPlaceholder);
-                m_rightDock->setWindowTitle("Inspector");
-            }
+            // Terrain: right dock has export panel (built into widget), hide docks
+            m_leftDock->setVisible(false);
+            m_rightDock->setVisible(false);
         } else if (ws.id == "road-studio") {
             m_centerStack->setCurrentIndex(2); // Road Studio
-            // Swap inspector to RoadInspector
+            // Road Studio: right dock = Road Inspector
             if (m_roadStudioWidget && !m_roadInspector) {
                 m_roadInspector = new RoadInspector(m_roadStudioWidget->store(), this);
             }
@@ -306,8 +319,13 @@ private slots:
                 m_rightDock->setWidget(m_roadInspector);
                 m_rightDock->setWindowTitle("Road Inspector");
             }
+            m_leftDock->setVisible(false);
+            m_rightDock->setVisible(true);
         } else if (ws.id == "train-studio") {
-            m_centerStack->setCurrentIndex(3); // Train placeholder
+            m_centerStack->setCurrentIndex(3); // Train Studio
+            // Train Studio: no docks (matching reference)
+            m_leftDock->setVisible(false);
+            m_rightDock->setVisible(false);
         }
 
         // Reset inspector for non-road-studio workspaces
@@ -431,52 +449,53 @@ int main(int argc, char* argv[]) {
         "QScrollBar::add-line, QScrollBar::sub-line { border: none; height: 0; width: 0; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
 
-        // Toolbars
-        "QToolBar { background: #0d1117; border: none; border-bottom: 1px solid #30363d; spacing: 4px; padding: 3px; }"
-        "QToolBar::separator { width: 1px; height: 1px; background: #30363d; margin: 4px 6px; }"
-        "QToolBar QToolButton { padding: 4px 8px; border-radius: 4px; color: #7d8590; }"
+        // Toolbars — top bar like reference app
+        "QToolBar { background: #0d1117; border: none; border-bottom: 1px solid #30363d; spacing: 2px; padding: 4px 6px; }"
+        "QToolBar::separator { width: 1px; height: 20px; background: #30363d; margin: 4px 8px; }"
+        "QToolBar QToolButton { padding: 5px 12px; border-radius: 6px; color: #7d8590; font-size: 13px; }"
         "QToolBar QToolButton:hover { background: #21262d; color: #e6edf3; }"
-        "QToolBar QToolButton:checked { background: rgba(6,182,212,0.2); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); }"
+        "QToolBar QToolButton:checked { background: rgba(6,182,212,0.15); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); }"
 
         // Menu bar
-        "QMenuBar { background: #0d1117; color: #e6edf3; border-bottom: 1px solid #30363d; }"
-        "QMenuBar::item { padding: 4px 12px; background: transparent; }"
+        "QMenuBar { background: #0d1117; color: #e6edf3; border-bottom: 1px solid #30363d; padding: 2px; }"
+        "QMenuBar::item { padding: 4px 12px; background: transparent; border-radius: 4px; }"
         "QMenuBar::item:selected { background: #21262d; }"
         "QMenu { background: #161b22; border: 1px solid #30363d; color: #e6edf3; }"
-        "QMenu::item { padding: 6px 24px; }"
+        "QMenu::item { padding: 6px 24px; border-radius: 4px; }"
         "QMenu::item:selected { background: #21262d; }"
         "QMenu::separator { height: 1px; background: #30363d; margin: 4px 8px; }"
 
         // Status bar
-        "QStatusBar { background: #0d1117; color: #7d8590; border-top: 1px solid #30363d; }"
+        "QStatusBar { background: #0d1117; color: #7d8590; border-top: 1px solid #30363d; font-size: 12px; }"
         "QStatusBar::item { border: none; }"
+        "QStatusBar QLabel { color: #7d8590; padding: 0 8px; }"
 
         // Dock widgets
-        "QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }"
-        "QDockWidget::title { background: #161b22; border-bottom: 1px solid #30363d; padding: 6px 12px; color: #e6edf3; }"
-        "QDockWidget { background: #0d1117; }"
+        "QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; background: #0d1117; }"
+        "QDockWidget::title { background: #161b22; border-bottom: 1px solid #30363d; padding: 6px 12px; color: #e6edf3; font-weight: bold; }"
 
         // Group boxes
-        "QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 12px; padding-top: 8px; color: #e6edf3; }"
+        "QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 12px; padding-top: 8px; color: #e6edf3; font-weight: bold; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #7d8590; }"
 
         // Inputs
         "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; color: #e6edf3; selection-background-color: rgba(6,182,212,0.3); }"
         "QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid #06b6d4; }"
+        "QLineEdit::placeholder { color: #484f58; }"
         "QComboBox::drop-down { border: none; width: 20px; }"
         "QComboBox QAbstractItemView { background: #1c2128; border: 1px solid #30363d; color: #e6edf3; selection-background-color: #21262d; }"
 
         // Buttons
-        "QPushButton { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 6px 16px; color: #e6edf3; }"
+        "QPushButton { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 6px 16px; color: #e6edf3; }"
         "QPushButton:hover { background: #30363d; border-color: #484f58; }"
         "QPushButton:pressed { background: #1c2128; }"
-        "QPushButton:disabled { color: #484f58; }"
+        "QPushButton:disabled { color: #484f58; background: #161b22; }"
 
         // List widgets
-        "QListWidget { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; }"
-        "QListWidget::item { padding: 6px 8px; border-bottom: 1px solid #21262d; }"
+        "QListWidget { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; }"
+        "QListWidget::item { padding: 8px 12px; border-bottom: 1px solid #21262d; }"
         "QListWidget::item:hover { background: #161b22; }"
-        "QListWidget::item:selected { background: rgba(6,182,212,0.15); color: #06b6d4; }"
+        "QListWidget::item:selected { background: rgba(6,182,212,0.15); color: #06b6d4; border-left: 3px solid #06b6d4; }"
 
         // Labels
         "QLabel { color: #e6edf3; }"
@@ -492,9 +511,12 @@ int main(int argc, char* argv[]) {
 
         // Tab widget
         "QTabWidget::pane { border: 1px solid #30363d; background: #0d1117; }"
-        "QTabBar::tab { background: #161b22; color: #7d8590; padding: 6px 16px; border: 1px solid #30363d; border-bottom: none; }"
+        "QTabBar::tab { background: #161b22; color: #7d8590; padding: 6px 16px; border: 1px solid #30363d; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; }"
         "QTabBar::tab:selected { background: #0d1117; color: #06b6d4; border-bottom: 2px solid #06b6d4; }"
         "QTabBar::tab:hover:!selected { background: #21262d; }"
+
+        // Tool buttons in toolbars (small)
+        "QToolButton { padding: 4px 8px; border-radius: 4px; }"
     ));
 
     // Create application context with all services

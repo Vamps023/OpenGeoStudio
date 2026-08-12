@@ -20,6 +20,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QStatusBar>
+#include <QResizeEvent>
 
 class TrainStudioWidget : public QWidget {
     Q_OBJECT
@@ -51,19 +52,29 @@ public:
             "border-top: 1px solid #30363d; font-size: 12px; }");
         layout->addWidget(m_statusBar);
 
-        // Keyboard hints (bottom-left overlay)
+        // Keyboard hints (bottom-left overlay, matching reference)
         m_hintsLabel = new QLabel(m_viewport);
         m_hintsLabel->setText("Shift+drag: Pan  |  Scroll: Zoom  |  V: Select  |  L: Line  |  A: Arc  |  Esc: Cancel");
         m_hintsLabel->setStyleSheet(
             "QLabel { background: rgba(13,17,23,200); color: #7d8590; padding: 6px 12px;"
             "border-radius: 6px; font-size: 11px; }");
-        m_hintsLabel->move(12, 0);
+        // Position at bottom-left — will be repositioned on resize
+        m_hintsLabel->move(12, m_viewport->height() - 30);
         m_hintsLabel->raise();
 
         updateStatusBar();
         connect(m_store, &TrainStudioStore::tracksChanged, this, [this]() { updateStatusBar(); });
     }
 
+protected:
+    void resizeEvent(QResizeEvent*) override {
+        if (m_hintsLabel && m_viewport) {
+            m_hintsLabel->move(12, m_viewport->height() - 30);
+            m_hintsLabel->raise();
+        }
+    }
+
+public:
     void updateStatusBar() {
         int trackCount = m_store->tracks().size();
         int pointCount = 0;

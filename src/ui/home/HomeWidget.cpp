@@ -43,12 +43,12 @@ void HomeWidget::setupUi() {
     tmplLayout->setSpacing(16);
 
     // Terrain template — green accent like reference
-    auto* terrainCard = new QPushButton("Terrain\n\nMap area selection\nDEM/heightmaps\nSatellite imagery");
+    auto* terrainCard = new QPushButton("Terrain\n\nMap area selection\nDEM / heightmaps\nSatellite imagery");
     terrainCard->setFixedSize(220, 140);
     terrainCard->setStyleSheet(
         "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 1px solid #3fb950; }");
+        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 2px solid #3fb950; }");
     connect(terrainCard, &QPushButton::clicked, this, &HomeWidget::onCreateTerrain);
     tmplLayout->addWidget(terrainCard);
 
@@ -57,8 +57,8 @@ void HomeWidget::setupUi() {
     roadCard->setFixedSize(220, 140);
     roadCard->setStyleSheet(
         "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 1px solid #06b6d4; }");
+        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 2px solid #06b6d4; }");
     connect(roadCard, &QPushButton::clicked, this, &HomeWidget::onCreateRoadStudio);
     tmplLayout->addWidget(roadCard);
 
@@ -67,8 +67,8 @@ void HomeWidget::setupUi() {
     trainCard->setFixedSize(220, 140);
     trainCard->setStyleSheet(
         "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 1px solid #06b6d4; }");
+        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 2px solid #06b6d4; }");
     connect(trainCard, &QPushButton::clicked, this, [this]() { emit newProjectRequested("train-studio"); });
     tmplLayout->addWidget(trainCard);
 
@@ -155,7 +155,7 @@ void HomeWidget::refreshRecent(const QString& filter) {
     if (m_recentList->count() == 0) {
         auto* item = new QListWidgetItem("No recent projects. Create a new one above.");
         item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsSelectable);
-        item->setForeground(QColor("#666"));
+        item->setForeground(QColor("#484f58"));
         m_recentList->addItem(item);
     }
 }
