@@ -205,6 +205,7 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadIntersection.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
+    src/ui/roadstudio/widgets/RoadElevationEditor.cpp
     # UI - Train Studio
     src/ui/trainstudio/TrainStudioStore.cpp
     src/ui/trainstudio/TrainViewport2D.cpp

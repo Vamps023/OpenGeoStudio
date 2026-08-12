@@ -60,6 +60,7 @@ public:
 signals:
     void mapClicked(double lat, double lon);
     void mapMoved();
+    void cursorMoved(double lat, double lon, double zoom);
 
 private slots:
     void onMapChanged(QMapLibre::Map::MapChange change);

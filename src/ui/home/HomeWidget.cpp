@@ -11,6 +11,8 @@
 #include <QDateTime>
 #include <QFrame>
 #include <QScrollArea>
+#include <QToolButton>
+#include <QListWidgetItem>
 
 HomeWidget::HomeWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx) {
@@ -131,25 +133,56 @@ void HomeWidget::refreshRecent(const QString& filter) {
     m_recentList->clear();
 
     const auto& recent = m_ctx->projects().recent();
-    for (const auto& entry : recent) {
+
+    // Sort: pinned first, then by modified date
+    auto sortedRecent = recent;
+    std::sort(sortedRecent.begin(), sortedRecent.end(),
+        [](const auto& a, const auto& b) {
+            if (a.pinned != b.pinned) return a.pinned;
+            return a.modifiedAt > b.modifiedAt;
+        });
+
+    for (const auto& entry : sortedRecent) {
         if (!filter.isEmpty() && !entry.name.contains(filter, Qt::CaseInsensitive)) {
             continue;
         }
 
-        QString displayText = entry.name;
-        if (entry.pinned) displayText = "★ " + displayText;
-        displayText += "\n  " + entry.filePath;
+        // Create a custom widget for each row with pin button
+        auto* rowWidget = new QWidget();
+        auto* rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(8, 6, 8, 6);
+        rowLayout->setSpacing(8);
 
+        // Pin/unpin button
+        auto* pinBtn = new QToolButton(rowWidget);
+        pinBtn->setText(entry.pinned ? "★" : "☆");
+        pinBtn->setFixedSize(24, 24);
+        pinBtn->setStyleSheet(
+            "QToolButton { border: none; font-size: 16px; color: #d29922; }"
+            "QToolButton:hover { color: #06b6d4; }");
+        connect(pinBtn, &QToolButton::clicked, this, [this, filePath = entry.filePath]() {
+            m_ctx->projects().togglePin(filePath);
+        });
+        rowLayout->addWidget(pinBtn);
+
+        // Project info
+        QString infoText = entry.name;
+        infoText += "\n  " + entry.filePath;
         if (!entry.modifiedAt.isEmpty()) {
             QDateTime dt = QDateTime::fromString(entry.modifiedAt, Qt::ISODate);
             if (dt.isValid()) {
-                displayText += "  |  " + dt.toString("yyyy-MM-dd hh:mm");
+                infoText += "  |  " + dt.toString("yyyy-MM-dd hh:mm");
             }
         }
+        auto* infoLabel = new QLabel(infoText, rowWidget);
+        infoLabel->setStyleSheet("color: #e6edf3; font-size: 13px;");
+        rowLayout->addWidget(infoLabel, 1);
 
-        auto* item = new QListWidgetItem(displayText, m_recentList);
+        auto* item = new QListWidgetItem(m_recentList);
         item->setData(Qt::UserRole, entry.filePath);
+        item->setSizeHint(rowWidget->sizeHint());
         m_recentList->addItem(item);
+        m_recentList->setItemWidget(item, rowWidget);
     }
 
     if (m_recentList->count() == 0) {

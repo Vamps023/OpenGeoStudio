@@ -59,6 +59,8 @@ private:
     QSpinBox* m_laneCountSpin = nullptr;
     QPushButton* m_colorBtn = nullptr;
     QComboBox* m_profileCombo = nullptr;
+    QLabel* m_lengthLabel = nullptr;
+    QLabel* m_cpCountLabel = nullptr;
 
     // Control point properties
     QGroupBox* m_pointGroup = nullptr;

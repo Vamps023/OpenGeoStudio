@@ -69,6 +69,14 @@ public:
     // XML export
     QString exportNetworkXml() const;
 
+    // XML validation — checks network structure for errors
+    struct ValidationResult {
+        bool valid = true;
+        QStringList errors;
+        QStringList warnings;
+    };
+    ValidationResult validateNetwork() const;
+
     // OSM railway import via Overpass API
     void importOsmRailways(double south, double west, double north, double east);
 

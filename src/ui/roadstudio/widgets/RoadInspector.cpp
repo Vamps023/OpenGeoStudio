@@ -63,6 +63,16 @@ void RoadInspector::setupUi() {
             this, &RoadInspector::onProfileChanged);
     roadLayout->addRow("Profile:", m_profileCombo);
 
+    // Road length (read-only, computed)
+    m_lengthLabel = new QLabel("—");
+    m_lengthLabel->setStyleSheet("color: #7d8590;");
+    roadLayout->addRow("Length:", m_lengthLabel);
+
+    // Control point count (read-only)
+    m_cpCountLabel = new QLabel("—");
+    m_cpCountLabel->setStyleSheet("color: #7d8590;");
+    roadLayout->addRow("Control Points:", m_cpCountLabel);
+
     m_roadGroup->setVisible(false);
     mainLayout->addWidget(m_roadGroup);
 
@@ -143,6 +153,18 @@ void RoadInspector::updateFromSelection() {
     m_profileCombo->setCurrentText(road->profile.type);
     m_colorBtn->setStyleSheet(
         QString("background-color: %1; border: 1px solid #30363d;").arg(road->color));
+
+    // Compute road length
+    double totalLen = 0;
+    const double refLat = m_store->refLat();
+    const double refLon = m_store->refLon();
+    for (int i = 1; i < road->points.size(); ++i) {
+        double dlat = (road->points[i].lat - road->points[i-1].lat) * 111320.0;
+        double dlon = (road->points[i].lon - road->points[i-1].lon) * 111320.0 * cos(refLat * M_PI / 180.0);
+        totalLen += std::hypot(dlat, dlon);
+    }
+    m_lengthLabel->setText(QString::number(totalLen, 'f', 1) + " m");
+    m_cpCountLabel->setText(QString::number(road->points.size()));
 
     m_nameEdit->blockSignals(false);
     m_widthSpin->blockSignals(false);

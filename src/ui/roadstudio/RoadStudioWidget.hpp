@@ -15,6 +15,7 @@
 #include "RoadViewport2D.hpp"
 #include "RoadViewport3D.hpp"
 #include "widgets/RoadStudioToolbar.hpp"
+#include "widgets/RoadElevationEditor.hpp"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -52,11 +53,23 @@ public:
 
         layout->addWidget(m_viewStack, 1);
 
+        // Elevation editor (bottom panel, collapsible)
+        m_elevationEditor = new RoadElevationEditor(m_store, this);
+        layout->addWidget(m_elevationEditor);
+
         // Connect store changes
         connect(m_store, &RoadStudioStore::roadsChanged, this, &RoadStudioWidget::onRoadsChanged);
         connect(m_store, &RoadStudioStore::viewModeChanged, this, &RoadStudioWidget::onViewModeChanged);
         connect(m_store, &RoadStudioStore::selectionChanged,
                 m_viewport2d, qOverload<>(&QWidget::update));
+        connect(m_store, &RoadStudioStore::selectionChanged, this, [this]() {
+            const auto& sel = m_store->selection();
+            if (!sel.roadId.isEmpty()) {
+                m_elevationEditor->setActiveRoad(sel.roadId);
+            } else {
+                m_elevationEditor->setActiveRoad("");
+            }
+        });
         connect(m_store, &RoadStudioStore::toolChanged,
                 m_viewport2d, qOverload<>(&QWidget::update));
         connect(m_store, &RoadStudioStore::lmRoadStateChanged,
@@ -97,4 +110,5 @@ private:
     QStackedWidget* m_viewStack = nullptr;
     RoadViewport2D* m_viewport2d = nullptr;
     RoadViewport3D* m_viewport3d = nullptr;
+    RoadElevationEditor* m_elevationEditor = nullptr;
 };

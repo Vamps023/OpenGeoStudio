@@ -26,6 +26,13 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QDebug>
+#include <QDialog>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QShortcut>
+#include <QKeySequence>
+#include <QCompleter>
 
 // Road engine — direct C++ include, no N-API bridge
 #include "road_engine.hpp"
@@ -46,6 +53,162 @@
 #if defined(HAVE_MAPLIBRE)
 #include "app/MapViewportWidget.hpp"
 #endif
+
+// ═══════════════════════════════════════════════════════════
+// SettingsDialog — API keys and project settings
+// ═══════════════════════════════════════════════════════════
+
+class SettingsDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit SettingsDialog(QWidget* parent = nullptr) : QDialog(parent) {
+        setWindowTitle("Settings");
+        setMinimumWidth(450);
+        setStyleSheet("QDialog { background: #0d1117; }"
+            "QLabel { color: #e6edf3; }"
+            "QLineEdit { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 6px; color: #e6edf3; }"
+            "QPushButton { background: #21262d; border: 1px solid #30363d; border-radius: 6px; padding: 8px 20px; color: #e6edf3; }"
+            "QPushButton:hover { background: #30363d; }"
+            "QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 12px; padding-top: 8px; color: #e6edf3; }"
+            "QGroupBox::title { color: #7d8590; }");
+
+        auto* layout = new QVBoxLayout(this);
+        layout->setSpacing(12);
+        layout->setContentsMargins(16, 16, 16, 16);
+
+        // API Keys section
+        auto* keysGroup = new QGroupBox("API Keys");
+        auto* keysForm = new QFormLayout(keysGroup);
+
+        auto* openTopoKey = new QLineEdit();
+        openTopoKey->setPlaceholderText("OpenTopography API key");
+        openTopoKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("OpenTopography:", openTopoKey);
+
+        auto* mapboxKey = new QLineEdit();
+        mapboxKey->setPlaceholderText("Mapbox access token");
+        mapboxKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("Mapbox:", mapboxKey);
+
+        auto* maptilerKey = new QLineEdit();
+        maptilerKey->setPlaceholderText("MapTiler API key");
+        maptilerKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("MapTiler:", maptilerKey);
+
+        layout->addWidget(keysGroup);
+
+        // Project defaults section
+        auto* defaultsGroup = new QGroupBox("Project Defaults");
+        auto* defaultsForm = new QFormLayout(defaultsGroup);
+
+        auto* defaultWorkspace = new QComboBox();
+        defaultWorkspace->addItems({"Home", "Terrain", "Road Studio", "Train Studio"});
+        defaultsForm->addRow("Default workspace:", defaultWorkspace);
+
+        auto* defaultRoadWidth = new QLineEdit("8.0");
+        defaultsForm->addRow("Default road width (m):", defaultRoadWidth);
+
+        auto* defaultLanes = new QLineEdit("2");
+        defaultsForm->addRow("Default lane count:", defaultLanes);
+
+        layout->addWidget(defaultsGroup);
+
+        // Buttons
+        auto* btnLayout = new QHBoxLayout();
+        btnLayout->addStretch();
+
+        auto* closeBtn = new QPushButton("Close");
+        connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+        btnLayout->addWidget(closeBtn);
+
+        layout->addLayout(btnLayout);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════
+// CommandPalette — Ctrl+Shift+P quick command execution
+// ═══════════════════════════════════════════════════════════
+
+class CommandPalette : public QDialog {
+    Q_OBJECT
+public:
+    explicit CommandPalette(QWidget* parent = nullptr) : QDialog(parent) {
+        setWindowTitle("Command Palette");
+        setMinimumWidth(500);
+        setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(8, 8, 8, 8);
+        layout->setSpacing(4);
+
+        m_input = new QLineEdit(this);
+        m_input->setPlaceholderText("Type a command...");
+        m_input->setStyleSheet(
+            "QLineEdit { background: #21262d; border: 1px solid #06b6d4; border-radius: 6px;"
+            "padding: 10px 14px; color: #e6edf3; font-size: 14px; }");
+        layout->addWidget(m_input);
+
+        m_list = new QListWidget(this);
+        m_list->setStyleSheet(
+            "QListWidget { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; }"
+            "QListWidget::item { padding: 8px 12px; color: #e6edf3; }"
+            "QListWidget::item:hover { background: #161b22; }"
+            "QListWidget::item:selected { background: rgba(6,182,212,0.15); color: #06b6d4; }");
+        layout->addWidget(m_list);
+
+        // Populate commands
+        addCommand("File: New Project", "file.new");
+        addCommand("File: Open Project", "file.open");
+        addCommand("File: Save Project", "file.save");
+        addCommand("View: Home", "ws.home");
+        addCommand("View: Terrain", "ws.terrain");
+        addCommand("View: Road Studio", "ws.road");
+        addCommand("View: Train Studio", "ws.train");
+        addCommand("Settings: Open Settings", "settings.open");
+        addCommand("Help: About", "help.about");
+
+        m_input->setFocus();
+
+        connect(m_input, &QLineEdit::textChanged, this, &CommandPalette::filterCommands);
+        connect(m_input, &QLineEdit::returnPressed, this, &CommandPalette::executeSelected);
+        connect(m_list, &QListWidget::itemDoubleClicked, this, &CommandPalette::executeSelected);
+    }
+
+    QString selectedCommand() const { return m_selectedCommand; }
+
+private:
+    QLineEdit* m_input = nullptr;
+    QListWidget* m_list = nullptr;
+    QString m_selectedCommand;
+    QStringList m_allCommands;
+
+    void addCommand(const QString& label, const QString& id) {
+        auto* item = new QListWidgetItem(label, m_list);
+        item->setData(Qt::UserRole, id);
+        m_allCommands.append(label + "|" + id);
+    }
+
+    void filterCommands(const QString& text) {
+        m_list->clear();
+        for (const auto& cmd : m_allCommands) {
+            auto parts = cmd.split('|');
+            if (parts.size() != 2) continue;
+            if (text.isEmpty() || parts[0].contains(text, Qt::CaseInsensitive)) {
+                auto* item = new QListWidgetItem(parts[0], m_list);
+                item->setData(Qt::UserRole, parts[1]);
+            }
+        }
+        if (m_list->count() > 0) m_list->setCurrentRow(0);
+    }
+
+    void executeSelected() {
+        auto* item = m_list->currentItem();
+        if (item) {
+            m_selectedCommand = item->data(Qt::UserRole).toString();
+            accept();
+        }
+    }
+};
 
 // ═══════════════════════════════════════════════════════════
 // MainWindow — the application shell
@@ -143,6 +306,49 @@ private:
                    "<p>Licensed under MIT + Apache-2.0</p>")
                 .arg(version));
         });
+
+        // Command palette shortcut (Ctrl+Shift+P)
+        auto* cmdPaletteShortcut = new QShortcut(QKeySequence("Ctrl+Shift+P"), this);
+        connect(cmdPaletteShortcut, &QShortcut::activated, this, [this]() {
+            CommandPalette palette(this);
+            if (palette.exec() == QDialog::Accepted) {
+                QString cmd = palette.selectedCommand();
+                if (cmd == "file.new") onNewProject();
+                else if (cmd == "file.open") onOpenProject();
+                else if (cmd == "file.save") m_ctx->projects().save();
+                else if (cmd == "ws.home") m_ctx->workspaces().activate("home");
+                else if (cmd == "ws.terrain") m_ctx->workspaces().activate("terrain");
+                else if (cmd == "ws.road") m_ctx->workspaces().activate("road-studio");
+                else if (cmd == "ws.train") m_ctx->workspaces().activate("train-studio");
+                else if (cmd == "settings.open") openSettings();
+                else if (cmd == "help.about") {
+                    const QString version = QString::fromLatin1(road_engine::versionString());
+                    QMessageBox::information(this, tr("About OpenGeoStudio"),
+                        tr("<h3>OpenGeoStudio</h3>"
+                           "<p>Native C++/Qt 6 desktop application</p>"
+                           "<p>Road Engine: v%1</p>")
+                        .arg(version));
+                }
+            }
+        });
+
+        // Settings shortcut (Ctrl+,)
+        auto* settingsShortcut = new QShortcut(QKeySequence("Ctrl+,"), this);
+        connect(settingsShortcut, &QShortcut::activated, this, [this]() { openSettings(); });
+
+        // Workspace switching shortcuts (Alt+1 through Alt+4)
+        const QStringList wsIds = {"home", "terrain", "road-studio", "train-studio"};
+        for (int i = 0; i < wsIds.size(); ++i) {
+            auto* sc = new QShortcut(QKeySequence(QString("Alt+%1").arg(i + 1)), this);
+            connect(sc, &QShortcut::activated, this, [this, id = wsIds[i]]() {
+                m_ctx->workspaces().activate(id);
+            });
+        }
+    }
+
+    void openSettings() {
+        SettingsDialog dialog(this);
+        dialog.exec();
     }
 
     void setupToolBar() {
@@ -218,6 +424,12 @@ private:
                             QStringLiteral("Terrain — Clicked: %1, %2")
                                 .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
                     });
+            connect(m_terrainStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
+                    this, [this](double lat, double lon, double zoom) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Lat: %1  Lon: %2  Zoom: %3  |  Terrain Studio")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6).arg(zoom, 0, 'f', 1));
+                    });
         }
 #endif
 
@@ -232,6 +444,12 @@ private:
                             QStringLiteral("Road Studio — Clicked: %1, %2")
                                 .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
                     });
+            connect(m_roadStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
+                    this, [this](double lat, double lon, double zoom) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Lat: %1  Lon: %2  Zoom: %3  |  Road Studio")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6).arg(zoom, 0, 'f', 1));
+                    });
         }
 #endif
 
@@ -245,6 +463,12 @@ private:
                         m_statusLabel->setText(
                             QStringLiteral("Train Studio — Clicked: %1, %2")
                                 .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+                    });
+            connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
+                    this, [this](double lat, double lon, double zoom) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Lat: %1  Lon: %2  Zoom: %3  |  Train Studio")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6).arg(zoom, 0, 'f', 1));
                     });
         }
 #endif

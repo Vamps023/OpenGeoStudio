@@ -316,3 +316,87 @@ void TrainStudioStore::importOsmRailways(double south, double west, double north
         }
     });
 }
+
+TrainStudioStore::ValidationResult TrainStudioStore::validateNetwork() const {
+    ValidationResult result;
+
+    if (m_tracks.isEmpty()) {
+        result.valid = false;
+        result.errors.append("No tracks in network");
+        return result;
+    }
+
+    for (const auto& track : m_tracks) {
+        if (track.points.size() < 2) {
+            result.valid = false;
+            result.errors.append(QString("Track '%1' has fewer than 2 control points")
+                .arg(track.name));
+        }
+
+        if (track.name.isEmpty()) {
+            result.warnings.append("Track has no name");
+        }
+
+        if (track.gauge <= 0) {
+            result.valid = false;
+            result.errors.append(QString("Track '%1' has invalid gauge: %2")
+                .arg(track.name).arg(track.gauge));
+        }
+
+        // Check for duplicate consecutive points
+        for (int i = 1; i < track.points.size(); ++i) {
+            double dlat = track.points[i].lat - track.points[i-1].lat;
+            double dlon = track.points[i].lon - track.points[i-1].lon;
+            if (std::hypot(dlat, dlon) < 1e-9) {
+                result.warnings.append(QString("Track '%1' has duplicate points at index %2")
+                    .arg(track.name).arg(i));
+            }
+        }
+
+        // Check for invalid coordinates
+        for (int i = 0; i < track.points.size(); ++i) {
+            const auto& cp = track.points[i];
+            if (cp.lat < -90 || cp.lat > 90) {
+                result.valid = false;
+                result.errors.append(QString("Track '%1' point %2 has invalid latitude: %3")
+                    .arg(track.name).arg(i).arg(cp.lat));
+            }
+            if (cp.lon < -180 || cp.lon > 180) {
+                result.valid = false;
+                result.errors.append(QString("Track '%1' point %2 has invalid longitude: %3")
+                    .arg(track.name).arg(i).arg(cp.lon));
+            }
+        }
+    }
+
+    // Check for track connectivity (tracks that don't connect to any other)
+    if (m_tracks.size() > 1) {
+        for (const auto& track : m_tracks) {
+            bool connected = false;
+            // Simple check: see if any endpoint is close to another track's endpoint
+            if (track.points.size() >= 2) {
+                const auto& start = track.points.first();
+                const auto& end = track.points.last();
+                for (const auto& other : m_tracks) {
+                    if (other.id == track.id || other.points.size() < 2) continue;
+                    const auto& oStart = other.points.first();
+                    const auto& oEnd = other.points.last();
+                    double d1 = std::hypot(start.lat - oStart.lat, start.lon - oStart.lon);
+                    double d2 = std::hypot(start.lat - oEnd.lat, start.lon - oEnd.lon);
+                    double d3 = std::hypot(end.lat - oStart.lat, end.lon - oStart.lon);
+                    double d4 = std::hypot(end.lat - oEnd.lat, end.lon - oEnd.lon);
+                    if (d1 < 0.001 || d2 < 0.001 || d3 < 0.001 || d4 < 0.001) {
+                        connected = true;
+                        break;
+                    }
+                }
+            }
+            if (!connected && m_tracks.size() > 1) {
+                result.warnings.append(QString("Track '%1' is not connected to any other track")
+                    .arg(track.name));
+            }
+        }
+    }
+
+    return result;
+}

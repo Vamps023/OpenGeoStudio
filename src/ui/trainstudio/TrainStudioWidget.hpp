@@ -145,6 +145,53 @@ private:
 
         m_toolbar->addSeparator();
 
+        // Validate XML
+        QAction* validateAct = m_toolbar->addAction("Validate");
+        validateAct->setShortcut(QKeySequence("Ctrl+Shift+V"));
+        connect(validateAct, &QAction::triggered, this, [this]() {
+            auto result = m_store->validateNetwork();
+            QString msg;
+            if (result.valid && result.warnings.isEmpty()) {
+                msg = "Network is valid. No errors or warnings.";
+                m_validationLabel->setText("Valid");
+                m_validationLabel->setStyleSheet(
+                    "QLabel { color: #3fb950; font-size: 11px; padding: 0 8px; font-weight: bold; }");
+            } else {
+                msg = QString("Errors: %1\nWarnings: %2\n\n")
+                    .arg(result.errors.size()).arg(result.warnings.size());
+                for (const auto& e : result.errors) msg += "ERROR: " + e + "\n";
+                for (const auto& w : result.warnings) msg += "WARN: " + w + "\n";
+                if (result.valid) {
+                    m_validationLabel->setText(QString("Warnings: %1").arg(result.warnings.size()));
+                    m_validationLabel->setStyleSheet(
+                        "QLabel { color: #d29922; font-size: 11px; padding: 0 8px; font-weight: bold; }");
+                } else {
+                    m_validationLabel->setText(QString("Errors: %1").arg(result.errors.size()));
+                    m_validationLabel->setStyleSheet(
+                        "QLabel { color: #f85149; font-size: 11px; padding: 0 8px; font-weight: bold; }");
+                }
+            }
+            QMessageBox::information(this, "Validation", msg);
+        });
+
+        // Validation status badge
+        m_validationLabel = new QLabel("—");
+        m_validationLabel->setStyleSheet(
+            "QLabel { color: #7d8590; font-size: 11px; padding: 0 8px; font-weight: bold; }");
+        m_toolbar->addWidget(m_validationLabel);
+
+        m_toolbar->addSeparator();
+
+        // Snap toggle
+        QAction* snapAct = m_toolbar->addAction("Snap");
+        snapAct->setCheckable(true);
+        snapAct->setChecked(true);
+        connect(snapAct, &QAction::triggered, this, [this, snapAct]() {
+            m_store->setSnapEnabled(snapAct->isChecked());
+        });
+
+        m_toolbar->addSeparator();
+
         // Export XML
         QAction* exportAct = m_toolbar->addAction("Export XML");
         connect(exportAct, &QAction::triggered, this, [this]() {
@@ -201,4 +248,5 @@ private:
     TrainViewport2D* m_viewport = nullptr;
     QLabel* m_statusBar = nullptr;
     QLabel* m_hintsLabel = nullptr;
+    QLabel* m_validationLabel = nullptr;
 };

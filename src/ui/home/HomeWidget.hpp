@@ -15,6 +15,7 @@
 #include <QListWidget>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolButton>
 
 class HomeWidget : public QWidget {
     Q_OBJECT

@@ -146,6 +146,14 @@ void MapViewportWidget::setupMap() {
             this, [this](QMapLibre::Coordinate coord) {
                 emit mapClicked(coord.first, coord.second);
             });
+
+    // Emit cursor coordinates on mouse move
+    connect(m_mapWidget, &QMapLibre::MapWidget::onMouseMoveEvent,
+            this, [this](QMapLibre::Coordinate coord) {
+                double zoom = 15.0;
+                if (auto* m = map()) zoom = m->zoom();
+                emit cursorMoved(coord.first, coord.second, zoom);
+            });
 }
 
 QMapLibre::Map* MapViewportWidget::map() const {
