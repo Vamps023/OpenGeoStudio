@@ -187,6 +187,7 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadStudioStore.cpp
     src/ui/roadstudio/RoadViewport2D.cpp
     src/ui/roadstudio/RoadStudioWidget.cpp
+    src/ui/roadstudio/RoadEngineService.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
 )
 

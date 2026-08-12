@@ -14,6 +14,7 @@
 //
 
 #include "RoadStudioStore.hpp"
+#include "RoadEngineService.hpp"
 #include "../../core/ApplicationContext.hpp"
 #include "../app/MapViewportWidget.hpp"
 
@@ -95,6 +96,7 @@ private:
 
     RoadStudioStore* m_store;
     MapViewportWidget* m_map;
+    RoadEngineService* m_engine;
 
     // Map state (refreshed from MapLibre)
     double m_mapLat = 18.52;

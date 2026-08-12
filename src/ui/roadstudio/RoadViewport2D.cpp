@@ -78,6 +78,7 @@ void RoadViewport2D::onLmRoadStateChanged() {
 RoadOverlayWidget::RoadOverlayWidget(RoadStudioStore* store, MapViewportWidget* map,
                                       QWidget* parent)
     : QWidget(parent), m_store(store), m_map(map) {
+    m_engine = new RoadEngineService(this);
     setAttribute(Qt::WA_TransparentForMouseEvents, false);
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -176,43 +177,29 @@ void RoadOverlayWidget::drawRoads(QPainter& p) {
 void RoadOverlayWidget::drawRoad(QPainter& p, const roads::Road& road) {
     if (road.points.size() < 2) return;
 
-    // Build path from control points
-    QPainterPath path;
-    QPointF prevScreen;
-    geoToScreen(road.points[0].lat, road.points[0].lon, prevScreen);
-    path.moveTo(prevScreen);
+    // Use the C++ engine to sample the centerline
+    auto centerline = m_engine->sampleCenterline(
+        road, m_store->refLat(), m_store->refLon(), 64);
 
-    for (int i = 1; i < road.points.size(); ++i) {
-        QPointF screen;
-        geoToScreen(road.points[i].lat, road.points[i].lon, screen);
-
-        // Check for bezier handles
-        if (road.points[i-1].handleOut && road.points[i].handleIn) {
-            // Cubic bezier
-            double prevLocalX, prevLocalY, cp1LocalX, cp1LocalY, cp2LocalX, cp2LocalY;
-            roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
-                              m_store->refLat(), m_store->refLon(),
-                              prevLocalX, prevLocalY);
-            cp1LocalX = prevLocalX + road.points[i-1].handleOut->x;
-            cp1LocalY = prevLocalY + road.points[i-1].handleOut->y;
-
-            double curLocalX, curLocalY;
-            roads::geoToLocal(road.points[i].lat, road.points[i].lon,
-                              m_store->refLat(), m_store->refLon(),
-                              curLocalX, curLocalY);
-            cp2LocalX = curLocalX + road.points[i].handleIn->x;
-            cp2LocalY = curLocalY + road.points[i].handleIn->y;
-
-            QPointF cp1 = localToScreen(cp1LocalX, cp1LocalY);
-            QPointF cp2 = localToScreen(cp2LocalX, cp2LocalY);
-            path.cubicTo(cp1, cp2, screen);
-        } else {
-            path.lineTo(screen);
-        }
-        prevScreen = screen;
+    if (centerline.size() < 2) {
+        // Fallback: draw straight line between control points
+        QPointF start, end;
+        geoToScreen(road.points[0].lat, road.points[0].lon, start);
+        geoToScreen(road.points[1].lat, road.points[1].lon, end);
+        QPen pen(QColor(road.color), std::max(2.0, road.width * m_ppm));
+        p.setPen(pen);
+        p.drawLine(start, end);
+        return;
     }
 
-    // Draw road outline (width-scaled)
+    // Build centerline path from engine samples
+    QPainterPath path;
+    path.moveTo(localToScreen(centerline[0].x, centerline[0].y));
+    for (size_t i = 1; i < centerline.size(); ++i) {
+        path.lineTo(localToScreen(centerline[i].x, centerline[i].y));
+    }
+
+    // Draw road surface (width-scaled)
     const double roadWidthPx = road.width * m_ppm;
     QColor roadColor(road.color);
     roadColor.setAlpha(180);
@@ -222,10 +209,52 @@ void RoadOverlayWidget::drawRoad(QPainter& p, const roads::Road& road) {
     p.setPen(pen);
     p.drawPath(path);
 
-    // Draw centerline (thin line on top)
+    // Draw left and right edges (engine-computed)
+    auto leftEdge = m_engine->sampleLeftEdge(
+        road, m_store->refLat(), m_store->refLon(), 64);
+    auto rightEdge = m_engine->sampleRightEdge(
+        road, m_store->refLat(), m_store->refLon(), 64);
+
+    if (leftEdge.size() >= 2) {
+        QPainterPath leftPath;
+        leftPath.moveTo(localToScreen(leftEdge[0].x, leftEdge[0].y));
+        for (size_t i = 1; i < leftEdge.size(); ++i) {
+            leftPath.lineTo(localToScreen(leftEdge[i].x, leftEdge[i].y));
+        }
+        p.setPen(QPen(QColor(255, 100, 100, 120), 1.5));
+        p.drawPath(leftPath);
+    }
+
+    if (rightEdge.size() >= 2) {
+        QPainterPath rightPath;
+        rightPath.moveTo(localToScreen(rightEdge[0].x, rightEdge[0].y));
+        for (size_t i = 1; i < rightEdge.size(); ++i) {
+            rightPath.lineTo(localToScreen(rightEdge[i].x, rightEdge[i].y));
+        }
+        p.setPen(QPen(QColor(100, 100, 255, 120), 1.5));
+        p.drawPath(rightPath);
+    }
+
+    // Draw centerline (thin yellow line on top)
     QPen centerPen(QColor(255, 255, 0, 200), 1.5);
     p.setPen(centerPen);
     p.drawPath(path);
+
+    // Draw lane boundaries if multi-lane
+    if (road.laneCount > 1) {
+        auto boundaries = m_engine->generateLaneBoundaries(
+            road, m_store->refLat(), m_store->refLon(), 64);
+        p.setPen(QPen(QColor(255, 255, 255, 100), 1, Qt::DashLine));
+        for (const auto& boundary : boundaries) {
+            if (boundary.size() < 2) continue;
+            QPainterPath bPath;
+            bPath.moveTo(localToScreen(boundary[0].x, boundary[0].y));
+            for (size_t i = 1; i < boundary.size(); ++i) {
+                bPath.lineTo(localToScreen(boundary[i].x, boundary[i].y));
+            }
+            p.drawPath(bPath);
+        }
+    }
 }
 
 void RoadOverlayWidget::drawControlPoints(QPainter& p, const roads::Road& road) {
