@@ -39,6 +39,7 @@
 #include "ui/home/HomeWidget.hpp"
 #include "ui/roadstudio/RoadStudioWidget.hpp"
 #include "ui/roadstudio/widgets/RoadInspector.hpp"
+#include "ui/trainstudio/TrainStudioWidget.hpp"
 
 // Phase 2c: MapLibre Native Qt map viewport
 #if defined(HAVE_MAPLIBRE)
@@ -83,6 +84,7 @@ private:
     QStackedWidget* m_centerStack = nullptr;
     HomeWidget* m_homeWidget = nullptr;
     RoadStudioWidget* m_roadStudioWidget = nullptr;
+    TrainStudioWidget* m_trainStudioWidget = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
     RoadInspector* m_roadInspector = nullptr;
@@ -207,11 +209,19 @@ private:
         }
 #endif
 
-        // Page 3: Train Studio placeholder
-        auto* trainPlaceholder = new QLabel("Train Studio — Phase 5 implementation");
-        trainPlaceholder->setAlignment(Qt::AlignCenter);
-        trainPlaceholder->setStyleSheet("font-size: 18px; color: #888;");
-        m_centerStack->addWidget(trainPlaceholder);
+        // Page 3: Train Studio (2D track editing)
+        m_trainStudioWidget = new TrainStudioWidget(m_ctx);
+        m_centerStack->addWidget(m_trainStudioWidget);
+#if defined(HAVE_MAPLIBRE)
+        if (m_trainStudioWidget->mapWidget()) {
+            connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
+                    this, [this](double lat, double lon) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Train Studio — Clicked: %1, %2")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+                    });
+        }
+#endif
 
         setCentralWidget(m_centerStack);
         m_centerStack->setCurrentIndex(0); // Home

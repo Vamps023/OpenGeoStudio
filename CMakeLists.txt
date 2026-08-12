@@ -191,6 +191,10 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadViewport3D.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
+    # UI - Train Studio
+    src/ui/trainstudio/TrainStudioStore.cpp
+    src/ui/trainstudio/TrainViewport2D.cpp
+    src/ui/trainstudio/TrainStudioWidget.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -216,6 +220,7 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/home
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/widgets
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE

@@ -1,25 +1,42 @@
-Phase 4h: Debug layer rendering
+Phase 5: Train Studio — 2D track editing with line and arc tools
 
-Implemented 8 of 18 debug layers with actual rendering in the 2D viewport:
+Implemented Train Studio as a 2D-only workspace for railway track design:
 
-1. Centerline (CL) — green thick line from engine centerline samples
-2. LeftEdge (LE) — red line from computed left edge
-3. RightEdge (RE) — blue line from computed right edge
-4. LaneBoundaries (LB) — white dashed lane boundary lines
-5. LaneBoundaryLines (LBL) — same as LB (alias)
-6. SamplePoints (SP) — yellow dots at each centerline sample
-7. LaneCenters (LC) — cyan lines at lane midpoints
-8. RoadPolygon (RP) — magenta outline of the road polygon
-9. MeshWireframe (MWF) — orange triangle wireframe from engine mesh
+Data model (TrainTypes.hpp):
+- Track with control points, gauge (1.435m standard), color, kind (line/arc)
+- ControlPoint with lat, lon, z
+- Selection, HistorySnapshot, Tool (select/line/arc)
+- JSON serialization for all types
 
-Remaining 9 layers (OffsetCurves, FilletArcs, TangentPoints, TrimPoints,
-IntersectionPolygon, Triangulation, VertexNormals, UVGrid, LaneIds) are
-defined but not yet rendered — they require deeper engine internals
-that are not exposed through the public API.
+State management (TrainStudioStore):
+- Track CRUD: startNewTrack, addControlPoint, updateControlPoint,
+  deleteControlPoint, deleteTrack, clearAll
+- Selection management
+- Undo/redo (50 snapshot limit)
+- Arc drawing workflow: startArc, finishArc, cancelArc
+- XML export to Oksygen Track Mesh Builder format (simplified)
+- Tool switching (select/line/arc)
 
-Updated toolbar with 18 debug layer toggle buttons that appear when
-debug mode is enabled (Ctrl+Shift+G). Each button is checkable and
-toggles the corresponding layer.
+2D viewport (TrainViewport2D):
+- MapLibre satellite map background
+- Transparent QPainter overlay for track rendering
+- Track lines with gauge-scaled width and rail visualization
+- Control points with selection highlighting
+- Arc preview with start point and direction arrow
+- Pan (shift+drag/middle mouse)
+- Select tool with hit-testing
+- Line tool creates new tracks
+- Arc tool: 2-click workflow (start + end)
+
+Toolbar:
+- Select (V), Line (L), Arc (A) tools
+- Undo/Redo with keyboard shortcuts
+- Delete selected, Clear all
+- Export XML (Oksygen network format)
+
+Note: OSM railway import (Overpass API) and XML validation are not
+yet ported — they require network access and XML schema validation
+which will be added in Phase 6.
 
 Generated with [Devin](https://devin.ai)
 
