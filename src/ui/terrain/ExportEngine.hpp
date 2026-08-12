@@ -32,6 +32,8 @@ private:
     void downloadDemForTile(const terrain::Tile& tile, const QString& outputPath);
     void downloadImageryForTile(const terrain::Tile& tile, const QString& outputPath);
     void writeManifest(const QString& dir);
+    void writeGeoTiff(const QString& path, const QImage& heightmap,
+                      const terrain::GeoBounds& bounds);
     void processNextTile();
 
     // GeoTIFF writing using libtiff

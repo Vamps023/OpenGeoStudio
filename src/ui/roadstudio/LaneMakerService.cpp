@@ -14,6 +14,9 @@
 #include "Geometries/Arc.h"
 #include "Geometries/Spiral.h"
 #include "Geometries/ParamPoly3.h"
+#include "LaneSection.h"
+#include "Lane.h"
+#include "RefLine.h"
 #endif
 
 roads::Road LaneMakerService::generateRoad(
@@ -133,45 +136,85 @@ bool LaneMakerService::exportOpenDrive(const QString& filePath, const QList<road
     try {
         odr::OpenDriveMap odrMap;
 
-        // Convert each road to OpenDRIVE format
         for (const auto& road : roads) {
-            odr::Road odrRoad;
-            odrRoad.id = road.id.toStdString();
-            odrRoad.name = road.name.toStdString();
-            odrRoad.junction = "-1"; // Not a connecting road
+            if (road.points.size() < 2) continue;
 
-            // Build refline from control points
-            odr::RefLine refLine;
-            refLine.length = 0;
-
+            // Compute local coordinates and total length
+            std::vector<double> localX, localY;
+            double totalLen = 0;
             for (int i = 0; i < road.points.size(); ++i) {
-                double localX, localY;
+                double lx, ly;
                 roads::geoToLocal(road.points[i].lat, road.points[i].lon,
-                                  refLat, refLon, localX, localY);
-
-                if (i == 0) {
-                    refLine.x_offset = localX;
-                    refLine.y_offset = localY;
-                } else if (i == 1) {
-                    double prevX, prevY;
-                    roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
-                                      refLat, refLon, prevX, prevY);
-                    double dx = localX - prevX;
-                    double dy = localY - prevY;
-                    double len = std::sqrt(dx*dx + dy*dy);
-                    refLine.heading = std::atan2(dy, dx);
-                    refLine.length = len;
-                } else {
-                    double prevX, prevY;
-                    roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
-                                      refLat, refLon, prevX, prevY);
-                    double dx = localX - prevX;
-                    double dy = localY - prevY;
-                    refLine.length += std::sqrt(dx*dx + dy*dy);
+                                  refLat, refLon, lx, ly);
+                localX.push_back(lx);
+                localY.push_back(ly);
+                if (i > 0) {
+                    totalLen += std::sqrt((localX[i]-localX[i-1])*(localX[i]-localX[i-1]) +
+                                          (localY[i]-localY[i-1])*(localY[i]-localY[i-1]));
                 }
             }
+            if (totalLen < 1e-6) continue;
 
-            odrRoad.ref_line = refLine;
+            // Create road with proper constructor
+            odr::Road odrRoad(road.id.toStdString(), totalLen, "-1", road.name.toStdString());
+
+            // Build refline with Line geometry segments between control points
+            odr::RefLine refLine(road.id.toStdString(), totalLen);
+
+            double s0 = 0;
+            for (int i = 1; i < road.points.size(); ++i) {
+                double dx = localX[i] - localX[i-1];
+                double dy = localY[i] - localY[i-1];
+                double segLen = std::sqrt(dx*dx + dy*dy);
+                if (segLen < 1e-9) continue;
+
+                double hdg = std::atan2(dy, dx);
+                auto lineGeo = std::make_unique<odr::Line>(s0, localX[i-1], localY[i-1], hdg, segLen);
+                refLine.s0_to_geometry[s0] = std::move(lineGeo);
+                s0 += segLen;
+            }
+
+            // Set elevation profile from control point z values
+            for (int i = 0; i < road.points.size(); ++i) {
+                double cpS = 0;
+                for (int j = 1; j <= i; ++j) {
+                    cpS += std::sqrt((localX[j]-localX[j-1])*(localX[j]-localX[j-1]) +
+                                     (localY[j]-localY[j-1])*(localY[j]-localY[j-1]));
+                }
+                refLine.elevation_profile.set(cpS, road.points[i].z);
+            }
+
+            odrRoad.ref_line = std::move(refLine);
+
+            // Add lane section with proper lanes
+            odr::LaneSection laneSection(road.id.toStdString(), 0.0);
+
+            int laneCount = road.laneCount > 0 ? road.laneCount : 2;
+            double laneWidth = road.width / laneCount;
+
+            // Center lane (id=0)
+            odr::Lane centerLane(road.id.toStdString(), 0.0, 0, true, "center");
+            laneSection.id_to_lane[0] = centerLane;
+
+            // Driving lanes: negative = right side, positive = left side
+            int lanesPerSide = laneCount / 2;
+            if (lanesPerSide < 1) lanesPerSide = 1;
+
+            for (int i = 1; i <= lanesPerSide; ++i) {
+                // Left lanes (positive IDs)
+                odr::Lane leftLane(road.id.toStdString(), 0.0, i, false, "driving");
+                leftLane.lane_width.set(0, laneWidth);
+                laneSection.id_to_lane[i] = leftLane;
+
+                // Right lanes (negative IDs)
+                odr::Lane rightLane(road.id.toStdString(), 0.0, -i, false, "driving");
+                rightLane.lane_width.set(0, laneWidth);
+                laneSection.id_to_lane[-i] = rightLane;
+            }
+
+            odrRoad.s_to_lanesection[0.0] = laneSection;
+            odrRoad.s_to_type[0.0] = "town";
+
             odrMap.id_to_road[odrRoad.id] = odrRoad;
         }
 
