@@ -40,6 +40,7 @@ private slots:
 private:
     void setupActions();
     void updateActionStates();
+    void setupDebugLayerButtons();
 
     RoadStudioStore* m_store;
 
@@ -51,4 +52,6 @@ private:
     QDoubleSpinBox* m_widthSpin = nullptr;
     QSpinBox* m_laneCountSpin = nullptr;
     QLabel* m_engineLabel = nullptr;
+    QAction* m_debugAct = nullptr;
+    QList<QAction*> m_debugLayerActions;
 };

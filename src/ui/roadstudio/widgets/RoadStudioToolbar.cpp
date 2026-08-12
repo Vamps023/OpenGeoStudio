@@ -17,6 +17,9 @@ RoadStudioToolbar::RoadStudioToolbar(RoadStudioStore* store, QWidget* parent)
 
     connect(m_store, &RoadStudioStore::historyChanged, this, &RoadStudioToolbar::updateActionStates);
     connect(m_store, &RoadStudioStore::toolChanged, this, &RoadStudioToolbar::updateActionStates);
+    connect(m_store, &RoadStudioStore::debugModeChanged, this, [this](bool enabled) {
+        for (auto* act : m_debugLayerActions) act->setVisible(enabled);
+    });
 }
 
 void RoadStudioToolbar::setupActions() {
@@ -135,11 +138,11 @@ void RoadStudioToolbar::setupActions() {
     addSeparator();
 
     // Debug mode toggle
-    QAction* debugAct = addAction("Debug (Ctrl+Shift+G)");
-    debugAct->setShortcut(QKeySequence("Ctrl+Shift+G"));
-    debugAct->setCheckable(true);
-    debugAct->setChecked(m_store->debugMode());
-    connect(debugAct, &QAction::triggered, this, &RoadStudioToolbar::onToggleDebug);
+    m_debugAct = addAction("Debug (Ctrl+Shift+G)");
+    m_debugAct->setShortcut(QKeySequence("Ctrl+Shift+G"));
+    m_debugAct->setCheckable(true);
+    m_debugAct->setChecked(m_store->debugMode());
+    connect(m_debugAct, &QAction::triggered, this, &RoadStudioToolbar::onToggleDebug);
 
     addSeparator();
 
@@ -154,6 +157,48 @@ void RoadStudioToolbar::setupActions() {
     auto* engineAction = new QWidgetAction(this);
     engineAction->setDefaultWidget(engineWidget);
     addAction(engineAction);
+
+    setupDebugLayerButtons();
+}
+
+void RoadStudioToolbar::setupDebugLayerButtons() {
+    struct LayerDef {
+        const char* name;
+        RoadStudioStore::DebugLayer layer;
+    };
+
+    const LayerDef layers[] = {
+        {"CL", RoadStudioStore::DebugLayer::Centerline},
+        {"LE", RoadStudioStore::DebugLayer::LeftEdge},
+        {"RE", RoadStudioStore::DebugLayer::RightEdge},
+        {"LB", RoadStudioStore::DebugLayer::LaneBoundaries},
+        {"OC", RoadStudioStore::DebugLayer::OffsetCurves},
+        {"RP", RoadStudioStore::DebugLayer::RoadPolygon},
+        {"FA", RoadStudioStore::DebugLayer::FilletArcs},
+        {"TP", RoadStudioStore::DebugLayer::TangentPoints},
+        {"TR", RoadStudioStore::DebugLayer::TrimPoints},
+        {"IP", RoadStudioStore::DebugLayer::IntersectionPolygon},
+        {"TRI", RoadStudioStore::DebugLayer::Triangulation},
+        {"VN", RoadStudioStore::DebugLayer::VertexNormals},
+        {"UV", RoadStudioStore::DebugLayer::UVGrid},
+        {"SP", RoadStudioStore::DebugLayer::SamplePoints},
+        {"LC", RoadStudioStore::DebugLayer::LaneCenters},
+        {"LBL", RoadStudioStore::DebugLayer::LaneBoundaryLines},
+        {"LID", RoadStudioStore::DebugLayer::LaneIds},
+        {"MWF", RoadStudioStore::DebugLayer::MeshWireframe},
+    };
+
+    for (const auto& def : layers) {
+        auto* act = addAction(QString(def.name));
+        act->setCheckable(true);
+        act->setChecked(m_store->debugLayerEnabled(def.layer));
+        act->setVisible(m_store->debugMode());
+        act->setToolTip(QString("Toggle debug layer: %1").arg(def.name));
+        connect(act, &QAction::triggered, this, [this, layer = def.layer]() {
+            m_store->toggleDebugLayer(layer);
+        });
+        m_debugLayerActions.append(act);
+    }
 }
 
 void RoadStudioToolbar::updateActionStates() {

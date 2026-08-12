@@ -370,14 +370,152 @@ void RoadOverlayWidget::drawSelection(QPainter& p) {
 }
 
 void RoadOverlayWidget::drawDebugLayers(QPainter& p) {
-    // Debug layer rendering — Phase 4e will implement this
-    // For now, just draw a debug indicator
-    if (m_store->debugMode()) {
-        p.setPen(QColor(255, 100, 100, 200));
-        QFont font = p.font();
-        font.setPointSize(9);
-        p.setFont(font);
-        p.drawText(10, 20, "DEBUG MODE");
+    if (!m_store->debugMode()) return;
+
+    // Debug indicator
+    p.setPen(QColor(255, 100, 100, 200));
+    QFont font = p.font();
+    font.setPointSize(9);
+    font.setBold(true);
+    p.setFont(font);
+    p.drawText(10, 20, "DEBUG MODE");
+
+    // Draw debug layers for each road
+    for (const auto& road : m_store->roads()) {
+        if (road.points.size() < 2) continue;
+
+        const double refLat = m_store->refLat();
+        const double refLon = m_store->refLon();
+
+        // Centerline (green, thicker)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::Centerline)) {
+            auto samples = m_engine->sampleCenterline(road, refLat, refLon, 64);
+            if (samples.size() >= 2) {
+                QPainterPath path;
+                path.moveTo(localToScreen(samples[0].x, samples[0].y));
+                for (size_t i = 1; i < samples.size(); ++i) {
+                    path.lineTo(localToScreen(samples[i].x, samples[i].y));
+                }
+                p.setPen(QPen(QColor(0, 255, 0, 200), 2));
+                p.drawPath(path);
+            }
+        }
+
+        // Left edge (red)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::LeftEdge)) {
+            auto edge = m_engine->sampleLeftEdge(road, refLat, refLon, 64);
+            if (edge.size() >= 2) {
+                QPainterPath path;
+                path.moveTo(localToScreen(edge[0].x, edge[0].y));
+                for (size_t i = 1; i < edge.size(); ++i) {
+                    path.lineTo(localToScreen(edge[i].x, edge[i].y));
+                }
+                p.setPen(QPen(QColor(255, 50, 50, 200), 1.5));
+                p.drawPath(path);
+            }
+        }
+
+        // Right edge (blue)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::RightEdge)) {
+            auto edge = m_engine->sampleRightEdge(road, refLat, refLon, 64);
+            if (edge.size() >= 2) {
+                QPainterPath path;
+                path.moveTo(localToScreen(edge[0].x, edge[0].y));
+                for (size_t i = 1; i < edge.size(); ++i) {
+                    path.lineTo(localToScreen(edge[i].x, edge[i].y));
+                }
+                p.setPen(QPen(QColor(50, 50, 255, 200), 1.5));
+                p.drawPath(path);
+            }
+        }
+
+        // Lane boundaries (white dashed)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::LaneBoundaries) ||
+            m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::LaneBoundaryLines)) {
+            auto boundaries = m_engine->generateLaneBoundaries(road, refLat, refLon, 64);
+            p.setPen(QPen(QColor(255, 255, 255, 180), 1, Qt::DashLine));
+            for (const auto& boundary : boundaries) {
+                if (boundary.size() < 2) continue;
+                QPainterPath path;
+                path.moveTo(localToScreen(boundary[0].x, boundary[0].y));
+                for (size_t i = 1; i < boundary.size(); ++i) {
+                    path.lineTo(localToScreen(boundary[i].x, boundary[i].y));
+                }
+                p.drawPath(path);
+            }
+        }
+
+        // Sample points (small dots)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::SamplePoints)) {
+            auto samples = m_engine->sampleCenterline(road, refLat, refLon, 64);
+            p.setBrush(QColor(255, 200, 0, 200));
+            p.setPen(QPen(Qt::black, 0.5));
+            for (const auto& s : samples) {
+                QPointF screen = localToScreen(s.x, s.y);
+                p.drawEllipse(screen, 2, 2);
+            }
+        }
+
+        // Lane centers (cyan lines)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::LaneCenters)) {
+            auto boundaries = m_engine->generateLaneBoundaries(road, refLat, refLon, 64);
+            p.setPen(QPen(QColor(0, 255, 255, 150), 1));
+            for (size_t i = 0; i + 1 < boundaries.size(); ++i) {
+                const auto& b1 = boundaries[i];
+                const auto& b2 = boundaries[i + 1];
+                size_t n = std::min(b1.size(), b2.size());
+                if (n < 2) continue;
+                QPainterPath path;
+                path.moveTo(localToScreen((b1[0].x + b2[0].x) / 2, (b1[0].y + b2[0].y) / 2));
+                for (size_t j = 1; j < n; ++j) {
+                    path.lineTo(localToScreen((b1[j].x + b2[j].x) / 2, (b1[j].y + b2[j].y) / 2));
+                }
+                p.drawPath(path);
+            }
+        }
+
+        // Road polygon outline (magenta)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::RoadPolygon)) {
+            auto leftEdge = m_engine->sampleLeftEdge(road, refLat, refLon, 64);
+            auto rightEdge = m_engine->sampleRightEdge(road, refLat, refLon, 64);
+            if (leftEdge.size() >= 2 && rightEdge.size() >= 2) {
+                QPainterPath path;
+                path.moveTo(localToScreen(leftEdge[0].x, leftEdge[0].y));
+                for (size_t i = 1; i < leftEdge.size(); ++i) {
+                    path.lineTo(localToScreen(leftEdge[i].x, leftEdge[i].y));
+                }
+                for (int i = rightEdge.size() - 1; i >= 0; --i) {
+                    path.lineTo(localToScreen(rightEdge[i].x, rightEdge[i].y));
+                }
+                path.closeSubpath();
+                p.setPen(QPen(QColor(255, 0, 255, 150), 1.5));
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(path);
+            }
+        }
+
+        // Mesh wireframe (orange)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::MeshWireframe)) {
+            auto mesh = m_engine->generateMesh(road, refLat, refLon, 32);
+            if (!mesh.isEmpty() && mesh.indices.size() >= 2) {
+                p.setPen(QPen(QColor(255, 165, 0, 100), 0.5));
+                for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+                    unsigned int i0 = mesh.indices[i];
+                    unsigned int i1 = mesh.indices[i + 1];
+                    unsigned int i2 = mesh.indices[i + 2];
+                    if (i0 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size()) &&
+                        i1 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size()) &&
+                        i2 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size())) {
+                        QPointF p0 = localToScreen(mesh.positions[i0 * 3], mesh.positions[i0 * 3 + 1]);
+                        QPointF p1 = localToScreen(mesh.positions[i1 * 3], mesh.positions[i1 * 3 + 1]);
+                        QPointF p2 = localToScreen(mesh.positions[i2 * 3], mesh.positions[i2 * 3 + 1]);
+                        p.drawLine(p0, p1);
+                        p.drawLine(p1, p2);
+                        p.drawLine(p2, p0);
+                    }
+                }
+            }
+        }
     }
 }
 
