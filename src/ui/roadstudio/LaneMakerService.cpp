@@ -126,3 +126,61 @@ QString LaneMakerService::version() {
     return "LaneMaker not available (built without ENABLE_LANEMAKER)";
 #endif
 }
+
+bool LaneMakerService::exportOpenDrive(const QString& filePath, const QList<roads::Road>& roads,
+                                       double refLat, double refLon) {
+#ifdef ENABLE_LANEMAKER
+    try {
+        odr::OpenDriveMap odrMap;
+
+        // Convert each road to OpenDRIVE format
+        for (const auto& road : roads) {
+            odr::Road odrRoad;
+            odrRoad.id = road.id.toStdString();
+            odrRoad.name = road.name.toStdString();
+            odrRoad.junction = "-1"; // Not a connecting road
+
+            // Build refline from control points
+            odr::RefLine refLine;
+            refLine.length = 0;
+
+            for (int i = 0; i < road.points.size(); ++i) {
+                double localX, localY;
+                roads::geoToLocal(road.points[i].lat, road.points[i].lon,
+                                  refLat, refLon, localX, localY);
+
+                if (i == 0) {
+                    refLine.x_offset = localX;
+                    refLine.y_offset = localY;
+                } else if (i == 1) {
+                    double prevX, prevY;
+                    roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
+                                      refLat, refLon, prevX, prevY);
+                    double dx = localX - prevX;
+                    double dy = localY - prevY;
+                    double len = std::sqrt(dx*dx + dy*dy);
+                    refLine.heading = std::atan2(dy, dx);
+                    refLine.length = len;
+                } else {
+                    double prevX, prevY;
+                    roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
+                                      refLat, refLon, prevX, prevY);
+                    double dx = localX - prevX;
+                    double dy = localY - prevY;
+                    refLine.length += std::sqrt(dx*dx + dy*dy);
+                }
+            }
+
+            odrRoad.ref_line = refLine;
+            odrMap.id_to_road[odrRoad.id] = odrRoad;
+        }
+
+        odrMap.export_file(filePath.toStdString());
+        return true;
+    } catch (const std::exception& e) {
+        return false;
+    }
+#else
+    return false;
+#endif
+}

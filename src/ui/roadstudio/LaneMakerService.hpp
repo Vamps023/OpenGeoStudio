@@ -68,4 +68,9 @@ public:
 
     // Get the LaneMaker version string
     static QString version();
+
+    // Export all roads to an OpenDRIVE (.xodr) file
+    // Uses LaneMaker's libOpenDRIVE to serialize the road network
+    static bool exportOpenDrive(const QString& filePath, const QList<roads::Road>& roads,
+                                double refLat, double refLon);
 };

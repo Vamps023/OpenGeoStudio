@@ -31,6 +31,7 @@ private slots:
     void onDeleteSelected();
     void onClearAll();
     void onCreateDemoRoad();
+    void onExportOpenDrive();
     void onToggleDebug();
     void onSnapToggled(bool enabled);
     void onGridSizeChanged(double size);

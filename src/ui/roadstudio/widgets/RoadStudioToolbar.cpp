@@ -2,12 +2,15 @@
 
 #include "RoadStudioToolbar.hpp"
 #include "road_engine.hpp"
+#include "LaneMakerService.hpp"
 
 #include <QIcon>
 #include <QActionGroup>
 #include <QWidgetAction>
 #include <QLabel>
 #include <QHBoxLayout>
+#include <QFileDialog>
+#include <QMessageBox>
 
 RoadStudioToolbar::RoadStudioToolbar(RoadStudioStore* store, QWidget* parent)
     : QToolBar("Road Studio", parent), m_store(store) {
@@ -125,6 +128,10 @@ void RoadStudioToolbar::setupActions() {
     // Demo road
     QAction* demoAct = addAction("Demo Road");
     connect(demoAct, &QAction::triggered, this, &RoadStudioToolbar::onCreateDemoRoad);
+
+    // Export OpenDRIVE
+    QAction* exportAct = addAction("Export OpenDRIVE");
+    connect(exportAct, &QAction::triggered, this, &RoadStudioToolbar::onExportOpenDrive);
 
     // Delete selected
     m_deleteAct = addAction("Delete Selected");
@@ -244,6 +251,29 @@ void RoadStudioToolbar::onClearAll() {
 
 void RoadStudioToolbar::onCreateDemoRoad() {
     m_store->createDemoRoad();
+}
+
+void RoadStudioToolbar::onExportOpenDrive() {
+    auto roads = m_store->roads();
+    if (roads.isEmpty()) {
+        QMessageBox::information(this, "Export OpenDRIVE", "No roads to export.");
+        return;
+    }
+
+    QString filePath = QFileDialog::getSaveFileName(
+        this, "Export OpenDRIVE", "road.xodr", "OpenDRIVE (*.xodr);;All Files (*)");
+    if (filePath.isEmpty()) return;
+
+    double refLat = m_store->refLat();
+    double refLon = m_store->refLon();
+
+    if (LaneMakerService::exportOpenDrive(filePath, roads, refLat, refLon)) {
+        QMessageBox::information(this, "Export OpenDRIVE",
+            QString("Exported %1 road(s) to:\n%2").arg(roads.size()).arg(filePath));
+    } else {
+        QMessageBox::warning(this, "Export OpenDRIVE",
+            "Failed to export OpenDRIVE file. Check the file path and try again.");
+    }
 }
 
 void RoadStudioToolbar::onToggleDebug() {
