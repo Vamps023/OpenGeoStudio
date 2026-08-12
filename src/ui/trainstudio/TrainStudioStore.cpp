@@ -1,4 +1,4 @@
-// TrainStudioStore — State management implementation
+﻿// TrainStudioStore — State management implementation
 
 #include "TrainStudioStore.hpp"
 #include "../roadstudio/GeoConvert.hpp"

@@ -72,6 +72,7 @@ void RoadStudioStore::updateControlPoint(const QString& roadId, int index,
     auto* road = getRoad(roadId);
     if (!road || index < 0 || index >= road->points.size()) return;
 
+    pushHistory("Update control point");
     road->points[index].lat = lat;
     road->points[index].lon = lon;
     emit roadsChanged();
@@ -254,6 +255,7 @@ void RoadStudioStore::undo() {
     auto snap = m_undoStack.takeLast();
     m_roads = snap.roads;
     m_selection.clear();
+    m_selectedRoadIds.clear();
     m_drawingRoadId.clear();
     m_log.info("Undo:", snap.description);
     emit roadsChanged();
@@ -272,6 +274,7 @@ void RoadStudioStore::redo() {
     auto snap = m_redoStack.takeLast();
     m_roads = snap.roads;
     m_selection.clear();
+    m_selectedRoadIds.clear();
     m_drawingRoadId.clear();
     m_log.info("Redo:", snap.description);
     emit roadsChanged();

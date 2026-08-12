@@ -86,8 +86,8 @@ public:
 
 private slots:
     void onRoadsChanged() {
-        m_viewport2d->update();
-        if (m_viewStack->currentIndex() == 1) {
+        if (m_viewport2d) m_viewport2d->update();
+        if (m_viewStack && m_viewStack->currentIndex() == 1 && m_viewport3d) {
             m_viewport3d->refreshMeshes();
         }
     }
@@ -95,10 +95,10 @@ private slots:
     void onViewModeChanged(roads::ViewMode mode) {
         if (mode == roads::ViewMode::Top) {
             m_viewStack->setCurrentIndex(0);
-            m_viewport2d->update();
+            if (m_viewport2d) m_viewport2d->update();
         } else {
             m_viewStack->setCurrentIndex(1);
-            m_viewport3d->refreshMeshes();
+            if (m_viewport3d) m_viewport3d->refreshMeshes();
         }
     }
 

@@ -146,6 +146,8 @@ void RoadOverlayWidget::geoToScreen(double lat, double lon, QPointF& outScreen) 
 void RoadOverlayWidget::paintEvent(QPaintEvent*) {
     refreshMapState();
 
+    if (!m_engine || !m_store) return;
+
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 

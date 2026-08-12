@@ -45,6 +45,8 @@ geo::Road RoadEngineService::toEngineRoad(const roads::Road& road,
 std::vector<roads::Point2D> RoadEngineService::sampleCenterline(
     const roads::Road& road, double refLat, double refLon, int numSamples) {
 
+    if (road.points.size() < 2) return {};
+
     geo::Road engineRoad = toEngineRoad(road, refLat, refLon);
     // Use the member function (the free function geo::sampleCenterline is
     // declared but not implemented in the header-only engine)

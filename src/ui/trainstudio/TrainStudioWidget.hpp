@@ -59,8 +59,10 @@ public:
             "QLabel { background: rgba(13,17,23,200); color: #7d8590; padding: 6px 12px;"
             "border-radius: 6px; font-size: 11px; }");
         // Position at bottom-left — will be repositioned on resize
-        m_hintsLabel->move(12, m_viewport->height() - 30);
-        m_hintsLabel->raise();
+        if (m_viewport && m_hintsLabel) {
+            m_hintsLabel->move(12, m_viewport->height() - 30);
+            m_hintsLabel->raise();
+        }
 
         updateStatusBar();
         connect(m_store, &TrainStudioStore::tracksChanged, this, [this]() { updateStatusBar(); });
@@ -145,6 +147,11 @@ private:
 
         m_toolbar->addSeparator();
 
+        // Validation status badge (initialized BEFORE the validate action)
+        m_validationLabel = new QLabel("—");
+        m_validationLabel->setStyleSheet(
+            "QLabel { color: #7d8590; font-size: 11px; padding: 0 8px; font-weight: bold; }");
+
         // Validate XML
         QAction* validateAct = m_toolbar->addAction("Validate");
         validateAct->setShortcut(QKeySequence("Ctrl+Shift+V"));
@@ -174,10 +181,6 @@ private:
             QMessageBox::information(this, "Validation", msg);
         });
 
-        // Validation status badge
-        m_validationLabel = new QLabel("—");
-        m_validationLabel->setStyleSheet(
-            "QLabel { color: #7d8590; font-size: 11px; padding: 0 8px; font-weight: bold; }");
         m_toolbar->addWidget(m_validationLabel);
 
         m_toolbar->addSeparator();

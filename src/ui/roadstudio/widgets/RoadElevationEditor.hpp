@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
+#include <cmath>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGroupBox>
@@ -110,6 +111,7 @@ protected:
         }
         if (zMax - zMin < 1.0) { zMin -= 0.5; zMax += 0.5; }
         double zRange = zMax - zMin;
+        if (zRange < 1e-9) zRange = 1.0;  // Prevent division by zero
 
         // Draw elevation profile
         const int margin = 40;

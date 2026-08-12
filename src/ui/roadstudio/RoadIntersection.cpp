@@ -19,6 +19,11 @@ RoadEngineService::IntersectionResult RoadEngineService::generateIntersection(
     IntersectionResult result;
     result.valid = false;
 
+    // Validate: both roads must have at least 2 control points
+    if (road1.points.size() < 2 || road2.points.size() < 2) {
+        return result;
+    }
+
     // Convert to engine roads
     geo::Road engineRoad1, engineRoad2;
 

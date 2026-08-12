@@ -7,6 +7,7 @@
 #include <QMouseEvent>
 #include <QPainterPath>
 #include <cmath>
+#include <limits>
 
 // ============================================================
 // TerrainViewport
@@ -16,10 +17,12 @@ TerrainViewport::TerrainViewport(ApplicationContext* ctx, TerrainStore* store,
                                   QWidget* parent)
     : QWidget(parent), m_ctx(ctx), m_store(store) {
     setupUi();
-    connect(m_store, &TerrainStore::boundsChanged, m_overlay, qOverload<>(&QWidget::update));
-    connect(m_store, &TerrainStore::tileGridChanged, m_overlay, qOverload<>(&QWidget::update));
-    connect(m_store, &TerrainStore::tileSelectionChanged, m_overlay, qOverload<>(&QWidget::update));
-    connect(m_store, &TerrainStore::selectingChanged, m_overlay, qOverload<>(&QWidget::update));
+    if (m_overlay) {
+        connect(m_store, &TerrainStore::boundsChanged, m_overlay, qOverload<>(&QWidget::update));
+        connect(m_store, &TerrainStore::tileGridChanged, m_overlay, qOverload<>(&QWidget::update));
+        connect(m_store, &TerrainStore::tileSelectionChanged, m_overlay, qOverload<>(&QWidget::update));
+        connect(m_store, &TerrainStore::selectingChanged, m_overlay, qOverload<>(&QWidget::update));
+    }
 }
 
 void TerrainViewport::setupUi() {
@@ -74,6 +77,8 @@ QPointF TerrainOverlayWidget::geoToScreen(double lat, double lon) const {
 }
 
 void TerrainOverlayWidget::screenToGeo(const QPointF& screen, double& outLat, double& outLon) const {
+    outLat = std::numeric_limits<double>::quiet_NaN();
+    outLon = std::numeric_limits<double>::quiet_NaN();
     if (!m_map || !m_map->map()) return;
     const auto coord = m_map->map()->coordinateForPixel(screen);
     outLat = coord.first;

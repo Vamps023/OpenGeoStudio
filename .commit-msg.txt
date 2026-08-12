@@ -1,0 +1,41 @@
+Phase 17: Bug audit fixes — null safety, div-by-zero, history, validation
+
+Comprehensive bug audit identified and fixed 15+ issues across the codebase.
+
+Critical fixes (crash prevention):
+- TrainStudioWidget: Moved m_validationLabel initialization BEFORE the
+  validate action lambda that uses it (was null deref on first validate)
+- TrainStudioWidget: Added null check for m_viewport in hints label setup
+- RoadElevationEditor: Added div-by-zero guard for zRange < 1e-9
+- RoadElevationEditor: Added missing <cmath> include for std::hypot/min/max
+- RoadStudioWidget: Added null checks on m_viewport3d and m_viewport2d
+  in onViewModeChanged and onRoadsChanged
+- RoadStudioToolbar: Added missing <QCheckBox> include
+- TrainStudioStore: Added null reply check after m_network->post()
+- ExportEngine: Added null reply checks after m_network->get() for both
+  DEM and imagery downloads (with fallback placeholder for imagery)
+- TerrainViewport: Added null check for m_overlay before connect calls
+- TerrainViewport: Initialized screenToGeo output params to NaN before
+  early return (was leaving uninitialized values)
+- RoadViewport2D: Added null check for m_engine and m_store in paintEvent
+
+High-severity fixes:
+- RoadIntersection: Added early return if either road has < 2 points
+  before calling intersection generation
+- RoadEngineService: Added empty road check (< 2 points) in
+  sampleCenterline before engine conversion
+- ProjectManager: Added QDir().mkpath() before saving to ensure parent
+  directory exists
+- ProjectManager: Fixed recent list pruning logic — was using forward
+  iteration with erase + decrement (error-prone), now uses reverse
+  iteration which is safe with erase
+
+Medium-severity fixes:
+- RoadStudioStore: Added pushHistory() call in updateControlPoint
+  (was not undoable)
+- RoadStudioStore: Clear m_selectedRoadIds in both undo() and redo()
+  (was leaving stale selection state)
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

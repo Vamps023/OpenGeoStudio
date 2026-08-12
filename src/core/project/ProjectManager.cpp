@@ -121,6 +121,9 @@ bool ProjectManager::save() {
 
     updateTimestamp();
 
+    // Ensure parent directory exists
+    QDir().mkpath(QFileInfo(m_current.filePath).absolutePath());
+
     QFile file(m_current.filePath);
     if (!file.open(QIODevice::WriteOnly)) {
         m_log.error("Failed to save project:", m_current.filePath);
@@ -191,14 +194,13 @@ void ProjectManager::addRecent(const Project& project) {
 
     m_recent.insert(m_recent.begin(), entry);
 
-    // Keep max 20 entries (unpinned)
-    if (m_recent.size() > 20) {
-        size_t unpinnedCount = 0;
-        for (size_t i = 0; i < m_recent.size(); ++i) {
-            if (!m_recent[i].pinned) unpinnedCount++;
-            if (unpinnedCount > 20 && i < m_recent.size()) {
+    // Keep max 20 unpinned entries (pinned entries are always kept)
+    int unpinnedCount = 0;
+    for (int i = m_recent.size() - 1; i >= 0; --i) {
+        if (!m_recent[i].pinned) {
+            unpinnedCount++;
+            if (unpinnedCount > 20) {
                 m_recent.erase(m_recent.begin() + i);
-                --i;
             }
         }
     }
