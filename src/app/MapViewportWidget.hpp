@@ -19,6 +19,27 @@
 
 #include <QWidget>
 #include <QString>
+#include <QTcpServer>
+#include <QTcpSocket>
+
+// Minimal HTTP server to serve the Esri style JSON to MapLibre.
+// MapLibre's network stack can't load file:// URLs, so we serve
+// the inline style JSON via a local HTTP endpoint.
+class StyleHttpServer : public QObject {
+    Q_OBJECT
+public:
+    explicit StyleHttpServer(const QByteArray& styleJson, QObject* parent = nullptr);
+    [[nodiscard]] QString styleUrl() const;
+
+private slots:
+    void onNewConnection();
+    void onReadyRead();
+
+private:
+    QTcpServer m_server;
+    QByteArray m_styleJson;
+    quint16 m_port = 0;
+};
 
 class MapViewportWidget : public QWidget {
     Q_OBJECT
@@ -47,4 +68,5 @@ private:
     void setupMap();
 
     QMapLibre::MapWidget* m_mapWidget = nullptr;
+    StyleHttpServer* m_styleServer = nullptr;
 };
