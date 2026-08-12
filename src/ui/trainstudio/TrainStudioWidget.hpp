@@ -118,6 +118,40 @@ private:
                 QMessageBox::information(this, "Export", "Network XML exported successfully.");
             }
         });
+
+        // Import OSM Railways
+        QAction* importOsmAct = m_toolbar->addAction("Import OSM");
+        connect(importOsmAct, &QAction::triggered, this, [this]() {
+            bool ok = false;
+            QString bbox = QInputDialog::getText(
+                this, "Import OSM Railways",
+                "Bounding box (south,west,north,east):",
+                QLineEdit::Normal, "18.4,73.7,18.6,73.9", &ok);
+            if (!ok || bbox.isEmpty()) return;
+
+            auto parts = bbox.split(',');
+            if (parts.size() != 4) {
+                QMessageBox::warning(this, "Import OSM", "Invalid bbox format. Use: south,west,north,east");
+                return;
+            }
+
+            double south = parts[0].toDouble();
+            double west = parts[1].toDouble();
+            double north = parts[2].toDouble();
+            double east = parts[3].toDouble();
+
+            m_store->importOsmRailways(south, west, north, east);
+            QMessageBox::information(this, "Import OSM",
+                "Import started. Railways will appear when download completes.");
+        });
+
+        connect(m_store, &TrainStudioStore::osmImportFinished, this,
+            [this](bool success, const QString& msg) {
+                if (success)
+                    QMessageBox::information(this, "Import OSM", msg);
+                else
+                    QMessageBox::warning(this, "Import OSM", "Import failed: " + msg);
+            });
     }
 
     ApplicationContext* m_ctx;

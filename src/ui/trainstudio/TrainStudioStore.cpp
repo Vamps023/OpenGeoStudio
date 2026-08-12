@@ -3,8 +3,14 @@
 #include "TrainStudioStore.hpp"
 #include "../roadstudio/GeoConvert.hpp"
 
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QUrl>
+#include <QXmlStreamReader>
+
 TrainStudioStore::TrainStudioStore(EventBus* bus, QObject* parent)
     : QObject(parent), m_bus(bus), m_log("TrainStudioStore") {
+    m_network = new QNetworkAccessManager(this);
 }
 
 void TrainStudioStore::setTool(trains::Tool tool) {
@@ -220,4 +226,93 @@ QString TrainStudioStore::exportNetworkXml() const {
     }
     xml += "</network>\n";
     return xml;
+}
+
+void TrainStudioStore::importOsmRailways(double south, double west, double north, double east) {
+    // Overpass API query for railways in the bounding box
+    QString query = QString(
+        "[out:xml][timeout:25];\n"
+        "(\n"
+        "  way[railway=rail](%1,%2,%3,%4);\n"
+        "  way[railway=light_rail](%1,%2,%3,%4);\n"
+        "  way[railway=tram](%1,%2,%3,%4);\n"
+        ");\n"
+        "(._;>;);\n"
+        "out;"
+    ).arg(south, 0, 'f', 6).arg(west, 0, 'f', 6).arg(north, 0, 'f', 6).arg(east, 0, 'f', 6);
+
+    QUrl url("https://overpass-api.de/api/interpreter");
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+    request.setRawHeader("User-Agent", "OpenGeoStudio-Qt/1.0");
+
+    QByteArray postData = "data=" + QUrl::toPercentEncoding(query);
+    QNetworkReply* reply = m_network->post(request, postData);
+
+    emit osmImportStarted();
+    m_log.info("OSM import started for bbox:", south, west, north, east);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            emit osmImportFinished(false, reply->errorString());
+            return;
+        }
+
+        QByteArray data = reply->readAll();
+        QXmlStreamReader xml(data);
+
+        // Parse OSM XML: nodes and ways
+        QMap<QString, QPointF> nodes; // id -> (lat, lon)
+        int trackCount = 0;
+
+        while (!xml.atEnd()) {
+            xml.readNext();
+            if (xml.isStartElement()) {
+                if (xml.name() == "node") {
+                    QString id = xml.attributes().value("id").toString();
+                    double lat = xml.attributes().value("lat").toDouble();
+                    double lon = xml.attributes().value("lon").toDouble();
+                    nodes[id] = QPointF(lat, lon);
+                } else if (xml.name() == "way") {
+                    trains::Track track;
+                    track.id = generateId();
+                    track.name = QString("OSM Railway %1").arg(++trackCount);
+                    track.gauge = 1.435;
+                    track.color = "#ff6600";
+
+                    while (!xml.atEnd()) {
+                        xml.readNext();
+                        if (xml.isEndElement() && xml.name() == "way") break;
+                        if (xml.isStartElement() && xml.name() == "nd") {
+                            QString ref = xml.attributes().value("ref").toString();
+                            if (nodes.contains(ref)) {
+                                QPointF pt = nodes[ref];
+                                trains::ControlPoint cp;
+                                cp.id = generateId();
+                                cp.lat = pt.x();
+                                cp.lon = pt.y();
+                                cp.z = 0;
+                                track.points.append(cp);
+                            }
+                        }
+                    }
+
+                    if (track.points.size() >= 2) {
+                        pushHistory("Import OSM railway");
+                        m_tracks.append(track);
+                    }
+                }
+            }
+        }
+
+        if (xml.hasError()) {
+            emit osmImportFinished(false, QString("XML parse error: %1").arg(xml.errorString()));
+        } else {
+            emit osmImportFinished(true, QString("Imported %1 railway(s)").arg(trackCount));
+            m_log.info("OSM import finished:", trackCount, "tracks");
+            emit tracksChanged();
+        }
+    });
 }

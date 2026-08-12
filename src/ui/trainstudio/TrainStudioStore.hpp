@@ -17,6 +17,7 @@
 #include <QUuid>
 #include <QDateTime>
 #include <QPointF>
+#include <QNetworkAccessManager>
 
 class TrainStudioStore : public QObject {
     Q_OBJECT
@@ -68,12 +69,17 @@ public:
     // XML export
     QString exportNetworkXml() const;
 
+    // OSM railway import via Overpass API
+    void importOsmRailways(double south, double west, double north, double east);
+
 signals:
     void tracksChanged();
     void toolChanged(trains::Tool tool);
     void selectionChanged(const trains::Selection& sel);
     void historyChanged();
     void arcStateChanged();
+    void osmImportStarted();
+    void osmImportFinished(bool success, const QString& message);
 
 private:
     EventBus* m_bus;
@@ -96,6 +102,9 @@ private:
     bool m_arcDrawing = false;
     std::optional<trains::ControlPoint> m_arcStart;
     std::optional<QPointF> m_arcStartDir; // direction in local meters
+
+    // OSM import
+    QNetworkAccessManager* m_network;
 
     QString generateId() const {
         return QUuid::createUuid().toString(QUuid::WithoutBraces);
