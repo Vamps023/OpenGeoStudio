@@ -30,38 +30,47 @@ void HomeWidget::setupUi() {
 
     // Welcome header
     m_welcomeLabel = new QLabel("OpenGeoStudio");
-    m_welcomeLabel->setStyleSheet("font-size: 28px; font-weight: bold; color: #d0d0d0;");
+    m_welcomeLabel->setStyleSheet("font-size: 28px; font-weight: bold; color: #e6edf3;");
     mainLayout->addWidget(m_welcomeLabel);
 
     auto* subtitle = new QLabel("Native C++/Qt 6 desktop application for terrain and road design");
-    subtitle->setStyleSheet("font-size: 14px; color: #888;");
+    subtitle->setStyleSheet("font-size: 14px; color: #7d8590;");
     mainLayout->addWidget(subtitle);
 
     // Template cards
     auto* templatesGroup = new QGroupBox("Create New Project");
-    templatesGroup->setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; color: #d0d0d0; border: 1px solid #444; border-radius: 6px; margin-top: 12px; padding-top: 16px; }");
     auto* tmplLayout = new QHBoxLayout(templatesGroup);
     tmplLayout->setSpacing(16);
 
-    // Terrain template
+    // Terrain template — green accent like reference
     auto* terrainCard = new QPushButton("Terrain\n\nMap area selection\nDEM/heightmaps\nSatellite imagery");
     terrainCard->setFixedSize(220, 140);
     terrainCard->setStyleSheet(
         "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #2d5a3d; color: white; border: 1px solid #3a7a52; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #3a7a52; }");
+        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 1px solid #3fb950; }");
     connect(terrainCard, &QPushButton::clicked, this, &HomeWidget::onCreateTerrain);
     tmplLayout->addWidget(terrainCard);
 
-    // Road Studio template
-    auto* roadCard = new QPushButton("Road Studio\n\nRoad network design\nBezier pen tool\nC++ geometry engine");
+    // Road Studio template — cyan accent like reference
+    auto* roadCard = new QPushButton("Road Studio\n\nRoad network design\nLaneMaker integration\nC++ geometry engine");
     roadCard->setFixedSize(220, 140);
     roadCard->setStyleSheet(
         "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #2d4a5a; color: white; border: 1px solid #3a6a82; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #3a6a82; }");
+        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 1px solid #06b6d4; }");
     connect(roadCard, &QPushButton::clicked, this, &HomeWidget::onCreateRoadStudio);
     tmplLayout->addWidget(roadCard);
+
+    // Train Studio template — cyan accent
+    auto* trainCard = new QPushButton("Train Studio\n\nRailway design\nOSM import\nTrack editing");
+    trainCard->setFixedSize(220, 140);
+    trainCard->setStyleSheet(
+        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
+        "background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #1c2128; border: 1px solid #06b6d4; }");
+    connect(trainCard, &QPushButton::clicked, this, [this]() { emit newProjectRequested("train-studio"); });
+    tmplLayout->addWidget(trainCard);
 
     tmplLayout->addStretch();
     mainLayout->addWidget(templatesGroup);
@@ -77,27 +86,45 @@ void HomeWidget::setupUi() {
 
     // Recent projects
     auto* recentGroup = new QGroupBox("Recent Projects");
-    recentGroup->setStyleSheet("QGroupBox { font-size: 16px; font-weight: bold; color: #d0d0d0; border: 1px solid #444; border-radius: 6px; margin-top: 12px; padding-top: 16px; }");
     auto* recentLayout = new QVBoxLayout(recentGroup);
 
     m_search = new QLineEdit();
     m_search->setPlaceholderText("Search recent projects...");
-    m_search->setStyleSheet("QLineEdit { padding: 6px; }");
     connect(m_search, &QLineEdit::textChanged, this, &HomeWidget::onSearchChanged);
     recentLayout->addWidget(m_search);
 
     m_recentList = new QListWidget();
-    m_recentList->setStyleSheet(
-        "QListWidget { background-color: #232323; border: 1px solid #444; border-radius: 4px; }"
-        "QListWidget::item { padding: 8px; }"
-        "QListWidget::item:hover { background-color: #2a2a2a; }"
-        "QListWidget::item:selected { background-color: #2a82da; }");
     connect(m_recentList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
         onRecentItemClicked(m_recentList->currentRow());
     });
     recentLayout->addWidget(m_recentList);
 
     mainLayout->addWidget(recentGroup, 1);
+
+    // System status bar (matching reference app)
+    auto* statusLayout = new QHBoxLayout();
+    auto* wsCount = new QLabel("Workspaces: 4");
+    wsCount->setStyleSheet("color: #7d8590; font-size: 12px;");
+    statusLayout->addWidget(wsCount);
+
+    auto* sep1 = new QLabel("·");
+    sep1->setStyleSheet("color: #484f58;");
+    statusLayout->addWidget(sep1);
+
+    auto* engineLabel = new QLabel("C++ Engine: Native");
+    engineLabel->setStyleSheet("color: #3fb950; font-size: 12px;");
+    statusLayout->addWidget(engineLabel);
+
+    auto* sep2 = new QLabel("·");
+    sep2->setStyleSheet("color: #484f58;");
+    statusLayout->addWidget(sep2);
+
+    auto* versionLabel = new QLabel("v0.1.0");
+    versionLabel->setStyleSheet("color: #7d8590; font-size: 12px;");
+    statusLayout->addWidget(versionLabel);
+
+    statusLayout->addStretch();
+    mainLayout->addLayout(statusLayout);
 }
 
 void HomeWidget::refreshRecent(const QString& filter) {

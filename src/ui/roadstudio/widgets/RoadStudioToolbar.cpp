@@ -45,10 +45,25 @@ void RoadStudioToolbar::setupActions() {
 
     addSeparator();
 
-    // View mode toggle
-    QAction* viewModeAct = addAction("2D/3D");
-    viewModeAct->setShortcut(QKeySequence("Tab"));
-    connect(viewModeAct, &QAction::triggered, this, &RoadStudioToolbar::onViewModeToggle);
+    // View mode toggle — Top (2) / 3D (3) like reference
+    QAction* topViewAct = addAction("Top (2)");
+    topViewAct->setShortcut(QKeySequence("2"));
+    topViewAct->setCheckable(true);
+    topViewAct->setChecked(true);
+    connect(topViewAct, &QAction::triggered, this, [this]() {
+        m_store->setViewMode(roads::ViewMode::Top);
+    });
+
+    QAction* threeDAct = addAction("3D (3)");
+    threeDAct->setShortcut(QKeySequence("3"));
+    threeDAct->setCheckable(true);
+    connect(threeDAct, &QAction::triggered, this, [this]() {
+        m_store->setViewMode(roads::ViewMode::Perspective);
+    });
+
+    auto* viewGroup = new QActionGroup(this);
+    viewGroup->addAction(topViewAct);
+    viewGroup->addAction(threeDAct);
 
     addSeparator();
 
@@ -159,7 +174,7 @@ void RoadStudioToolbar::setupActions() {
     engineLayout->setContentsMargins(4, 0, 4, 0);
     const QString engineVersion = QString::fromLatin1(road_engine::versionString());
     m_engineLabel = new QLabel("C++ Engine v" + engineVersion, engineWidget);
-    m_engineLabel->setStyleSheet("color: #4a4; font-weight: bold;");
+    m_engineLabel->setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;");
     engineLayout->addWidget(m_engineLabel);
     auto* engineAction = new QWidgetAction(this);
     engineAction->setDefaultWidget(engineWidget);

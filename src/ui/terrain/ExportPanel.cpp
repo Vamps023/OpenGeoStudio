@@ -16,6 +16,7 @@ ExportPanel::ExportPanel(TerrainStore* store, QWidget* parent)
     connect(m_store, &TerrainStore::tileSelectionChanged, this, [this]() {
         int count = m_store->selectedTiles().size();
         m_tileCountLabel->setText(QString("%1 tiles selected").arg(count));
+        if (m_tileBadge) m_tileBadge->setText(QString::number(count));
     });
 }
 
@@ -23,6 +24,33 @@ void ExportPanel::setupUi() {
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(8, 8, 8, 8);
     mainLayout->setSpacing(8);
+
+    // --- Header (matching reference: "EXPORT" + tile count badge) ---
+    auto* headerLayout = new QHBoxLayout();
+    auto* headerLabel = new QLabel("EXPORT");
+    headerLabel->setStyleSheet(
+        "QLabel { font-size: 14px; font-weight: bold; color: #e6edf3; letter-spacing: 2px; }");
+    headerLayout->addWidget(headerLabel);
+
+    auto* tileBadge = new QLabel("0");
+    tileBadge->setStyleSheet(
+        "QLabel { background: rgba(6,182,212,0.2); color: #06b6d4; border-radius: 10px;"
+        "padding: 2px 10px; font-size: 11px; font-weight: bold; }");
+    tileBadge->setAlignment(Qt::AlignCenter);
+    tileBadge->setMinimumWidth(30);
+    headerLayout->addWidget(tileBadge);
+    headerLayout->addStretch();
+
+    // Engine badge
+    auto* engineBadge = new QLabel("C++ Native");
+    engineBadge->setStyleSheet(
+        "QLabel { color: #3fb950; font-size: 11px; }");
+    headerLayout->addWidget(engineBadge);
+
+    mainLayout->addLayout(headerLayout);
+
+    // Store the tile badge for updates
+    m_tileBadge = tileBadge;
 
     // --- Export Settings ---
     auto* settingsGroup = new QGroupBox("Export Settings");
@@ -112,7 +140,10 @@ void ExportPanel::setupUi() {
 
     // --- Export ---
     m_exportBtn = new QPushButton("Export");
-    m_exportBtn->setStyleSheet("QPushButton { background-color: #0078d4; color: white; padding: 8px; font-weight: bold; }");
+    m_exportBtn->setStyleSheet(
+        "QPushButton { background-color: #06b6d4; color: #0d1117; padding: 10px; font-weight: bold; border: none; border-radius: 6px; }"
+        "QPushButton:hover { background-color: #22d3ee; }"
+        "QPushButton:disabled { background-color: #21262d; color: #484f58; }");
     connect(m_exportBtn, &QPushButton::clicked, this, &ExportPanel::onExportClicked);
     mainLayout->addWidget(m_exportBtn);
 

@@ -27,7 +27,7 @@ void RoadInspector::setupUi() {
 
     // Info label
     m_infoLabel = new QLabel("No selection");
-    m_infoLabel->setStyleSheet("color: #888; font-style: italic;");
+    m_infoLabel->setStyleSheet("color: #7d8590; font-style: italic;");
     mainLayout->addWidget(m_infoLabel);
 
     // --- Road properties group ---
@@ -142,7 +142,7 @@ void RoadInspector::updateFromSelection() {
     m_laneCountSpin->setValue(road->laneCount);
     m_profileCombo->setCurrentText(road->profile.type);
     m_colorBtn->setStyleSheet(
-        QString("background-color: %1; border: 1px solid #888;").arg(road->color));
+        QString("background-color: %1; border: 1px solid #30363d;").arg(road->color));
 
     m_nameEdit->blockSignals(false);
     m_widthSpin->blockSignals(false);
@@ -213,7 +213,7 @@ void RoadInspector::onColorChanged() {
     if (color.isValid()) {
         road->color = color.name();
         m_colorBtn->setStyleSheet(
-            QString("background-color: %1; border: 1px solid #888;").arg(road->color));
+            QString("background-color: %1; border: 1px solid #30363d;").arg(road->color));
     }
 }
 

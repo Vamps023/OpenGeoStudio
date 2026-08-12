@@ -62,4 +62,5 @@ private:
     QProgressBar* m_progressBar = nullptr;
     QLabel* m_statusLabel = nullptr;
     QLabel* m_tileCountLabel = nullptr;
+    QLabel* m_tileBadge = nullptr;
 };

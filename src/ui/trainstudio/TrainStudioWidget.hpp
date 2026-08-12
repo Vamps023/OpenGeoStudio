@@ -18,6 +18,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QInputDialog>
+#include <QLabel>
+#include <QStatusBar>
 
 class TrainStudioWidget : public QWidget {
     Q_OBJECT
@@ -41,6 +43,34 @@ public:
         // 2D viewport
         m_viewport = new TrainViewport2D(ctx, m_store, this);
         layout->addWidget(m_viewport, 1);
+
+        // Status bar (matching reference: track count, control point count)
+        m_statusBar = new QLabel(this);
+        m_statusBar->setStyleSheet(
+            "QLabel { background: #0d1117; color: #7d8590; padding: 4px 12px;"
+            "border-top: 1px solid #30363d; font-size: 12px; }");
+        layout->addWidget(m_statusBar);
+
+        // Keyboard hints (bottom-left overlay)
+        m_hintsLabel = new QLabel(m_viewport);
+        m_hintsLabel->setText("Shift+drag: Pan  |  Scroll: Zoom  |  V: Select  |  L: Line  |  A: Arc  |  Esc: Cancel");
+        m_hintsLabel->setStyleSheet(
+            "QLabel { background: rgba(13,17,23,200); color: #7d8590; padding: 6px 12px;"
+            "border-radius: 6px; font-size: 11px; }");
+        m_hintsLabel->move(12, 0);
+        m_hintsLabel->raise();
+
+        updateStatusBar();
+        connect(m_store, &TrainStudioStore::tracksChanged, this, [this]() { updateStatusBar(); });
+    }
+
+    void updateStatusBar() {
+        int trackCount = m_store->tracks().size();
+        int pointCount = 0;
+        for (const auto& t : m_store->tracks()) pointCount += t.points.size();
+        m_statusBar->setText(
+            QString("Tracks: %1  |  Control Points: %2  |  OpenGeoStudio Train Studio")
+                .arg(trackCount).arg(pointCount));
     }
 
     TrainStudioStore* store() { return m_store; }
@@ -158,4 +188,6 @@ private:
     TrainStudioStore* m_store = nullptr;
     QToolBar* m_toolbar = nullptr;
     TrainViewport2D* m_viewport = nullptr;
+    QLabel* m_statusBar = nullptr;
+    QLabel* m_hintsLabel = nullptr;
 };

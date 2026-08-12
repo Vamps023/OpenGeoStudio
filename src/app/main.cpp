@@ -83,6 +83,7 @@ private:
     ApplicationContext* m_ctx;
     QLabel* m_statusLabel = nullptr;
     QStackedWidget* m_centerStack = nullptr;
+    QMap<QString, QAction*> m_workspaceActions;
     HomeWidget* m_homeWidget = nullptr;
     RoadStudioWidget* m_roadStudioWidget = nullptr;
     TrainStudioWidget* m_trainStudioWidget = nullptr;
@@ -146,24 +147,47 @@ private:
     void setupToolBar() {
         QToolBar* toolbar = addToolBar(tr("Main"));
         toolbar->setMovable(false);
+        toolbar->setIconSize(QSize(16, 16));
 
-        QAction* newAct = toolbar->addAction(tr("New"));
-        newAct->setShortcut(QKeySequence::New);
-        connect(newAct, &QAction::triggered, this, &MainWindow::onNewProject);
+        // Logo / app name (left)
+        auto* logoLabel = new QLabel(QStringLiteral("  OpenGeoStudio  "));
+        logoLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #e6edf3; padding: 0 8px;");
+        toolbar->addWidget(logoLabel);
+
+        // Workspace tabs (center-left) — checkable, like the Electron app
+        auto* wsGroup = new QActionGroup(toolbar);
+        wsGroup->setExclusive(true);
+        for (const auto& ws : m_ctx->workspaces().workspaces()) {
+            auto* act = new QAction(ws.name, toolbar);
+            act->setCheckable(true);
+            act->setChecked(ws.id == "home");
+            wsGroup->addAction(act);
+            toolbar->addAction(act);
+            connect(act, &QAction::triggered, this, [this, id = ws.id]() {
+                m_ctx->workspaces().activate(id);
+            });
+            m_workspaceActions[ws.id] = act;
+        }
+
+        // Spacer to push global actions to the right
+        auto* spacer = new QWidget(toolbar);
+        spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        toolbar->addWidget(spacer);
+
+        // Global actions (right)
+        QAction* saveAct = toolbar->addAction(tr("Save"));
+        saveAct->setShortcut(QKeySequence::Save);
+        connect(saveAct, &QAction::triggered, this, [this]() {
+            m_ctx->projects().save();
+        });
 
         QAction* openAct = toolbar->addAction(tr("Open"));
         openAct->setShortcut(QKeySequence::Open);
         connect(openAct, &QAction::triggered, this, &MainWindow::onOpenProject);
 
-        toolbar->addSeparator();
-
-        // Workspace switching actions
-        for (const auto& ws : m_ctx->workspaces().workspaces()) {
-            auto* act = toolbar->addAction(ws.name);
-            connect(act, &QAction::triggered, this, [this, id = ws.id]() {
-                m_ctx->workspaces().activate(id);
-            });
-        }
+        QAction* newAct = toolbar->addAction(tr("New"));
+        newAct->setShortcut(QKeySequence::New);
+        connect(newAct, &QAction::triggered, this, &MainWindow::onNewProject);
     }
 
     void setupStatusBar() {
@@ -294,6 +318,11 @@ private slots:
 
         setWindowTitle(QStringLiteral("OpenGeoStudio — %1").arg(ws.name));
         updateStatusBar();
+
+        // Sync toolbar tab
+        if (m_workspaceActions.contains(ws.id)) {
+            m_workspaceActions[ws.id]->setChecked(true);
+        }
     }
 
     void onProjectChanged(const Project&) {
@@ -366,20 +395,107 @@ int main(int argc, char* argv[]) {
     app.setApplicationVersion(QStringLiteral("0.1.0"));
     app.setOrganizationName(QStringLiteral("OpenGeoStudio"));
 
-    // Set dark theme (matching the Electron app's dark theme)
+    // Set dark theme matching the Electron app's GitHub-inspired dark palette
+    // surface-base: #0d1117, surface-panel: #161b22, surface-elevated: #1c2128
+    // edge: #30363d, fg-primary: #e6edf3, fg-secondary: #7d8590
+    // accent: #06b6d4 (cyan), ok: #3fb950, warn: #d29922, err: #f85149
     QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(43, 43, 43));
-    darkPalette.setColor(QPalette::WindowText, QColor(208, 208, 208));
-    darkPalette.setColor(QPalette::Base, QColor(35, 35, 35));
-    darkPalette.setColor(QPalette::AlternateBase, QColor(43, 43, 43));
-    darkPalette.setColor(QPalette::Text, QColor(208, 208, 208));
-    darkPalette.setColor(QPalette::Button, QColor(55, 55, 55));
-    darkPalette.setColor(QPalette::ButtonText, QColor(208, 208, 208));
-    darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
-    darkPalette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-    darkPalette.setColor(QPalette::ToolTipBase, QColor(43, 43, 43));
-    darkPalette.setColor(QPalette::ToolTipText, QColor(208, 208, 208));
+    darkPalette.setColor(QPalette::Window, QColor(0x0d, 0x11, 0x17));
+    darkPalette.setColor(QPalette::WindowText, QColor(0xe6, 0xed, 0xf3));
+    darkPalette.setColor(QPalette::Base, QColor(0x16, 0x1b, 0x22));
+    darkPalette.setColor(QPalette::AlternateBase, QColor(0x1c, 0x21, 0x28));
+    darkPalette.setColor(QPalette::Text, QColor(0xe6, 0xed, 0xf3));
+    darkPalette.setColor(QPalette::Button, QColor(0x1c, 0x21, 0x28));
+    darkPalette.setColor(QPalette::ButtonText, QColor(0xe6, 0xed, 0xf3));
+    darkPalette.setColor(QPalette::Highlight, QColor(0x06, 0xb6, 0xd4));
+    darkPalette.setColor(QPalette::HighlightedText, QColor(0x0d, 0x11, 0x17));
+    darkPalette.setColor(QPalette::ToolTipBase, QColor(0x1c, 0x21, 0x28));
+    darkPalette.setColor(QPalette::ToolTipText, QColor(0xe6, 0xed, 0xf3));
+    darkPalette.setColor(QPalette::PlaceholderText, QColor(0x7d, 0x85, 0x90));
+    darkPalette.setColor(QPalette::Light, QColor(0x21, 0x26, 0x2d));
+    darkPalette.setColor(QPalette::Midlight, QColor(0x1c, 0x21, 0x28));
+    darkPalette.setColor(QPalette::Mid, QColor(0x16, 0x1b, 0x22));
+    darkPalette.setColor(QPalette::Dark, QColor(0x0d, 0x11, 0x17));
+    darkPalette.setColor(QPalette::Shadow, QColor(0x0d, 0x11, 0x17));
+    darkPalette.setColor(QPalette::Link, QColor(0x06, 0xb6, 0xd4));
+    darkPalette.setColor(QPalette::LinkVisited, QColor(0x0e, 0x74, 0x90));
     app.setPalette(darkPalette);
+
+    // Global stylesheet for GitHub-dark look
+    app.setStyleSheet(QStringLiteral(
+        // Scrollbar styling
+        "QScrollBar:vertical { width: 8px; background: transparent; }"
+        "QScrollBar:horizontal { height: 8px; background: transparent; }"
+        "QScrollBar::handle { background: #30363d; border-radius: 4px; min-height: 20px; }"
+        "QScrollBar::handle:hover { background: #484f58; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { border: none; height: 0; width: 0; }"
+        "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
+
+        // Toolbars
+        "QToolBar { background: #0d1117; border: none; border-bottom: 1px solid #30363d; spacing: 4px; padding: 3px; }"
+        "QToolBar::separator { width: 1px; height: 1px; background: #30363d; margin: 4px 6px; }"
+        "QToolBar QToolButton { padding: 4px 8px; border-radius: 4px; color: #7d8590; }"
+        "QToolBar QToolButton:hover { background: #21262d; color: #e6edf3; }"
+        "QToolBar QToolButton:checked { background: rgba(6,182,212,0.2); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); }"
+
+        // Menu bar
+        "QMenuBar { background: #0d1117; color: #e6edf3; border-bottom: 1px solid #30363d; }"
+        "QMenuBar::item { padding: 4px 12px; background: transparent; }"
+        "QMenuBar::item:selected { background: #21262d; }"
+        "QMenu { background: #161b22; border: 1px solid #30363d; color: #e6edf3; }"
+        "QMenu::item { padding: 6px 24px; }"
+        "QMenu::item:selected { background: #21262d; }"
+        "QMenu::separator { height: 1px; background: #30363d; margin: 4px 8px; }"
+
+        // Status bar
+        "QStatusBar { background: #0d1117; color: #7d8590; border-top: 1px solid #30363d; }"
+        "QStatusBar::item { border: none; }"
+
+        // Dock widgets
+        "QDockWidget { titlebar-close-icon: none; titlebar-normal-icon: none; }"
+        "QDockWidget::title { background: #161b22; border-bottom: 1px solid #30363d; padding: 6px 12px; color: #e6edf3; }"
+        "QDockWidget { background: #0d1117; }"
+
+        // Group boxes
+        "QGroupBox { border: 1px solid #30363d; border-radius: 6px; margin-top: 12px; padding-top: 8px; color: #e6edf3; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #7d8590; }"
+
+        // Inputs
+        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; color: #e6edf3; selection-background-color: rgba(6,182,212,0.3); }"
+        "QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid #06b6d4; }"
+        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QComboBox QAbstractItemView { background: #1c2128; border: 1px solid #30363d; color: #e6edf3; selection-background-color: #21262d; }"
+
+        // Buttons
+        "QPushButton { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 6px 16px; color: #e6edf3; }"
+        "QPushButton:hover { background: #30363d; border-color: #484f58; }"
+        "QPushButton:pressed { background: #1c2128; }"
+        "QPushButton:disabled { color: #484f58; }"
+
+        // List widgets
+        "QListWidget { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; }"
+        "QListWidget::item { padding: 6px 8px; border-bottom: 1px solid #21262d; }"
+        "QListWidget::item:hover { background: #161b22; }"
+        "QListWidget::item:selected { background: rgba(6,182,212,0.15); color: #06b6d4; }"
+
+        // Labels
+        "QLabel { color: #e6edf3; }"
+
+        // Checkboxes
+        "QCheckBox { color: #e6edf3; spacing: 6px; }"
+        "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #30363d; background: #21262d; }"
+        "QCheckBox::indicator:checked { background: #06b6d4; border-color: #06b6d4; }"
+
+        // Progress bar
+        "QProgressBar { background: #21262d; border: 1px solid #30363d; border-radius: 4px; text-align: center; color: #e6edf3; }"
+        "QProgressBar::chunk { background: #06b6d4; border-radius: 3px; }"
+
+        // Tab widget
+        "QTabWidget::pane { border: 1px solid #30363d; background: #0d1117; }"
+        "QTabBar::tab { background: #161b22; color: #7d8590; padding: 6px 16px; border: 1px solid #30363d; border-bottom: none; }"
+        "QTabBar::tab:selected { background: #0d1117; color: #06b6d4; border-bottom: 2px solid #06b6d4; }"
+        "QTabBar::tab:hover:!selected { background: #21262d; }"
+    ));
 
     // Create application context with all services
     ApplicationContext ctx;

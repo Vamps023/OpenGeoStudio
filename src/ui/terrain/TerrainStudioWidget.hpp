@@ -49,9 +49,11 @@ public:
 
         layout->addWidget(contentWidget, 1);
 
-        // Status bar
+        // Status bar — GitHub dark theme
         m_statusLabel = new QLabel("Shift+drag on map to select area");
-        m_statusLabel->setStyleSheet("padding: 4px; color: #aaa;");
+        m_statusLabel->setStyleSheet(
+            "QLabel { background: #0d1117; color: #7d8590; padding: 4px 12px;"
+            "border-top: 1px solid #30363d; font-size: 12px; }");
         layout->addWidget(m_statusLabel);
     }
 
@@ -76,7 +78,7 @@ private:
         m_toolbar->addSeparator();
 
         auto* hintLabel = new QLabel("Shift+drag to select area | Click tiles to toggle");
-        hintLabel->setStyleSheet("color: #888; padding: 0 10px;");
+        hintLabel->setStyleSheet("color: #7d8590; padding: 0 10px; font-size: 12px;");
         m_toolbar->addWidget(hintLabel);
     }
 
