@@ -1,0 +1,41 @@
+# Doxygen configuration for RoadEngine
+# Generated for the RoadEngine public API documentation.
+
+PROJECT_NAME           = "RoadEngine"
+PROJECT_NUMBER         = 1.0.0
+PROJECT_BRIEF          = "C++ geometry library for road network design (OpenGeoStudio)"
+
+# Input sources — only the public API headers
+INPUT                  = public/
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.hpp *.h
+RECURSIVE              = YES
+
+# Output
+OUTPUT_DIRECTORY       = docs/doxygen
+GENERATE_HTML          = YES
+GENERATE_XML           = YES
+GENERATE_LATEX         = NO
+
+# Extraction settings
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_INTERNAL       = NO
+EXTRACT_STATIC         = YES
+
+# Documentation rendering
+USE_MATHJAX            = YES
+
+# Warnings
+QUIET                  = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_LEVEL             = WARN_NO_PARAMDOC
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# Search engine
+SEARCHENGINE           = YES

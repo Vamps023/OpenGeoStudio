@@ -1,0 +1,15 @@
+# RoadEngine CMake Package Configuration File
+#
+# Usage:
+#   find_package(road_engine [VERSION] [REQUIRED])
+#   target_link_libraries(myapp PRIVATE road_engine::core)
+#
+# Provides:
+#   road_engine_FOUND - Set to TRUE if package was found
+#   road_engine::core - Interface target with include directories
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/road_engineTargets.cmake")
+
+check_required_components(road_engine)
