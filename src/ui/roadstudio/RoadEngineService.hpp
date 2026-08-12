@@ -54,6 +54,22 @@ public:
     // --- Export to OpenDRIVE ---
     QString exportOpenDrive(const QList<roads::Road>& roads, double refLat, double refLon);
 
+    // --- Generate intersection between two roads ---
+    // Returns the intersection polygon, approaches, and fillet corners
+    struct IntersectionResult {
+        roads::Point2D center;
+        QList<roads::Point2D> polygon;
+        QList<roads::Point2D> filletArcPoints;
+        QList<roads::Point2D> trimPoints;
+        QList<roads::Point2D> boundaryIntersections;
+        double cornerRadius = 0;
+        double intersectionAngle = 0;
+        bool valid = false;
+    };
+    IntersectionResult generateIntersection(
+        const roads::Road& road1, const roads::Road& road2,
+        double refLat, double refLon);
+
 private:
     // Convert engine Point2D (local meters) to our Point2D
     static roads::Point2D fromEnginePoint(const geo::Point2D& p) {

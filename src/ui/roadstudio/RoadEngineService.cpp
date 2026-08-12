@@ -2,11 +2,9 @@
 
 #include "RoadEngineService.hpp"
 
-// Note: exportOpenDrive is declared in road_engine.hpp but its implementation
-// is in opendrive.hpp which is not included by the public header to avoid
-// conflicts with the root-level engine headers. We include it here with
-// the full path to the public version.
-// This is a known issue with the header-only engine's include structure.
+// Note: intersection.hpp is included via a separate translation unit
+// (RoadIntersection.cpp) to avoid duplicate geometry.hpp definitions
+// between the root-level and public-level engine headers.
 
 geo::Road RoadEngineService::toEngineRoad(const roads::Road& road,
                                            double refLat, double refLon) {
@@ -175,12 +173,13 @@ roads::MeshData RoadEngineService::generateMesh(
 QString RoadEngineService::exportOpenDrive(
     const QList<roads::Road>& roads, double refLat, double refLon) {
 
-    // TODO: OpenDRIVE export requires including opendrive.hpp which has
-    // include conflicts with the root-level engine headers.
-    // This will be resolved in Phase 4f when the engine include structure
-    // is cleaned up. For now, return an empty string.
+    // OpenDRIVE export is now handled by LaneMakerService::exportOpenDrive
+    // which uses libOpenDRIVE directly. This stub remains for compatibility.
     Q_UNUSED(roads)
     Q_UNUSED(refLat)
     Q_UNUSED(refLon)
     return {};
 }
+
+// generateIntersection is implemented in RoadIntersection.cpp
+// (separate TU to avoid duplicate geometry.hpp definitions)

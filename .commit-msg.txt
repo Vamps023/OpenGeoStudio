@@ -1,26 +1,23 @@
-Phase 11: OpenDRIVE export via LaneMaker + make Qt repo primary
+Phase 12: Intersection generation + fix duplicate engine headers
 
-Added OpenDRIVE (.xodr) export functionality using LaneMaker's
-libOpenDRIVE library. The Road Studio toolbar now has an "Export
-OpenDRIVE" button that saves all roads to a .xodr file.
+Added road intersection generation using the C++ road engine's
+geo::generateIntersection function. This enables junction creation
+between two crossing roads with fillet corners and trim lines.
 
-LaneMakerService::exportOpenDrive:
-- Converts each road's control points from geo to local coordinates
-- Builds an odr::OpenDriveMap with refline geometry
-- Calls odr::OpenDriveMap::export_file() to serialize to XML
-- Returns false if LaneMaker is not available or export fails
+RoadEngineService::generateIntersection:
+- Takes two roads and computes their intersection
+- Returns polygon boundary, fillet arc points, trim points,
+  boundary intersections, corner radius, and intersection angle
+- Implemented in RoadIntersection.cpp (separate TU) to avoid
+  duplicate geometry.hpp definitions
 
-RoadStudioToolbar:
-- Added "Export OpenDRIVE" action after "Demo Road"
-- Shows file dialog for .xodr output path
-- Displays success/failure message box with road count
-
-README.md:
-- Updated to declare this as the primary OpenGeoStudio repository
-- Added full feature list (Home, Terrain, Road Studio, Train Studio)
-- Updated build instructions with ENABLE_LANEMAKER=ON
-- Added LaneMaker feature description
-- Added packaging instructions
+Engine header deduplication:
+- Replaced root geometry.hpp with redirect to public/geometry.hpp
+- Replaced root road.hpp with redirect to public/road.hpp
+- Added GEO_FILLET_ARC_DEFINED guard to prevent duplicate filletArc
+  definitions between arc.hpp and skia_arc.hpp
+- These fixes resolve the long-standing include conflict that
+  prevented intersection.hpp from being used alongside road_engine.hpp
 
 Generated with [Devin](https://devin.ai)
 

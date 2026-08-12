@@ -3,6 +3,11 @@
 // ═══════════════════════════════════════════════════════════
 // Skia-based Arc/Segment Drawing Module
 //
+
+// Guard against filletArc duplicate definition from arc.hpp
+#ifdef GEO_FILLET_ARC_DEFINED
+#define GEO_SKIA_ARC_SKIP_FILLET
+#endif
 // Uses SkPath::addArc / arcTo for arc geometry and SkCanvas for rendering.
 // Replaces the old manual trigonometry-based arc drawing in arc.hpp.
 //
@@ -275,6 +280,7 @@ inline CircleArc computeSkiaCircleArc(
 // dirOut = direction AWAY from corner (outgoing)
 // Returns sampled arc points (including start and end tangent points).
 // (Moved from arc.hpp — uses Skia arc sampling semantics.)
+#ifndef GEO_SKIA_ARC_SKIP_FILLET
 inline std::vector<Point2D> filletArc(const Point2D& corner,
                                        const Vec2& dirIn,
                                        const Vec2& dirOut,
@@ -314,5 +320,6 @@ inline std::vector<Point2D> filletArc(const Point2D& corner,
     }
     return points;
 }
+#endif // GEO_SKIA_ARC_SKIP_FILLET
 
 } // namespace geo

@@ -108,6 +108,7 @@ inline CircleArc computeCircleArc(const Point2D& startPoint,
 // dirIn = direction TOWARD corner (incoming)
 // dirOut = direction AWAY from corner (outgoing)
 // Returns sampled arc points (including start and end tangent points).
+#define GEO_FILLET_ARC_DEFINED
 inline std::vector<Point2D> filletArc(const Point2D& corner,
                                        const Vec2& dirIn,
                                        const Vec2& dirOut,
