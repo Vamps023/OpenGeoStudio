@@ -34,6 +34,13 @@ private:
     void writeManifest(const QString& dir);
     void processNextTile();
 
+    // GeoTIFF writing using libtiff
+    bool writeGeoTiffHeightmap(const QString& path, const QImage& img,
+                               double north, double south, double east, double west);
+    bool writeGeoTiffRgb(const QString& path, const QImage& img,
+                         double north, double south, double east, double west);
+    bool writeR16Heightmap(const QString& path, const QImage& img);
+
     TerrainStore* m_store;
     QNetworkAccessManager* m_network;
 

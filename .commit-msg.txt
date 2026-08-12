@@ -1,23 +1,39 @@
-Phase 12: Intersection generation + fix duplicate engine headers
+Phase 13: Complete remaining features — debug layers, track dragging, GeoTIFF
 
-Added road intersection generation using the C++ road engine's
-geo::generateIntersection function. This enables junction creation
-between two crossing roads with fillet corners and trim lines.
+Added all remaining features to achieve full feature parity:
 
-RoadEngineService::generateIntersection:
-- Takes two roads and computes their intersection
-- Returns polygon boundary, fillet arc points, trim points,
-  boundary intersections, corner radius, and intersection angle
-- Implemented in RoadIntersection.cpp (separate TU) to avoid
-  duplicate geometry.hpp definitions
+Debug layers (9 new layers added to RoadViewport2D):
+- Triangulation: Filled triangles with alternating colors
+- VertexNormals: Green arrows showing vertex normals
+- UVGrid: Colored dots based on UV coordinates
+- OffsetCurves: Parallel curves at lane offsets
+- LaneIds: Text labels at lane centers
+- IntersectionPolygon: Yellow filled intersection boundary
+- FilletArcs: Orange fillet arc rendering
+- TrimPoints: Purple dots at trim line centers
+- TangentPoints: Red dots at fillet tangent points
+All 18 debug layers are now rendered.
 
-Engine header deduplication:
-- Replaced root geometry.hpp with redirect to public/geometry.hpp
-- Replaced root road.hpp with redirect to public/road.hpp
-- Added GEO_FILLET_ARC_DEFINED guard to prevent duplicate filletArc
-  definitions between arc.hpp and skia_arc.hpp
-- These fixes resolve the long-standing include conflict that
-  prevented intersection.hpp from being used alongside road_engine.hpp
+Track control point dragging (Train Studio):
+- Added m_dragging bool flag to TrainOverlayWidget
+- mouseMoveEvent now updates control point position via store
+- mouseReleaseEvent pushes history for undo
+- Click on control point in Select mode starts dragging
+- Cursor changes to SizeAllCursor during drag
+
+GeoTIFF output (Terrain Studio):
+- Added writeGeoTiffHeightmap: 16-bit grayscale GeoTIFF with
+  ModelPixelScale and ModelTiepoint GeoTIFF tags
+- Added writeGeoTiffRgb: 8-bit RGB GeoTIFF with geo tags
+- Added writeR16Heightmap: Raw R16 binary heightmap
+- Uses libtiff (TIFF::TIFF) linked via CMake
+- GeoTIFF tags (33550, 33922, 34735) defined as raw numbers
+  since libgeotiff is not installed
+
+Build system:
+- Added find_package(TIFF REQUIRED) and find_package(PNG REQUIRED)
+- Added TIFF::TIFF and PNG::PNG to OpenGeoStudio link libraries
+- Added Qt6::Network to link libraries (was missing explicitly)
 
 Generated with [Devin](https://devin.ai)
 

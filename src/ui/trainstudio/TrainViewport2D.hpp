@@ -71,5 +71,5 @@ private:
 
     bool m_panning = false;
     QPointF m_lastPanPos;
-    trains::ControlPoint* m_draggingPoint = nullptr;
+    bool m_dragging = false;
 };

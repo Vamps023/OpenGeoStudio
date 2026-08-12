@@ -85,6 +85,8 @@ endif()
 # nlohmann-json is a required dependency.
 #
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(TIFF REQUIRED)
+find_package(PNG REQUIRED)
 
 set(ROAD_ENGINE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/road/geometry.hpp
@@ -248,8 +250,11 @@ target_link_libraries(OpenGeoStudio PRIVATE
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Network
     road_engine::core
     plugin_api
+    TIFF::TIFF
+    PNG::PNG
 )
 
 # Link OpenGL library for 3D viewport

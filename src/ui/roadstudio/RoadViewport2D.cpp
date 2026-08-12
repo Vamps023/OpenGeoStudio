@@ -516,6 +516,174 @@ void RoadOverlayWidget::drawDebugLayers(QPainter& p) {
                 }
             }
         }
+
+        // Triangulation (filled triangles with alternating colors)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::Triangulation)) {
+            auto mesh = m_engine->generateMesh(road, refLat, refLon, 32);
+            if (!mesh.isEmpty() && mesh.indices.size() >= 3) {
+                for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+                    unsigned int i0 = mesh.indices[i];
+                    unsigned int i1 = mesh.indices[i + 1];
+                    unsigned int i2 = mesh.indices[i + 2];
+                    if (i0 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size()) &&
+                        i1 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size()) &&
+                        i2 * 3 + 2 < static_cast<unsigned int>(mesh.positions.size())) {
+                        QPointF p0 = localToScreen(mesh.positions[i0 * 3], mesh.positions[i0 * 3 + 1]);
+                        QPointF p1 = localToScreen(mesh.positions[i1 * 3], mesh.positions[i1 * 3 + 1]);
+                        QPointF p2 = localToScreen(mesh.positions[i2 * 3], mesh.positions[i2 * 3 + 1]);
+                        QColor fill = (i / 3) % 2 ? QColor(100, 200, 100, 60) : QColor(200, 100, 100, 60);
+                        p.setBrush(fill);
+                        p.setPen(QPen(QColor(255, 255, 255, 80), 0.5));
+                        QPolygonF tri;
+                        tri << p0 << p1 << p2;
+                        p.drawPolygon(tri);
+                    }
+                }
+            }
+        }
+
+        // Vertex normals (green arrows)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::VertexNormals)) {
+            auto mesh = m_engine->generateMesh(road, refLat, refLon, 32);
+            if (mesh.positions.size() >= 3 && mesh.normals.size() >= 3) {
+                p.setPen(QPen(QColor(0, 255, 100, 150), 1));
+                int vCount = mesh.positions.size() / 3;
+                for (int i = 0; i < vCount; ++i) {
+                    QPointF base = localToScreen(mesh.positions[i * 3], mesh.positions[i * 3 + 1]);
+                    QPointF tip = localToScreen(
+                        mesh.positions[i * 3] + mesh.normals[i * 3] * 5,
+                        mesh.positions[i * 3 + 1] + mesh.normals[i * 3 + 1] * 5);
+                    p.drawLine(base, tip);
+                }
+            }
+        }
+
+        // UV grid (colored grid based on UV coordinates)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::UVGrid)) {
+            auto mesh = m_engine->generateMesh(road, refLat, refLon, 32);
+            if (mesh.positions.size() >= 3 && mesh.uvs.size() >= 2) {
+                int vCount = mesh.positions.size() / 3;
+                for (int i = 0; i < vCount; ++i) {
+                    QPointF pt = localToScreen(mesh.positions[i * 3], mesh.positions[i * 3 + 1]);
+                    float u = mesh.uvs[i * 2];
+                    float v = mesh.uvs[i * 2 + 1];
+                    QColor color = QColor::fromHsvF(u, 0.8, v);
+                    p.setBrush(color);
+                    p.setPen(Qt::NoPen);
+                    p.drawEllipse(pt, 3, 3);
+                }
+            }
+        }
+
+        // Offset curves (parallel curves at lane offsets)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::OffsetCurves)) {
+            auto centerline = m_engine->sampleCenterline(road, refLat, refLon, 64);
+            if (centerline.size() >= 2) {
+                double laneWidth = road.width / road.laneCount;
+                for (int lane = -road.laneCount; lane <= road.laneCount; ++lane) {
+                    if (lane == 0) continue;
+                    double offset = lane * laneWidth;
+                    p.setPen(QPen(QColor(100, 200, 255, 120), 1, Qt::DotLine));
+                    QPainterPath path;
+                    for (size_t i = 0; i < centerline.size(); ++i) {
+                        // Simple perpendicular offset
+                        if (i == 0 || i == centerline.size() - 1) continue;
+                        double dx = centerline[i+1].x - centerline[i-1].x;
+                        double dy = centerline[i+1].y - centerline[i-1].y;
+                        double len = std::sqrt(dx*dx + dy*dy);
+                        if (len < 1e-9) continue;
+                        double nx = -dy / len * offset;
+                        double ny = dx / len * offset;
+                        QPointF pt = localToScreen(centerline[i].x + nx, centerline[i].y + ny);
+                        if (i == 1) path.moveTo(pt);
+                        else path.lineTo(pt);
+                    }
+                    p.drawPath(path);
+                }
+            }
+        }
+
+        // Lane IDs (text labels at lane centers)
+        if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::LaneIds)) {
+            auto boundaries = m_engine->generateLaneBoundaries(road, refLat, refLon, 64);
+            p.setPen(QColor(255, 255, 100, 200));
+            QFont idFont = p.font();
+            idFont.setPointSize(8);
+            idFont.setBold(true);
+            p.setFont(idFont);
+            for (int i = 0; i + 1 < static_cast<int>(boundaries.size()); ++i) {
+                const auto& b1 = boundaries[i];
+                const auto& b2 = boundaries[i + 1];
+                if (b1.size() < 2 || b2.size() < 2) continue;
+                size_t mid = b1.size() / 2;
+                QPointF center = localToScreen(
+                    (b1[mid].x + b2[mid].x) / 2,
+                    (b1[mid].y + b2[mid].y) / 2);
+                p.drawText(center + QPointF(-10, 5), QString("L%1").arg(i));
+            }
+        }
+    }
+
+    // Intersection debug layers (between pairs of roads)
+    auto allRoads = m_store->roads();
+    for (int i = 0; i < allRoads.size(); ++i) {
+        for (int j = i + 1; j < allRoads.size(); ++j) {
+            if (allRoads[i].points.size() < 2 || allRoads[j].points.size() < 2) continue;
+
+            auto ix = m_engine->generateIntersection(allRoads[i], allRoads[j],
+                                                      m_store->refLat(), m_store->refLon());
+            if (!ix.valid) continue;
+
+            // Intersection polygon (yellow filled)
+            if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::IntersectionPolygon)) {
+                if (ix.polygon.size() >= 3) {
+                    QPainterPath path;
+                    path.moveTo(localToScreen(ix.polygon[0].x, ix.polygon[0].y));
+                    for (int k = 1; k < ix.polygon.size(); ++k) {
+                        path.lineTo(localToScreen(ix.polygon[k].x, ix.polygon[k].y));
+                    }
+                    path.closeSubpath();
+                    p.setBrush(QColor(255, 255, 0, 60));
+                    p.setPen(QPen(QColor(255, 255, 0, 200), 1.5));
+                    p.drawPath(path);
+                }
+            }
+
+            // Fillet arcs (orange)
+            if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::FilletArcs)) {
+                if (ix.filletArcPoints.size() >= 2) {
+                    p.setPen(QPen(QColor(255, 165, 0, 200), 2));
+                    QPainterPath path;
+                    path.moveTo(localToScreen(ix.filletArcPoints[0].x, ix.filletArcPoints[0].y));
+                    for (int k = 1; k < ix.filletArcPoints.size(); ++k) {
+                        path.lineTo(localToScreen(ix.filletArcPoints[k].x, ix.filletArcPoints[k].y));
+                    }
+                    p.drawPath(path);
+                }
+            }
+
+            // Trim points (purple dots)
+            if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::TrimPoints)) {
+                p.setBrush(QColor(200, 0, 255, 200));
+                p.setPen(QPen(Qt::black, 0.5));
+                for (const auto& pt : ix.trimPoints) {
+                    QPointF screen = localToScreen(pt.x, pt.y);
+                    p.drawEllipse(screen, 4, 4);
+                }
+            }
+
+            // Tangent points (red dots at fillet tangent points)
+            if (m_store->debugLayerEnabled(RoadStudioStore::DebugLayer::TangentPoints)) {
+                p.setBrush(QColor(255, 50, 50, 200));
+                p.setPen(QPen(Qt::black, 0.5));
+                if (ix.filletArcPoints.size() >= 2) {
+                    QPointF s1 = localToScreen(ix.filletArcPoints[0].x, ix.filletArcPoints[0].y);
+                    QPointF s2 = localToScreen(ix.filletArcPoints.last().x, ix.filletArcPoints.last().y);
+                    p.drawEllipse(s1, 3, 3);
+                    p.drawEllipse(s2, 3, 3);
+                }
+            }
+        }
     }
 }
 

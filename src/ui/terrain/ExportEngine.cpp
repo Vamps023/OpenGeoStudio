@@ -16,6 +16,9 @@
 #include <QAuthenticator>
 #include <cmath>
 
+// libtiff for GeoTIFF output
+#include <tiffio.h>
+
 ExportEngine::ExportEngine(TerrainStore* store, QObject* parent)
     : QObject(parent), m_store(store) {
     m_network = new QNetworkAccessManager(this);
@@ -299,4 +302,104 @@ void ExportEngine::writeManifest(const QString& dir) {
         file.write(doc.toJson(QJsonDocument::Indented));
         file.close();
     }
+}
+
+// ============================================================
+// GeoTIFF writing using libtiff
+// ============================================================
+
+bool ExportEngine::writeGeoTiffHeightmap(const QString& path, const QImage& img,
+                                          double north, double south, double east, double west) {
+    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    if (!tif) return false;
+
+    int width = img.width();
+    int height = img.height();
+
+    // Set TIFF tags for grayscale 16-bit
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 16);
+    TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
+
+    // GeoTIFF tags (ModelPixelScale + ModelTiepoint)
+    // Pixel scale: degrees per pixel
+    double scaleX = (east - west) / width;
+    double scaleY = (north - south) / height;
+    double pixelScale[3] = {scaleX, scaleY, 0};
+    TIFFSetField(tif, 33550, 3, pixelScale);
+
+    // Tiepoint: upper-left corner maps to (west, north)
+    double tiepoint[6] = {0, 0, 0, west, north, 0};
+    TIFFSetField(tif, 33922, 6, tiepoint);
+
+    // GeoKey directory header
+    uint16_t geoKeyDir[4] = {1, 1, 0, 0}; // Version 1, revision 1
+    TIFFSetField(tif, 34735, 4, geoKeyDir);
+
+    // Write pixel data (16-bit grayscale from QImage)
+    QImage grayImg = img.convertToFormat(QImage::Format_Grayscale16);
+    for (int y = 0; y < height; ++y) {
+        const uint16_t* row = reinterpret_cast<const uint16_t*>(grayImg.scanLine(y));
+        TIFFWriteScanline(tif, const_cast<uint16_t*>(row), y, 0);
+    }
+
+    TIFFClose(tif);
+    return true;
+}
+
+bool ExportEngine::writeGeoTiffRgb(const QString& path, const QImage& img,
+                                    double north, double south, double east, double west) {
+    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    if (!tif) return false;
+
+    int width = img.width();
+    int height = img.height();
+
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
+
+    // GeoTIFF tags
+    double scaleX = (east - west) / width;
+    double scaleY = (north - south) / height;
+    double pixelScale[3] = {scaleX, scaleY, 0};
+    TIFFSetField(tif, 33550, 3, pixelScale);
+
+    double tiepoint[6] = {0, 0, 0, west, north, 0};
+    TIFFSetField(tif, 33922, 6, tiepoint);
+
+    uint16_t geoKeyDir[4] = {1, 1, 0, 0};
+    TIFFSetField(tif, 34735, 4, geoKeyDir);
+
+    QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
+    for (int y = 0; y < height; ++y) {
+        const unsigned char* row = rgbImg.scanLine(y);
+        TIFFWriteScanline(tif, const_cast<unsigned char*>(row), y, 0);
+    }
+
+    TIFFClose(tif);
+    return true;
+}
+
+bool ExportEngine::writeR16Heightmap(const QString& path, const QImage& img) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+
+    QImage grayImg = img.convertToFormat(QImage::Format_Grayscale16);
+    for (int y = 0; y < grayImg.height(); ++y) {
+        const uint16_t* row = reinterpret_cast<const uint16_t*>(grayImg.scanLine(y));
+        file.write(reinterpret_cast<const char*>(row), grayImg.width() * sizeof(uint16_t));
+    }
+
+    file.close();
+    return true;
 }

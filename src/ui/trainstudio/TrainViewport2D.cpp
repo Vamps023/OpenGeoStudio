@@ -236,9 +236,17 @@ void TrainOverlayWidget::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    // Note: drag-to-move is not implemented for Train Studio because
-    // the store doesn't expose mutable track access. Selection works.
-    // This will be improved in a future iteration.
+    // Drag selected control point
+    if (m_dragging && m_store->tool() == trains::Tool::Select) {
+        auto sel = m_store->selection();
+        if (sel.trackId.isEmpty() || sel.pointIndices.isEmpty()) return;
+
+        int idx = sel.pointIndices.first();
+        double lat, lon;
+        screenToGeo(pos, lat, lon);
+        m_store->updateControlPoint(sel.trackId, idx, lat, lon);
+        update();
+    }
 }
 
 void TrainOverlayWidget::mouseReleaseEvent(QMouseEvent*) {
@@ -246,7 +254,10 @@ void TrainOverlayWidget::mouseReleaseEvent(QMouseEvent*) {
         m_panning = false;
         setCursor(Qt::ArrowCursor);
     }
-    m_draggingPoint = nullptr;
+    if (m_dragging) {
+        m_store->pushHistory("Drag control point");
+    }
+    m_dragging = false;
 }
 
 void TrainOverlayWidget::handleClick(const QPointF& pos) {
@@ -275,6 +286,8 @@ void TrainOverlayWidget::handleClick(const QPointF& pos) {
                 }
             }
             m_store->setSelection(sel);
+            m_dragging = true;
+            setCursor(Qt::SizeAllCursor);
         } else {
             m_store->clearSelection();
         }
