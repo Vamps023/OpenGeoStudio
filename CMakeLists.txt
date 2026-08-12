@@ -176,6 +176,13 @@ target_link_libraries(plugin_api INTERFACE Qt6::Core)
 # ─── Main Application Executable ─────────────────────────────
 set(APP_SOURCES
     src/app/main.cpp
+    # Core services
+    src/core/ApplicationContext.cpp
+    src/core/events/EventBus.cpp
+    src/core/project/ProjectManager.cpp
+    src/core/workspace/WorkspaceManager.cpp
+    # UI
+    src/ui/home/HomeWidget.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -190,7 +197,15 @@ add_executable(OpenGeoStudio
 )
 
 target_include_directories(OpenGeoStudio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/events
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/project
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/workspace
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/home
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
