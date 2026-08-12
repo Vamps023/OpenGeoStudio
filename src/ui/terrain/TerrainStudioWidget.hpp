@@ -84,24 +84,21 @@ private:
         gridAct->setCheckable(true);
         gridAct->setChecked(true);
         connect(gridAct, &QAction::triggered, this, [this](bool checked) {
-            m_showGrid = checked;
-            if (m_viewport) m_viewport->overlay()->update();
+            if (m_viewport && m_viewport->overlay()) m_viewport->overlay()->setShowGrid(checked);
         });
 
         auto* labelsAct = m_toolbar->addAction("Labels");
         labelsAct->setCheckable(true);
         labelsAct->setChecked(true);
         connect(labelsAct, &QAction::triggered, this, [this](bool checked) {
-            m_showLabels = checked;
-            if (m_viewport) m_viewport->overlay()->update();
+            if (m_viewport && m_viewport->overlay()) m_viewport->overlay()->setShowLabels(checked);
         });
 
         auto* selAct = m_toolbar->addAction("Selection");
         selAct->setCheckable(true);
         selAct->setChecked(true);
         connect(selAct, &QAction::triggered, this, [this](bool checked) {
-            m_showSelection = checked;
-            if (m_viewport) m_viewport->overlay()->update();
+            if (m_viewport && m_viewport->overlay()) m_viewport->overlay()->setShowSelection(checked);
         });
 
         m_toolbar->addSeparator();
@@ -110,10 +107,6 @@ private:
         hintLabel->setStyleSheet("color: #7d8590; padding: 0 10px; font-size: 12px;");
         m_toolbar->addWidget(hintLabel);
     }
-
-    bool m_showGrid = true;
-    bool m_showLabels = true;
-    bool m_showSelection = true;
 
     ApplicationContext* m_ctx;
     TerrainStore* m_store = nullptr;

@@ -45,6 +45,10 @@ public:
                                    QWidget* parent = nullptr);
     void refreshMapState();
 
+    void setShowGrid(bool v) { m_showGrid = v; update(); }
+    void setShowLabels(bool v) { m_showLabels = v; update(); }
+    void setShowSelection(bool v) { m_showSelection = v; update(); }
+
 protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
@@ -68,4 +72,8 @@ private:
     QPointF m_selectEnd;
     bool m_panning = false;
     QPointF m_lastPanPos;
+
+    bool m_showGrid = true;
+    bool m_showLabels = true;
+    bool m_showSelection = true;
 };

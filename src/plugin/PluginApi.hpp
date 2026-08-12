@@ -98,7 +98,6 @@ struct PluginCapability {
 // ═══════════════════════════════════════════════════════════
 
 class IPlugin : public QObject {
-    Q_OBJECT
 public:
     virtual ~IPlugin() = default;
 
@@ -148,7 +147,6 @@ Q_DECLARE_INTERFACE(IPlugin, "opengeostudio.plugin/1.0")
 // ═══════════════════════════════════════════════════════════
 
 class PluginManager : public QObject {
-    Q_OBJECT
 public:
     explicit PluginManager(QObject* parent = nullptr)
         : QObject(parent) {}
@@ -240,7 +238,6 @@ private:
 // ═══════════════════════════════════════════════════════════
 
 class PluginLoader : public QObject {
-    Q_OBJECT
 public:
     explicit PluginLoader(PluginManager* manager, QObject* parent = nullptr)
         : QObject(parent), m_manager(manager) {}

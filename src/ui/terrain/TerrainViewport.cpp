@@ -89,9 +89,9 @@ void TerrainOverlayWidget::paintEvent(QPaintEvent*) {
     refreshMapState();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    drawSelectionBox(p);
-    drawTileGrid(p);
-    drawTileLabels(p);
+    if (m_showSelection) drawSelectionBox(p);
+    if (m_showGrid) drawTileGrid(p);
+    if (m_showLabels) drawTileLabels(p);
 }
 
 void TerrainOverlayWidget::drawSelectionBox(QPainter& p) {
