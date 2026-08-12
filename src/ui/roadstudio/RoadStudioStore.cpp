@@ -78,6 +78,15 @@ void RoadStudioStore::updateControlPoint(const QString& roadId, int index,
     emit roadsChanged();
 }
 
+void RoadStudioStore::updateControlPointElevation(const QString& roadId, int index, double z) {
+    auto* road = getRoad(roadId);
+    if (!road || index < 0 || index >= road->points.size()) return;
+
+    pushHistory("Update elevation");
+    road->points[index].z = z;
+    emit roadsChanged();
+}
+
 void RoadStudioStore::deleteControlPoint(const QString& roadId, int index) {
     auto* road = getRoad(roadId);
     if (!road || index < 0 || index >= road->points.size()) return;

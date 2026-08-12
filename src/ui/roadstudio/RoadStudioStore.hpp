@@ -75,6 +75,7 @@ public:
     QString startNewRoad(double lat, double lon);
     void addControlPoint(const QString& roadId, double lat, double lon);
     void updateControlPoint(const QString& roadId, int index, double lat, double lon);
+    void updateControlPointElevation(const QString& roadId, int index, double z);
     void deleteControlPoint(const QString& roadId, int index);
     void deleteRoad(const QString& roadId);
     void clearAll();

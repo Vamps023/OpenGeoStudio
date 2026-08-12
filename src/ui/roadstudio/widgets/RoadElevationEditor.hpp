@@ -7,6 +7,7 @@
 // Replaces modules/road-studio/client/RoadElevationEditor.tsx.
 // Collapsible bottom panel showing elevation profile along road.
 // Tools: Flat, Slope Up, Slope Down, Bridge, Roller.
+// Click on the canvas to apply the active tool at that s position.
 //
 
 #include "RoadStudioStore.hpp"
@@ -14,7 +15,6 @@
 #include <QWidget>
 #include <QPushButton>
 #include <QLabel>
-#include <QComboBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
@@ -22,6 +22,16 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGroupBox>
+#include <QButtonGroup>
+
+enum class ElevTool {
+    None,
+    Flat,
+    SlopeUp,
+    SlopeDown,
+    Bridge,
+    Roller
+};
 
 class RoadElevationCanvas : public QWidget {
     Q_OBJECT
@@ -38,6 +48,8 @@ public:
         update();
     }
 
+    void setTool(ElevTool tool) { m_tool = tool; update(); }
+
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -53,8 +65,8 @@ protected:
 
         // Axes
         p.setPen(QPen(QColor(0x30, 0x36, 0x3d), 2));
-        p.drawLine(40, 0, 40, height());           // Y axis
-        p.drawLine(0, height() - 20, width(), height() - 20); // X axis
+        p.drawLine(40, 0, 40, height());
+        p.drawLine(0, height() - 20, width(), height() - 20);
 
         // Labels
         p.setPen(QColor(0x7d, 0x85, 0x90));
@@ -111,7 +123,7 @@ protected:
         }
         if (zMax - zMin < 1.0) { zMin -= 0.5; zMax += 0.5; }
         double zRange = zMax - zMin;
-        if (zRange < 1e-9) zRange = 1.0;  // Prevent division by zero
+        if (zRange < 1e-9) zRange = 1.0;
 
         // Draw elevation profile
         const int margin = 40;
@@ -153,7 +165,6 @@ protected:
             p.setPen(QPen(QColor(0x06, 0xb6, 0xd4), 2));
             p.drawEllipse(pt, 4, 4);
 
-            // Z label
             p.setPen(QColor(0x7d, 0x85, 0x90));
             p.setFont(QFont("Segoe UI", 7));
             p.drawText(pt + QPointF(6, -6), QString::number(zvals[i], 'f', 1));
@@ -176,20 +187,130 @@ protected:
             p.drawLine(margin - 4, y, margin, y);
             p.drawText(5, y + 4, QString::number(z, 'f', 1));
         }
+
+        // Draw cursor line if hovering
+        if (m_hoverX >= 0 && m_tool != ElevTool::None) {
+            p.setPen(QPen(QColor(0x06, 0xb6, 0xd4), 1, Qt::DashLine));
+            p.drawLine(m_hoverX, topMargin, m_hoverX, height() - bottomMargin);
+
+            // Show tool name
+            QString toolName;
+            switch (m_tool) {
+                case ElevTool::Flat: toolName = "Flat"; break;
+                case ElevTool::SlopeUp: toolName = "Slope Up"; break;
+                case ElevTool::SlopeDown: toolName = "Slope Down"; break;
+                case ElevTool::Bridge: toolName = "Bridge"; break;
+                case ElevTool::Roller: toolName = "Roller"; break;
+                default: break;
+            }
+            p.setPen(QColor(0x06, 0xb6, 0xd4));
+            p.setFont(QFont("Segoe UI", 8));
+            p.drawText(m_hoverX + 4, topMargin + 12, toolName);
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        m_hoverX = event->position().x();
+        update();
     }
 
     void mousePressEvent(QMouseEvent* event) override {
-        if (m_roadId.isEmpty()) return;
-        // Click to add/edit elevation point — simple implementation
-        emit elevationPointClicked(event->position());
+        if (m_roadId.isEmpty() || m_tool == ElevTool::None) return;
+
+        // Find road
+        auto* road = m_store->getRoad(m_roadId);
+        if (!road || road->points.size() < 2) return;
+
+        // Compute s values
+        const double refLat = m_store->refLat();
+        const double refLon = m_store->refLon();
+        auto geoToLocal = [](double lat, double lon, double refLat, double refLon,
+                             double& lx, double& ly) {
+            const double R = 6378137.0;
+            lx = (lon - refLon) * M_PI / 180.0 * R * cos(refLat * M_PI / 180.0);
+            ly = (lat - refLat) * M_PI / 180.0 * R;
+        };
+
+        std::vector<double> svals;
+        double totalS = 0;
+        double prevLx = 0, prevLy = 0;
+        for (int i = 0; i < road->points.size(); ++i) {
+            double lx, ly;
+            geoToLocal(road->points[i].lat, road->points[i].lon, refLat, refLon, lx, ly);
+            if (i > 0) totalS += std::hypot(lx - prevLx, ly - prevLy);
+            svals.push_back(totalS);
+            prevLx = lx;
+            prevLy = ly;
+        }
+        if (totalS < 1e-6) return;
+
+        // Convert click x to s position
+        const int margin = 40;
+        const int plotW = width() - margin - 10;
+        double clickS = (event->position().x() - margin) / plotW * totalS;
+        clickS = std::max(0.0, std::min(totalS, clickS));
+
+        // Find nearest control point index
+        int nearestIdx = 0;
+        double minDist = std::abs(svals[0] - clickS);
+        for (int i = 1; i < road->points.size(); ++i) {
+            double d = std::abs(svals[i] - clickS);
+            if (d < minDist) { minDist = d; nearestIdx = i; }
+        }
+
+        // Apply tool effect
+        double currentZ = road->points[nearestIdx].z;
+        double newZ = currentZ;
+
+        switch (m_tool) {
+            case ElevTool::Flat:
+                // Set this point and neighbors to average z
+                {
+                    double avgZ = 0;
+                    for (const auto& cp : road->points) avgZ += cp.z;
+                    avgZ /= road->points.size();
+                    newZ = avgZ;
+                }
+                break;
+            case ElevTool::SlopeUp:
+                newZ = currentZ + 2.0;  // +2m
+                break;
+            case ElevTool::SlopeDown:
+                newZ = currentZ - 2.0;  // -2m
+                break;
+            case ElevTool::Bridge:
+                // Raise point above surrounding terrain
+                newZ = currentZ + 5.0;  // +5m for bridge
+                break;
+            case ElevTool::Roller:
+                // Smooth/average with neighbors
+                {
+                    double neighborSum = currentZ;
+                    int count = 1;
+                    if (nearestIdx > 0) { neighborSum += road->points[nearestIdx - 1].z; count++; }
+                    if (nearestIdx < road->points.size() - 1) { neighborSum += road->points[nearestIdx + 1].z; count++; }
+                    newZ = neighborSum / count;
+                }
+                break;
+            default:
+                break;
+        }
+
+        // Apply the change
+        m_store->updateControlPointElevation(m_roadId, nearestIdx, newZ);
+        update();
     }
 
-signals:
-    void elevationPointClicked(QPointF pos);
+    void leaveEvent(QEvent*) override {
+        m_hoverX = -1;
+        update();
+    }
 
 private:
     RoadStudioStore* m_store;
     QString m_roadId;
+    ElevTool m_tool = ElevTool::None;
+    double m_hoverX = -1;
 };
 
 class RoadElevationEditor : public QWidget {
@@ -213,26 +334,35 @@ public:
 
         headerLayout->addStretch();
 
-        // Elevation tools
-        auto* flatBtn = new QPushButton("Flat");
-        flatBtn->setStyleSheet("QPushButton { padding: 3px 10px; font-size: 11px; }");
-        headerLayout->addWidget(flatBtn);
+        // Elevation tools — checkable, exclusive
+        auto* toolGroup = new QButtonGroup(this);
+        toolGroup->setExclusive(true);
 
-        auto* slopeUpBtn = new QPushButton("Slope Up");
-        slopeUpBtn->setStyleSheet("QPushButton { padding: 3px 10px; font-size: 11px; }");
-        headerLayout->addWidget(slopeUpBtn);
+        auto makeToolBtn = [this, toolGroup](const QString& text, ElevTool tool) {
+            auto* btn = new QPushButton(text, this);
+            btn->setCheckable(true);
+            btn->setStyleSheet(
+                "QPushButton { padding: 3px 10px; font-size: 11px; "
+                "background: #21262d; border: 1px solid #30363d; border-radius: 4px; color: #7d8590; }"
+                "QPushButton:hover { background: #30363d; color: #e6edf3; }"
+                "QPushButton:checked { background: rgba(6,182,212,0.2); color: #06b6d4; "
+                "border: 1px solid rgba(6,182,212,0.4); }");
+            toolGroup->addButton(btn);
+            connect(btn, &QPushButton::toggled, this, [this, toolGroup, tool](bool checked) {
+                if (checked) {
+                    m_canvas->setTool(tool);
+                } else if (!toolGroup->checkedButton()) {
+                    m_canvas->setTool(ElevTool::None);
+                }
+            });
+            return btn;
+        };
 
-        auto* slopeDownBtn = new QPushButton("Slope Down");
-        slopeDownBtn->setStyleSheet("QPushButton { padding: 3px 10px; font-size: 11px; }");
-        headerLayout->addWidget(slopeDownBtn);
-
-        auto* bridgeBtn = new QPushButton("Bridge");
-        bridgeBtn->setStyleSheet("QPushButton { padding: 3px 10px; font-size: 11px; }");
-        headerLayout->addWidget(bridgeBtn);
-
-        auto* rollerBtn = new QPushButton("Roller");
-        rollerBtn->setStyleSheet("QPushButton { padding: 3px 10px; font-size: 11px; }");
-        headerLayout->addWidget(rollerBtn);
+        headerLayout->addWidget(makeToolBtn("Flat", ElevTool::Flat));
+        headerLayout->addWidget(makeToolBtn("Slope Up", ElevTool::SlopeUp));
+        headerLayout->addWidget(makeToolBtn("Slope Down", ElevTool::SlopeDown));
+        headerLayout->addWidget(makeToolBtn("Bridge", ElevTool::Bridge));
+        headerLayout->addWidget(makeToolBtn("Roller", ElevTool::Roller));
 
         layout->addLayout(headerLayout);
 
@@ -241,7 +371,7 @@ public:
         layout->addWidget(m_canvas, 1);
 
         setFixedHeight(160);
-        setVisible(false); // Hidden by default, shown when road selected
+        setVisible(false);
     }
 
     void setActiveRoad(const QString& roadId) {
