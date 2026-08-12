@@ -1,42 +1,62 @@
-Phase 5: Train Studio — 2D track editing with line and arc tools
+Phase 6: Terrain Studio — area selection, tile grid, and export
 
-Implemented Train Studio as a 2D-only workspace for railway track design:
+Implemented the Terrain workspace with area selection and export
+functionality entirely in C++/Qt (no TypeScript, no Sharp, no Node.js):
 
-Data model (TrainTypes.hpp):
-- Track with control points, gauge (1.435m standard), color, kind (line/arc)
-- ControlPoint with lat, lon, z
-- Selection, HistorySnapshot, Tool (select/line/arc)
-- JSON serialization for all types
+Data model (TerrainTypes.hpp):
+- GeoBounds (north/south/east/west, makeSquare for 1:1 aspect ratio)
+- Tile and TileGrid for dividing large areas into export tiles
+- HeightmapFormat (PNG16, R16, GeoTIFF Int16/UInt16/Float32)
+- AlbedoFormat (PNG, GeoTIFF RGB)
+- DemSource (OpenTopo SRTM GL1/GL3, ALOS, Copernicus, NASADEM, GLAD)
+- ImagerySource (ArcGIS, Google, Mapbox)
+- ExportSettings with API key management
 
-State management (TrainStudioStore):
-- Track CRUD: startNewTrack, addControlPoint, updateControlPoint,
-  deleteControlPoint, deleteTrack, clearAll
-- Selection management
-- Undo/redo (50 snapshot limit)
-- Arc drawing workflow: startArc, finishArc, cancelArc
-- XML export to Oksygen Track Mesh Builder format (simplified)
-- Tool switching (select/line/arc)
+State management (TerrainStore):
+- Area bounds selection with automatic square constraint
+- Tile grid computation (1/2/4/8 km tile sizes)
+- Tile selection (individual toggle, select all, clear)
+- Export settings management
+- JSON serialization for project persistence
 
-2D viewport (TrainViewport2D):
+2D viewport (TerrainViewport):
 - MapLibre satellite map background
-- Transparent QPainter overlay for track rendering
-- Track lines with gauge-scaled width and rail visualization
-- Control points with selection highlighting
-- Arc preview with start point and direction arrow
-- Pan (shift+drag/middle mouse)
-- Select tool with hit-testing
-- Line tool creates new tracks
-- Arc tool: 2-click workflow (start + end)
+- Shift+drag area selection with live preview (cyan rectangle)
+- 1:1 square constraint on selection
+- Tile grid overlay with selected/unselected styling
+- Tile labels (row,col)
+- Click tiles to toggle selection
+- Pan with non-shift drag or middle mouse
 
-Toolbar:
-- Select (V), Line (L), Arc (A) tools
-- Undo/Redo with keyboard shortcuts
-- Delete selected, Clear all
-- Export XML (Oksygen network format)
+Export panel (ExportPanel):
+- Heightmap format dropdown (5 formats)
+- Albedo format dropdown (2 formats)
+- DEM source dropdown (6 sources)
+- Imagery source dropdown (3 sources)
+- Resolution spin boxes (256-8192px)
+- Deflate compression checkbox
+- OpenTopography API key input (password mode)
+- Mapbox token input (password mode)
+- Tile count display and select all/clear buttons
+- Export button with directory picker
+- Progress bar and status label
 
-Note: OSM railway import (Overpass API) and XML validation are not
-yet ported — they require network access and XML schema validation
-which will be added in Phase 6.
+Export engine (ExportEngine):
+- QNetworkAccessManager for HTTP downloads
+- DEM download from OpenTopography API (with API key)
+- DEM download from GLAD SRTM (with basic auth)
+- Imagery download from ArcGIS/Google/Mapbox tile servers
+- Automatic zoom level selection based on tile size
+- QImage-based image processing (scaling to requested resolution)
+- Fallback placeholder images when downloads fail
+- Terrain manifest JSON output (Babylon.js preset format)
+- Sequential tile processing with progress reporting
+
+Note: GeoTIFF output is not yet implemented — current implementation
+writes PNG files. A full GeoTIFF writer using libtiff will be added
+in a future iteration. The DEM download currently creates placeholder
+heightmaps; parsing the AAIGrid/GeoTIFF response from OpenTopography
+requires a TIFF parser which will be added next.
 
 Generated with [Devin](https://devin.ai)
 

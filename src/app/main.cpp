@@ -40,6 +40,7 @@
 #include "ui/roadstudio/RoadStudioWidget.hpp"
 #include "ui/roadstudio/widgets/RoadInspector.hpp"
 #include "ui/trainstudio/TrainStudioWidget.hpp"
+#include "ui/terrain/TerrainStudioWidget.hpp"
 
 // Phase 2c: MapLibre Native Qt map viewport
 #if defined(HAVE_MAPLIBRE)
@@ -85,6 +86,7 @@ private:
     HomeWidget* m_homeWidget = nullptr;
     RoadStudioWidget* m_roadStudioWidget = nullptr;
     TrainStudioWidget* m_trainStudioWidget = nullptr;
+    TerrainStudioWidget* m_terrainStudioWidget = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
     RoadInspector* m_roadInspector = nullptr;
@@ -180,19 +182,18 @@ private:
                 this, &MainWindow::onOpenProjectPath);
         m_centerStack->addWidget(m_homeWidget);
 
-        // Page 1: Map (Terrain + Road Studio 2D)
+        // Page 1: Terrain Studio (area selection + export)
+        m_terrainStudioWidget = new TerrainStudioWidget(m_ctx);
+        m_centerStack->addWidget(m_terrainStudioWidget);
 #if defined(HAVE_MAPLIBRE)
-        m_mapWidget = new MapViewportWidget();
-        m_centerStack->addWidget(m_mapWidget);
-        connect(m_mapWidget, &MapViewportWidget::mapClicked,
-                this, [this](double lat, double lon) {
-                    m_statusLabel->setText(
-                        QStringLiteral("Clicked: %1, %2").arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
-                });
-#else
-        auto* mapPlaceholder = new QLabel("MapLibre not available — build maplibre-native-qt");
-        mapPlaceholder->setAlignment(Qt::AlignCenter);
-        m_centerStack->addWidget(mapPlaceholder);
+        if (m_terrainStudioWidget->mapWidget()) {
+            connect(m_terrainStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
+                    this, [this](double lat, double lon) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Terrain — Clicked: %1, %2")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+                    });
+        }
 #endif
 
         // Page 2: Road Studio (2D map with road overlay)
@@ -266,7 +267,11 @@ private slots:
         if (ws.id == "home") {
             m_centerStack->setCurrentIndex(0);
         } else if (ws.id == "terrain") {
-            m_centerStack->setCurrentIndex(1); // Map
+            m_centerStack->setCurrentIndex(1); // Terrain Studio
+            if (m_rightDockPlaceholder) {
+                m_rightDock->setWidget(m_rightDockPlaceholder);
+                m_rightDock->setWindowTitle("Inspector");
+            }
         } else if (ws.id == "road-studio") {
             m_centerStack->setCurrentIndex(2); // Road Studio
             // Swap inspector to RoadInspector

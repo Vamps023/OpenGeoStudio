@@ -195,6 +195,12 @@ set(APP_SOURCES
     src/ui/trainstudio/TrainStudioStore.cpp
     src/ui/trainstudio/TrainViewport2D.cpp
     src/ui/trainstudio/TrainStudioWidget.cpp
+    # UI - Terrain Studio
+    src/ui/terrain/TerrainStore.cpp
+    src/ui/terrain/TerrainViewport.cpp
+    src/ui/terrain/ExportPanel.cpp
+    src/ui/terrain/ExportEngine.cpp
+    src/ui/terrain/TerrainStudioWidget.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -221,6 +227,7 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/widgets
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE

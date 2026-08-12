@@ -1,0 +1,89 @@
+#pragma once
+
+// ============================================================
+// TerrainStudioWidget — Terrain workspace widget
+// ============================================================
+
+#include "../../core/ApplicationContext.hpp"
+#include "TerrainStore.hpp"
+#include "TerrainViewport.hpp"
+#include "ExportPanel.hpp"
+
+#include <QWidget>
+#include <QVBoxLayout>
+#include <QToolBar>
+#include <QLabel>
+#include <QDoubleSpinBox>
+
+class TerrainStudioWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit TerrainStudioWidget(ApplicationContext* ctx, QWidget* parent = nullptr)
+        : QWidget(parent), m_ctx(ctx)
+    {
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+
+        m_store = new TerrainStore(&m_ctx->events(), this);
+
+        // Toolbar
+        m_toolbar = new QToolBar("Terrain", this);
+        m_toolbar->setMovable(false);
+        setupToolbar();
+        layout->addWidget(m_toolbar);
+
+        // Main content: viewport + export panel side by side
+        auto* contentWidget = new QWidget();
+        auto* contentLayout = new QHBoxLayout(contentWidget);
+        contentLayout->setContentsMargins(0, 0, 0, 0);
+        contentLayout->setSpacing(0);
+
+        m_viewport = new TerrainViewport(ctx, m_store, this);
+        contentLayout->addWidget(m_viewport, 3);
+
+        m_exportPanel = new ExportPanel(m_store, this);
+        m_exportPanel->setMaximumWidth(320);
+        contentLayout->addWidget(m_exportPanel, 1);
+
+        layout->addWidget(contentWidget, 1);
+
+        // Status bar
+        m_statusLabel = new QLabel("Shift+drag on map to select area");
+        m_statusLabel->setStyleSheet("padding: 4px; color: #aaa;");
+        layout->addWidget(m_statusLabel);
+    }
+
+    TerrainStore* store() { return m_store; }
+    TerrainViewport* viewport() { return m_viewport; }
+    MapViewportWidget* mapWidget() { return m_viewport ? m_viewport->mapWidget() : nullptr; }
+
+private:
+    void setupToolbar() {
+        auto* tileLabel = new QLabel("Tile size (km):");
+        m_toolbar->addWidget(tileLabel);
+
+        auto* tileSpin = new QDoubleSpinBox();
+        tileSpin->setRange(1, 8);
+        tileSpin->setSingleStep(1);
+        tileSpin->setValue(2);
+        tileSpin->setSuffix(" km");
+        connect(tileSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                m_store, &TerrainStore::setTileSizeKm);
+        m_toolbar->addWidget(tileSpin);
+
+        m_toolbar->addSeparator();
+
+        auto* hintLabel = new QLabel("Shift+drag to select area | Click tiles to toggle");
+        hintLabel->setStyleSheet("color: #888; padding: 0 10px;");
+        m_toolbar->addWidget(hintLabel);
+    }
+
+    ApplicationContext* m_ctx;
+    TerrainStore* m_store = nullptr;
+    QToolBar* m_toolbar = nullptr;
+    TerrainViewport* m_viewport = nullptr;
+    ExportPanel* m_exportPanel = nullptr;
+    QLabel* m_statusLabel = nullptr;
+};
