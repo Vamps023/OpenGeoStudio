@@ -1,0 +1,496 @@
+// RoadViewport2D — 2D road viewport implementation
+
+#include "RoadViewport2D.hpp"
+#include "GeoConvert.hpp"
+
+#include <QVBoxLayout>
+#include <QResizeEvent>
+#include <QKeyEvent>
+#include <QPainterPath>
+#include <QFont>
+#include <cmath>
+
+// ============================================================
+// RoadViewport2D
+// ============================================================
+
+RoadViewport2D::RoadViewport2D(ApplicationContext* ctx, QWidget* parent)
+    : QWidget(parent), m_ctx(ctx) {
+    // Get or create the RoadStudioStore from the context
+    // For now, we create it locally — Phase 4 will integrate it into ApplicationContext
+    m_store = new RoadStudioStore(&m_ctx->events(), this);
+
+    setupUi();
+
+    // Connect store signals to trigger overlay repaint
+    connect(m_store, &RoadStudioStore::roadsChanged, m_overlay, qOverload<>(&QWidget::update));
+    connect(m_store, &RoadStudioStore::selectionChanged, m_overlay, qOverload<>(&QWidget::update));
+    connect(m_store, &RoadStudioStore::toolChanged, m_overlay, qOverload<>(&QWidget::update));
+    connect(m_store, &RoadStudioStore::lmRoadStateChanged, m_overlay, qOverload<>(&QWidget::update));
+    connect(m_store, &RoadStudioStore::debugModeChanged, m_overlay, qOverload<>(&QWidget::update));
+}
+
+void RoadViewport2D::setupUi() {
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    m_mapWidget = new MapViewportWidget();
+    layout->addWidget(m_mapWidget, 1);
+
+    // Create transparent overlay on top of the map
+    m_overlay = new RoadOverlayWidget(m_store, m_mapWidget, this);
+    m_overlay->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    m_overlay->setAttribute(Qt::WA_NoSystemBackground, true);
+    m_overlay->setAttribute(Qt::WA_TranslucentBackground, true);
+    m_overlay->setMouseTracking(true);
+}
+
+void RoadViewport2D::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (m_overlay) {
+        m_overlay->setGeometry(0, 0, width(), height());
+        m_overlay->raise();
+        m_overlay->update();
+    }
+}
+
+void RoadViewport2D::onRoadsChanged() {
+    if (m_overlay) m_overlay->update();
+}
+
+void RoadViewport2D::onSelectionChanged(const roads::Selection&) {
+    if (m_overlay) m_overlay->update();
+}
+
+void RoadViewport2D::onToolChanged(roads::Tool) {
+    if (m_overlay) m_overlay->update();
+}
+
+void RoadViewport2D::onLmRoadStateChanged() {
+    if (m_overlay) m_overlay->update();
+}
+
+// ============================================================
+// RoadOverlayWidget
+// ============================================================
+
+RoadOverlayWidget::RoadOverlayWidget(RoadStudioStore* store, MapViewportWidget* map,
+                                      QWidget* parent)
+    : QWidget(parent), m_store(store), m_map(map) {
+    setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setFocusPolicy(Qt::StrongFocus);
+}
+
+void RoadOverlayWidget::refreshMapState() {
+    if (!m_map || !m_map->map()) return;
+    auto* mapObj = m_map->map();
+    const auto coord = mapObj->coordinate();
+    m_mapLat = coord.first;
+    m_mapLon = coord.second;
+    m_mapZoom = mapObj->zoom();
+    m_mpp = roads::metersPerPixel(m_mapZoom, m_mapLat);
+    m_ppm = 1.0 / m_mpp;
+}
+
+QPointF RoadOverlayWidget::localToScreen(double localX, double localY) const {
+    // Convert local meters to screen coordinates
+    // The map center is at the widget center
+    const double cx = width() / 2.0;
+    const double cy = height() / 2.0;
+    const double refLat = m_store->refLat();
+    const double refLon = m_store->refLon();
+
+    // Convert ref origin to screen
+    double refScreenX, refScreenY;
+    // ref origin offset from map center in pixels
+    double refLocalX, refLocalY;
+    roads::geoToLocal(refLat, refLon, m_mapLat, m_mapLon, refLocalX, refLocalY);
+    refScreenX = cx - refLocalX * m_ppm;
+    refScreenY = cy + refLocalY * m_ppm; // Y-down screen
+
+    return QPointF(refScreenX + localX * m_ppm,
+                   refScreenY - localY * m_ppm);
+}
+
+void RoadOverlayWidget::screenToLocal(const QPointF& screen, double& outX, double& outY) const {
+    const double cx = width() / 2.0;
+    const double cy = height() / 2.0;
+    const double refLat = m_store->refLat();
+    const double refLon = m_store->refLon();
+
+    double refLocalX, refLocalY;
+    roads::geoToLocal(refLat, refLon, m_mapLat, m_mapLon, refLocalX, refLocalY);
+    double refScreenX = cx - refLocalX * m_ppm;
+    double refScreenY = cy + refLocalY * m_ppm;
+
+    outX = (screen.x() - refScreenX) / m_ppm;
+    outY = (refScreenY - screen.y()) / m_ppm;
+}
+
+void RoadOverlayWidget::screenToGeo(const QPointF& screen, double& outLat, double& outLon) const {
+    double localX, localY;
+    screenToLocal(screen, localX, localY);
+    roads::localToGeo(localX, localY, m_store->refLat(), m_store->refLon(), outLat, outLon);
+}
+
+void RoadOverlayWidget::geoToScreen(double lat, double lon, QPointF& outScreen) const {
+    double localX, localY;
+    roads::geoToLocal(lat, lon, m_store->refLat(), m_store->refLon(), localX, localY);
+    outScreen = localToScreen(localX, localY);
+}
+
+// ============================================================
+// Rendering
+// ============================================================
+
+void RoadOverlayWidget::paintEvent(QPaintEvent*) {
+    refreshMapState();
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    // Draw roads
+    drawRoads(p);
+
+    // Draw LaneMaker preview if active
+    if (m_store->isLmRoadActive()) {
+        drawLaneMakerPreview(p);
+    }
+
+    // Draw debug layers if enabled
+    if (m_store->debugMode()) {
+        drawDebugLayers(p);
+    }
+}
+
+void RoadOverlayWidget::drawRoads(QPainter& p) {
+    for (const auto& road : m_store->roads()) {
+        drawRoad(p, road);
+        drawControlPoints(p, road);
+    }
+}
+
+void RoadOverlayWidget::drawRoad(QPainter& p, const roads::Road& road) {
+    if (road.points.size() < 2) return;
+
+    // Build path from control points
+    QPainterPath path;
+    QPointF prevScreen;
+    geoToScreen(road.points[0].lat, road.points[0].lon, prevScreen);
+    path.moveTo(prevScreen);
+
+    for (int i = 1; i < road.points.size(); ++i) {
+        QPointF screen;
+        geoToScreen(road.points[i].lat, road.points[i].lon, screen);
+
+        // Check for bezier handles
+        if (road.points[i-1].handleOut && road.points[i].handleIn) {
+            // Cubic bezier
+            double prevLocalX, prevLocalY, cp1LocalX, cp1LocalY, cp2LocalX, cp2LocalY;
+            roads::geoToLocal(road.points[i-1].lat, road.points[i-1].lon,
+                              m_store->refLat(), m_store->refLon(),
+                              prevLocalX, prevLocalY);
+            cp1LocalX = prevLocalX + road.points[i-1].handleOut->x;
+            cp1LocalY = prevLocalY + road.points[i-1].handleOut->y;
+
+            double curLocalX, curLocalY;
+            roads::geoToLocal(road.points[i].lat, road.points[i].lon,
+                              m_store->refLat(), m_store->refLon(),
+                              curLocalX, curLocalY);
+            cp2LocalX = curLocalX + road.points[i].handleIn->x;
+            cp2LocalY = curLocalY + road.points[i].handleIn->y;
+
+            QPointF cp1 = localToScreen(cp1LocalX, cp1LocalY);
+            QPointF cp2 = localToScreen(cp2LocalX, cp2LocalY);
+            path.cubicTo(cp1, cp2, screen);
+        } else {
+            path.lineTo(screen);
+        }
+        prevScreen = screen;
+    }
+
+    // Draw road outline (width-scaled)
+    const double roadWidthPx = road.width * m_ppm;
+    QColor roadColor(road.color);
+    roadColor.setAlpha(180);
+    QPen pen(roadColor, std::max(2.0, roadWidthPx));
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.drawPath(path);
+
+    // Draw centerline (thin line on top)
+    QPen centerPen(QColor(255, 255, 0, 200), 1.5);
+    p.setPen(centerPen);
+    p.drawPath(path);
+}
+
+void RoadOverlayWidget::drawControlPoints(QPainter& p, const roads::Road& road) {
+    const double ptRadius = 5.0;
+    const bool isSelected = m_store->selection().roadId == road.id;
+
+    for (int i = 0; i < road.points.size(); ++i) {
+        QPointF screen;
+        geoToScreen(road.points[i].lat, road.points[i].lon, screen);
+
+        bool pointSelected = isSelected && m_store->selection().pointIndices.contains(i);
+
+        // Draw control point circle
+        QColor color = pointSelected ? QColor(255, 220, 0) : QColor(100, 200, 255);
+        p.setBrush(color);
+        p.setPen(QPen(Qt::white, 1.5));
+        p.drawEllipse(screen, ptRadius, ptRadius);
+
+        // Draw bezier handles if present
+        if (road.points[i].handleIn || road.points[i].handleOut) {
+            double localX, localY;
+            roads::geoToLocal(road.points[i].lat, road.points[i].lon,
+                              m_store->refLat(), m_store->refLon(), localX, localY);
+
+            if (road.points[i].handleIn) {
+                QPointF handleScreen = localToScreen(
+                    localX + road.points[i].handleIn->x,
+                    localY + road.points[i].handleIn->y);
+                p.setPen(QPen(QColor(100, 200, 255, 150), 1));
+                p.drawLine(screen, handleScreen);
+                p.setBrush(QColor(100, 200, 255, 150));
+                p.drawEllipse(handleScreen, 3, 3);
+            }
+            if (road.points[i].handleOut) {
+                QPointF handleScreen = localToScreen(
+                    localX + road.points[i].handleOut->x,
+                    localY + road.points[i].handleOut->y);
+                p.setPen(QPen(QColor(100, 200, 255, 150), 1));
+                p.drawLine(screen, handleScreen);
+                p.setBrush(QColor(100, 200, 255, 150));
+                p.drawEllipse(handleScreen, 3, 3);
+            }
+        }
+    }
+}
+
+void RoadOverlayWidget::drawLaneMakerPreview(QPainter& p) {
+    auto start = m_store->lmRoadStart();
+    auto end = m_store->lmRoadEnd();
+    auto preview = m_store->previewPoint();
+
+    if (!start) return;
+
+    QPointF startScreen = localToScreen(start->x, start->y);
+
+    // Draw start point
+    p.setBrush(QColor(0, 255, 0, 200));
+    p.setPen(QPen(Qt::white, 2));
+    p.drawEllipse(startScreen, 8, 8);
+
+    // Draw start direction arrow
+    auto dir = m_store->lmRoadStartDir();
+    if (dir) {
+        QPointF dirScreen = localToScreen(start->x + dir->x * 20, start->y + dir->y * 20);
+        p.setPen(QPen(QColor(0, 255, 0, 200), 2));
+        p.drawLine(startScreen, dirScreen);
+        // Arrowhead
+        double angle = std::atan2(dirScreen.y() - startScreen.y(),
+                                   dirScreen.x() - startScreen.x());
+        QPointF arrow1(dirScreen.x() - 8 * std::cos(angle - 0.4),
+                       dirScreen.y() - 8 * std::sin(angle - 0.4));
+        QPointF arrow2(dirScreen.x() - 8 * std::cos(angle + 0.4),
+                       dirScreen.y() - 8 * std::sin(angle + 0.4));
+        p.drawLine(dirScreen, arrow1);
+        p.drawLine(dirScreen, arrow2);
+    }
+
+    // Draw end point or preview
+    QPointF endScreen;
+    if (end) {
+        endScreen = localToScreen(end->x, end->y);
+        p.setBrush(QColor(255, 0, 0, 200));
+        p.setPen(QPen(Qt::white, 2));
+        p.drawEllipse(endScreen, 8, 8);
+    } else if (preview) {
+        endScreen = localToScreen(preview->x, preview->y);
+        p.setBrush(QColor(255, 200, 0, 150));
+        p.setPen(QPen(QColor(255, 200, 0), 1, Qt::DashLine));
+        p.drawEllipse(endScreen, 6, 6);
+    } else {
+        return;
+    }
+
+    // Draw line from start to end/preview
+    p.setPen(QPen(QColor(255, 255, 0, 150), 2, Qt::DashLine));
+    p.drawLine(startScreen, endScreen);
+
+    // Draw distance hint
+    if (end || preview) {
+        roads::Point2D endPt = end ? *end : *preview;
+        double dx = endPt.x - start->x;
+        double dy = endPt.y - start->y;
+        double dist = std::sqrt(dx * dx + dy * dy);
+
+        QPointF mid = (startScreen + endScreen) / 2.0;
+        p.setPen(QColor(255, 255, 255, 220));
+        QFont font = p.font();
+        font.setPointSize(10);
+        font.setBold(true);
+        p.setFont(font);
+        p.drawText(mid + QPointF(5, -5), QString::number(dist, 'f', 1) + " m");
+    }
+}
+
+void RoadOverlayWidget::drawSelection(QPainter& p) {
+    // Selection highlighting is done in drawControlPoints
+}
+
+void RoadOverlayWidget::drawDebugLayers(QPainter& p) {
+    // Debug layer rendering — Phase 4e will implement this
+    // For now, just draw a debug indicator
+    if (m_store->debugMode()) {
+        p.setPen(QColor(255, 100, 100, 200));
+        QFont font = p.font();
+        font.setPointSize(9);
+        p.setFont(font);
+        p.drawText(10, 20, "DEBUG MODE");
+    }
+}
+
+// ============================================================
+// Interaction
+// ============================================================
+
+void RoadOverlayWidget::mousePressEvent(QMouseEvent* event) {
+    const QPointF pos = event->position();
+
+    // Pan with middle button or shift+left
+    if (event->button() == Qt::MiddleButton ||
+        (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier))) {
+        m_panning = true;
+        m_lastPanPos = pos;
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton) {
+        handleClick(pos);
+    }
+}
+
+void RoadOverlayWidget::mouseMoveEvent(QMouseEvent* event) {
+    const QPointF pos = event->position();
+
+    if (m_panning) {
+        // Pan the map by dragging
+        QPointF delta = pos - m_lastPanPos;
+        if (m_map && m_map->map()) {
+            // Pan the map in pixels
+            m_map->map()->moveBy(delta);
+        }
+        m_lastPanPos = pos;
+        update();
+        return;
+    }
+
+    // Update preview point for LaneMaker
+    if (m_store->isLmRoadActive() && !m_store->lmRoadEnd()) {
+        double localX, localY;
+        screenToLocal(pos, localX, localY);
+        m_store->setPreviewPoint({localX, localY});
+    }
+
+    // Dragging control point
+    if (m_draggingPoint) {
+        double lat, lon;
+        screenToGeo(pos, lat, lon);
+        m_draggingPoint->lat = lat;
+        m_draggingPoint->lon = lon;
+        update();
+    }
+}
+
+void RoadOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_panning) {
+        m_panning = false;
+        setCursor(Qt::ArrowCursor);
+    }
+    m_draggingPoint = nullptr;
+}
+
+void RoadOverlayWidget::wheelEvent(QWheelEvent* event) {
+    // Let the MapLibre widget handle zoom
+    event->ignore();
+}
+
+void RoadOverlayWidget::handleClick(const QPointF& pos) {
+    const auto tool = m_store->tool();
+
+    if (tool == roads::Tool::Road) {
+        handleLmRoadClick(pos);
+    } else {
+        // Select tool — hit test control points
+        QString roadId;
+        auto* cp = hitTestControlPoint(pos, roadId);
+        if (cp) {
+            // Find the index of this control point in the road
+            auto* road = m_store->getRoad(roadId);
+            int pointIdx = -1;
+            if (road) {
+                for (int i = 0; i < road->points.size(); ++i) {
+                    if (&road->points[i] == cp) {
+                        pointIdx = i;
+                        break;
+                    }
+                }
+            }
+            roads::Selection sel;
+            sel.roadId = roadId;
+            if (pointIdx >= 0) sel.pointIndices.append(pointIdx);
+            m_store->setSelection(sel);
+            m_draggingPoint = cp;
+            m_draggingRoadId = roadId;
+        } else {
+            m_store->clearSelection();
+        }
+    }
+    update();
+}
+
+void RoadOverlayWidget::handleLmRoadClick(const QPointF& pos) {
+    double localX, localY;
+    screenToLocal(pos, localX, localY);
+
+    if (!m_store->isLmRoadActive()) {
+        // First click — set start point with default direction (east)
+        m_store->startLmRoad({localX, localY}, {1.0, 0.0});
+    } else if (!m_store->lmRoadEnd()) {
+        // Second click — set end point
+        m_store->setLmRoadEnd({localX, localY});
+    } else {
+        // Third click — finish the road
+        m_store->finishLmRoad();
+    }
+}
+
+roads::ControlPoint* RoadOverlayWidget::hitTestControlPoint(const QPointF& pos,
+                                                             QString& outRoadId) {
+    const double tolerance = 12.0; // 12px tolerance (matching reference)
+
+    for (int r = 0; r < m_store->roads().size(); ++r) {
+        const auto& road = m_store->roads()[r];
+        for (int i = 0; i < road.points.size(); ++i) {
+            QPointF screen;
+            geoToScreen(road.points[i].lat, road.points[i].lon, screen);
+            if (std::hypot(screen.x() - pos.x(), screen.y() - pos.y()) < tolerance) {
+                outRoadId = road.id;
+                // Return mutable pointer — store provides non-const access via getRoad
+                auto* mutableRoad = m_store->getRoad(road.id);
+                if (mutableRoad && i < mutableRoad->points.size()) {
+                    return &mutableRoad->points[i];
+                }
+                return nullptr;
+            }
+        }
+    }
+    return nullptr;
+}

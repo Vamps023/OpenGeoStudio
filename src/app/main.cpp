@@ -37,6 +37,7 @@
 
 // UI
 #include "ui/home/HomeWidget.hpp"
+#include "ui/roadstudio/RoadStudioWidget.hpp"
 
 // Phase 2c: MapLibre Native Qt map viewport
 #if defined(HAVE_MAPLIBRE)
@@ -80,6 +81,7 @@ private:
     QLabel* m_statusLabel = nullptr;
     QStackedWidget* m_centerStack = nullptr;
     HomeWidget* m_homeWidget = nullptr;
+    RoadStudioWidget* m_roadStudioWidget = nullptr;
 #if defined(HAVE_MAPLIBRE)
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
@@ -187,11 +189,19 @@ private:
         m_centerStack->addWidget(mapPlaceholder);
 #endif
 
-        // Page 2: Road Studio placeholder
-        auto* roadPlaceholder = new QLabel("Road Studio — Phase 4 implementation");
-        roadPlaceholder->setAlignment(Qt::AlignCenter);
-        roadPlaceholder->setStyleSheet("font-size: 18px; color: #888;");
-        m_centerStack->addWidget(roadPlaceholder);
+        // Page 2: Road Studio (2D map with road overlay)
+        m_roadStudioWidget = new RoadStudioWidget(m_ctx);
+        m_centerStack->addWidget(m_roadStudioWidget);
+#if defined(HAVE_MAPLIBRE)
+        if (m_roadStudioWidget->mapWidget()) {
+            connect(m_roadStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
+                    this, [this](double lat, double lon) {
+                        m_statusLabel->setText(
+                            QStringLiteral("Road Studio — Clicked: %1, %2")
+                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
+                    });
+        }
+#endif
 
         // Page 3: Train Studio placeholder
         auto* trainPlaceholder = new QLabel("Train Studio — Phase 5 implementation");
@@ -243,7 +253,7 @@ private slots:
         } else if (ws.id == "terrain") {
             m_centerStack->setCurrentIndex(1); // Map
         } else if (ws.id == "road-studio") {
-            m_centerStack->setCurrentIndex(1); // Map (2D road overlay will be added in Phase 4)
+            m_centerStack->setCurrentIndex(2); // Road Studio
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train placeholder
         }

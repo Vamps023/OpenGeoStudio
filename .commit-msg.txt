@@ -1,26 +1,46 @@
-Phase 3: Qt application shell with ApplicationContext, ProjectManager, WorkspaceManager, and Home workspace
+Phase 4a-d: Road Studio core — types, store, 2D viewport, toolbar
 
-Core services ported from the Electron/TypeScript reference:
+Implemented the core Road Studio functionality:
 
-- ApplicationContext: Central service container (replaces AppContext + ServiceRegistry)
-- EventBus: Lightweight pub/sub (replaces core/events/event-bus.ts)
-- Logger: Scoped logging with levels (replaces core/logger/logger.ts)
-- ProjectManager: .ogproj CRUD, folder structure, recent projects, autosave
-  (replaces core/project/project-manager.ts)
-- WorkspaceManager: 4 workspaces (home, terrain, road-studio, train-studio)
-  with activation and switching (replaces core/workspace/workspace-manager.ts)
+Data model (RoadTypes.hpp):
+- ControlPoint with bezier handles and segment metadata
+- Road with points, width, laneCount, profile
+- Selection, HistorySnapshot, Tool, ViewMode, MeshData, Junction
+- JSON serialization for all types (matches .ogproj schema)
 
-UI:
-- HomeWidget: Start screen with template cards (Terrain, Road Studio),
-  recent projects list with search, open project button
-  (replaces renderer/panels/RecentProjects/RecentProjects.tsx)
-- MainWindow: QStackedWidget for workspace switching, dock widgets,
-  menu bar, toolbar, dark theme
+Coordinate conversion (GeoConvert.hpp):
+- geoToLocal / localToGeo (equirectangular projection)
+- metersPerPixel / pixelsPerMeter for map scale
+- distanceMeters (Haversine)
 
-The app now starts on the Home workspace. Switching to Terrain or Road
-Studio shows the Esri satellite map from Phase 2c. Project creation
-creates the full folder structure (Terrain, GIS, Roads, etc.) and saves
-a .ogproj file. Recent projects are persisted to app data.
+State management (RoadStudioStore):
+- 27 state fields matching the Zustand store
+- 35 actions: road CRUD, selection, config, debug, undo/redo
+- LaneMaker 3-click workflow state
+- 18 debug layers
+- Qt signals for all state changes
+
+2D viewport (RoadViewport2D):
+- MapLibre satellite map as background
+- Transparent QPainter overlay for road rendering
+- Road paths with bezier curves and width-scaled strokes
+- Control points with selection highlighting
+- Bezier handle rendering
+- LaneMaker preview with start/end points, direction arrows, distance
+- Pan (shift+drag or middle mouse), zoom (scroll)
+- Select tool: hit-test control points, drag to move
+- Road tool: 3-click LaneMaker workflow
+
+Toolbar (RoadStudioToolbar):
+- Select (V) and Road (R) tools
+- 2D/3D view mode toggle
+- Undo/Redo with keyboard shortcuts
+- Snapping toggle and grid size
+- Lane width and count configuration
+- Demo Road button (200m test road)
+- Delete selected, Clear all
+- Debug mode toggle (Ctrl+Shift+G)
+- C++ engine version indicator
 
 Generated with [Devin](https://devin.ai)
 

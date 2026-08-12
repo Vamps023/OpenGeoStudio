@@ -181,8 +181,13 @@ set(APP_SOURCES
     src/core/events/EventBus.cpp
     src/core/project/ProjectManager.cpp
     src/core/workspace/WorkspaceManager.cpp
-    # UI
+    # UI - Home
     src/ui/home/HomeWidget.cpp
+    # UI - Road Studio
+    src/ui/roadstudio/RoadStudioStore.cpp
+    src/ui/roadstudio/RoadViewport2D.cpp
+    src/ui/roadstudio/RoadStudioWidget.cpp
+    src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -206,6 +211,8 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/workspace
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/home
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/widgets
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
