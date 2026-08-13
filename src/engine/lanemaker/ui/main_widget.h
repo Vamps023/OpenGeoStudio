@@ -90,6 +90,9 @@ private:
 
     void SetEditMode(LM::EditMode aMode);
 
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+
     void confirmEdit();
     void quitEdit();
 

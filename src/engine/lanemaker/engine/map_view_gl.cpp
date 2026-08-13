@@ -428,9 +428,10 @@ namespace LM
 
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            // In 2D mode, clear with transparent background so MapLibre shows through
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            // In 2D mode, clear to dark and draw map texture as background
+            glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            drawMapBackground();
         }
         else
         {

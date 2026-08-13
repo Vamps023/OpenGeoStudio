@@ -77,6 +77,7 @@ MainWidget::MainWidget(QWidget* parent)
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setVersion(3, 3);
     format.setDepthBufferSize(16);
+    format.setAlphaBufferSize(8); // needed for transparent background in 2D mode
 
     mapViewGL = new LM::MapViewGL;
     mapViewGL->setFormat(format);
@@ -189,33 +190,27 @@ MainWidget::MainWidget(QWidget* parent)
     loadMapButton->setIconSize(largeIconSize);
     labelLayout->addWidget(loadMapButton);
 
-    // Container widget that holds the map background + OpenGL overlay (overlapping)
+    // Container widget — just the OpenGL widget (map tiles rendered inside OpenGL)
     auto* viewportContainer = new QWidget(this);
     viewportContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    // Use QStackedLayout with StackAll so both widgets overlap and fill the entire area
-    auto* viewportLayout = new QStackedLayout(viewportContainer);
-    viewportLayout->setStackingMode(QStackedLayout::StackAll);
-    viewportLayout->setContentsMargins(0, 0, 0, 0);
+    auto* containerLayout = new QVBoxLayout(viewportContainer);
+    containerLayout->setContentsMargins(0, 0, 0, 0);
+    containerLayout->setSpacing(0);
 
 #ifdef HAVE_MAPLIBRE
     setupMapBackground();
     if (m_mapWidget)
     {
+        // MapLibre widget is kept for potential future use but hidden.
+        // Map tiles are now rendered directly inside the OpenGL widget.
         m_mapWidget->setParent(viewportContainer);
-        m_mapWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        viewportLayout->addWidget(m_mapWidget);
-        m_mapWidget->hide(); // hidden until 2D mode is activated
+        m_mapWidget->hide();
     }
 #endif
 
     mapViewGL->setParent(viewportContainer);
     mapViewGL->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    viewportLayout->addWidget(mapViewGL);
-
-    // OpenGL widget must be on top to receive mouse events for drawing
-    mapViewGL->raise();
-    mapViewGL->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    containerLayout->addWidget(mapViewGL);
 
     QVBoxLayout* mainLayout = new QVBoxLayout;
     mainLayout->addLayout(labelLayout);
@@ -243,6 +238,18 @@ MainWidget::MainWidget(QWidget* parent)
 MainWidget* MainWidget::Instance()
 {
     return instance;
+}
+
+void MainWidget::resizeEvent(QResizeEvent* event)
+{
+    QFrame::resizeEvent(event);
+#ifdef HAVE_MAPLIBRE
+    // Keep map widget sized to match the OpenGL viewport
+    if (m_mapWidget && m_2dMode && mapViewGL)
+    {
+        m_mapWidget->setGeometry(mapViewGL->geometry());
+    }
+#endif
 }
 
 void MainWidget::gotoCreateRoadMode(bool checked)
@@ -290,68 +297,115 @@ void MainWidget::toggleViewMode(bool checked)
     m_2dMode = checked;
     if (checked)
     {
-        // Switch to 2D top-down view with MapLibre background
+        // Switch to 2D top-down view
         viewModeButton->setText("2D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::TopDown2D);
-
-#ifdef HAVE_MAPLIBRE
-        if (m_mapWidget)
-        {
-            m_mapWidget->show();
-            // Map widget is behind — let mouse events pass through to OpenGL
-            m_mapWidget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-            // Make OpenGL widget transparent so map shows through
-            mapViewGL->setAttribute(Qt::WA_TranslucentBackground, true);
-            // Ensure OpenGL is on top and receives all mouse events
-            m_mapWidget->lower();
-            mapViewGL->raise();
-            mapViewGL->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-            mapViewGL->setFocus();
-            // Sync map to current camera position
-            syncMapToCamera();
-        }
-#endif
+        // Auto-load map tiles for the 2D background
+        loadMapBackground();
     }
     else
     {
         // Switch back to 3D perspective view
         viewModeButton->setText("3D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::Perspective3D);
-
-#ifdef HAVE_MAPLIBRE
-        if (m_mapWidget)
-        {
-            m_mapWidget->hide();
-            m_mapWidget->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-            mapViewGL->setAttribute(Qt::WA_TranslucentBackground, false);
-        }
-#endif
+        mapViewGL->ClearMapBackground();
     }
 }
 
 void MainWidget::loadMapBackground()
 {
-#ifdef HAVE_MAPLIBRE
-    // In 2D mode, the MapLibre widget IS the map background.
-    // Just ensure it's visible and force a reload.
-    if (m_mapWidget)
+    // Fetch Esri World Imagery tiles and composite them into a single image
+    // for use as the OpenGL background texture.
+    // Default center: Pune, India (lat=18.52, lon=73.85) at zoom 16
+    const double lat = 18.52;
+    const double lon = 73.85;
+    const int zoom = 16;
+
+    // Convert lat/lon to tile coordinates (fractional)
+    double n = std::pow(2.0, zoom);
+    double xtile_f = (lon + 180.0) / 360.0 * n;
+    double ytile_f = (1.0 - std::log(std::tan(lat * M_PI / 180.0) +
+                 1.0 / std::cos(lat * M_PI / 180.0)) / M_PI) / 2.0 * n;
+
+    int xtile = int(xtile_f);
+    int ytile = int(ytile_f);
+
+    // Fetch a 3x3 grid of tiles around the center for a larger coverage area
+    const int gridRadius = 1; // 3x3 grid
+    const int gridSize = 2 * gridRadius + 1;
+    const int tileSize = 256;
+    const int compositeSize = gridSize * tileSize;
+
+    // Create a composite image to hold all tiles
+    auto* compositeImage = new QImage(compositeSize, compositeSize, QImage::Format_RGB32);
+    compositeImage->fill(Qt::darkGray);
+
+    auto* nam = new QNetworkAccessManager(this);
+    int tilesToLoad = gridSize * gridSize;
+    auto* tilesLoaded = new int(0);
+
+    qDebug() << "[MainWidget] Fetching" << tilesToLoad << "map tiles at zoom" << zoom;
+
+    for (int dx = -gridRadius; dx <= gridRadius; dx++)
     {
-        if (!m_2dMode) {
-            viewModeButton->setChecked(true); // triggers toggleViewMode
+        for (int dy = -gridRadius; dy <= gridRadius; dy++)
+        {
+            int tx = xtile + dx;
+            int ty = ytile + dy;
+
+            // Esri tile URL: /tile/{z}/{y}/{x}
+            QString url = QString(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                "World_Imagery/MapServer/tile/%1/%2/%3")
+                .arg(zoom).arg(ty).arg(tx);
+
+            QNetworkRequest request(url);
+            request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
+            auto* reply = nam->get(request);
+
+            connect(reply, &QNetworkReply::finished, this, [this, reply, nam, tilesLoaded,
+                         compositeImage, tilesToLoad, dx, dy, gridRadius, tileSize,
+                         lat, lon, zoom]() {
+                if (reply->error() == QNetworkReply::NoError)
+                {
+                    QImage tileImage;
+                    if (tileImage.loadFromData(reply->readAll()))
+                    {
+                        // Paint tile into the composite image
+                        int px = (dx + gridRadius) * tileSize;
+                        int py = (dy + gridRadius) * tileSize;
+                        QPainter painter(compositeImage);
+                        painter.drawImage(px, py, tileImage);
+                        painter.end();
+                        qDebug() << "[MainWidget] Tile loaded at" << dx << dy;
+                    }
+                }
+
+                (*tilesLoaded)++;
+                reply->deleteLater();
+
+                // When all tiles are loaded, set the background
+                if (*tilesLoaded >= tilesToLoad)
+                {
+                    // Calculate meters-per-pixel at this lat/zoom
+                    const double earthCircumference = 40075016.686;
+                    double metersPerPixel = earthCircumference * std::cos(lat * M_PI / 180.0) /
+                                            std::pow(2.0, zoom);
+
+                    if (!compositeImage->isNull())
+                    {
+                        mapViewGL->SetMapBackground(*compositeImage, lat, lon, metersPerPixel);
+                        qDebug() << "[MainWidget] Map background set — composite" 
+                                 << compositeImage->width() << "x" << compositeImage->height();
+                    }
+
+                    delete compositeImage;
+                    delete tilesLoaded;
+                    nam->deleteLater();
+                }
+            });
         }
-        m_mapWidget->show();
-        m_mapWidget->lower();
-        mapViewGL->raise();
-        syncMapToCamera();
-        qDebug() << "[MainWidget] MapLibre satellite map activated";
     }
-    else
-    {
-        qWarning() << "[MainWidget] MapLibre not available";
-    }
-#else
-    qWarning() << "[MainWidget] Built without MapLibre support";
-#endif
 }
 
 void MainWidget::setupMapBackground()

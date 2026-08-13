@@ -1,24 +1,23 @@
-Fix road drawing in 2D top-down mode (coordinate conversion)
+Fix map only showing half screen and mouse events not reaching OpenGL
 
-Root cause: PointerOnGround(), PointerDirection(), and PixelLocation()
-used perspective math (60° FOV, focal plane distance) which breaks
-in orthographic projection. In 2D top-down mode, the camera looks
-straight down, so PointerDirection() returned a ray with z≈0 at
-screen center, causing division by zero in PointerOnGround() —
-all road drawing clicks mapped to NaN/infinity coordinates.
+Two issues fixed:
 
-Fixes:
-- PointerDirection(): return (0,0,-1) in 2D mode (parallel rays)
-- PointerOnGround(): use proper inverse view-projection matrix
-  unprojection in 2D mode — maps screen coords to z=0 ground plane
-  via NDC unprojection and ray-plane intersection
-- PixelLocation(): use forward projection matrix in 2D mode
-- wheelEvent(): zoom by moving camera Z in 2D mode (changes ortho
-  view size) instead of perspective dolly
-- resizeGL(): ortho view size scales with camera Z height so wheel
-  zoom actually changes visible area
+1. Map only visible on half screen:
+   - Root cause: MapLibre and OpenGL widgets were in a QVBoxLayout,
+     stacking them vertically (each got half the height) instead of
+     overlapping.
+   - Fix: Use QStackedLayout with StackAll mode so both widgets
+     overlap and fill the entire viewport area.
 
-Build: OK | Tests: 473/473 passed | App: Road Studio 2D drawing works
+2. Can't draw on map in 2D mode:
+   - Root cause: MapLibre widget was intercepting mouse events before
+     they reached the OpenGL widget.
+   - Fix: Set Qt::WA_TransparentForMouseEvents on the MapLibre widget
+     so all mouse events pass through to the OpenGL widget on top.
+     The OpenGL widget handles all drawing interactions while the
+     map is purely a visual background.
+
+Build: OK | Tests: 473/473 passed | App: 2D map fills screen, drawing works
 
 Generated with [Devin](https://devin.ai)
 
