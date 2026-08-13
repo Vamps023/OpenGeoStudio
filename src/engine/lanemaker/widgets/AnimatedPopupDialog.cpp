@@ -51,7 +51,7 @@ void AnimatedPopupDialog::showAnimated() {
     QPropertyAnimation *posAnim = new QPropertyAnimation(this, "pos");
     posAnim->setDuration(DurationMS);
     posAnim->setStartValue(QPoint(
-        parentWidget()->geometry().center().x() - endSize.width() / 2, 
+        parentWidget()->geometry().center().x() - endSize.width() / 2,
         parentWidget()->geometry().bottom()));
     posAnim->setEndValue(parentWidget()->geometry().center() - QPoint(endSize.width()/2, endSize.height()/2));
     posAnim->setEasingCurve(QEasingCurve::OutBack);
@@ -60,7 +60,8 @@ void AnimatedPopupDialog::showAnimated() {
     group->addAnimation(fadeIn);
     group->addAnimation(posAnim);
 
-    show();
+    // Note: do NOT call show() here — showAnimated() is called from showEvent(),
+    // and calling show() again would trigger showEvent() recursively (stack overflow in Qt 6).
     group->start(QAbstractAnimation::DeleteWhenStopped);
 }
 

@@ -333,11 +333,7 @@ if(QMapLibre_FOUND)
     target_compile_definitions(OpenGeoStudio PRIVATE HAVE_MAPLIBRE=1)
 endif()
 
-if(ENABLE_LANEMAKER)
-    target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
-endif()
-
-# LaneMaker is now always built — link it
+# LaneMaker is always built and linked
 target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
 
 # Set output directory for portable deployment

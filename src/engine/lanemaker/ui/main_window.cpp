@@ -74,7 +74,7 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     preferenceWindow = std::make_unique<PreferenceWindow>(this);
 
     vehicleManager = std::make_unique<VehicleManager>(this);
-    
+
     mainWidget = std::make_unique<MainWidget>();
     mainWidget->toggleAntialiasing(g_preference.antiAlias);
 
@@ -89,7 +89,7 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     bottomLayout->addStretch();
     bottomLayout->addWidget(fpsStatus.get());
     mainLayout->addLayout(bottomLayout);
-    
+
     setLayout(mainLayout);
 
     connect(newAction, &QAction::triggered, this, &MainWindow::newMap);

@@ -1,49 +1,23 @@
-Phase 27: Embed LaneMaker's MainWindow directly as Road Studio
+Fix stack overflow: remove recursive show() in AnimatedPopupDialog
 
-Major milestone: LaneMaker's actual road editor is now the Road Studio.
+LaneMaker's AnimatedPopupDialog::showEvent() calls showAnimated(),
+which called show(), which triggered showEvent() again — infinite
+recursion causing STATUS_STACK_OVERFLOW (0xC00000FD) on startup.
 
-Changes:
-- RoadStudioWidget now embeds LaneMaker's MainWindow directly, which
-  contains:
-    - MapViewGL (OpenGL 3D viewport with real road rendering)
-    - MainWidget (toolbar: road/lane/destroy/modify/drag modes)
-    - LaneConfigWidget (lane configuration)
-    - DrawOptionDialog (draw options)
-    - Road drawing sessions (RoadCreation, LanesCreation, RoadDestroy,
-      RoadModification)
-    - ChangeTracker (undo/redo)
-    - ActionManager (action recording/replay)
-    - VehicleManager (traffic simulation)
-    - Menu bar (File, Edit, Replay, Simulation)
-    - Status bars (hint, FPS)
+The show() call inside showAnimated() was redundant since
+showAnimated() is already called from within showEvent(), meaning
+the widget is already being shown. In Qt 6, calling show() inside
+showEvent() triggers another showEvent(), unlike Qt 5 where it was
+a no-op for already-visible widgets.
 
-- Removed old Road Studio sources from build:
-    - RoadStudioStore.cpp
-    - RoadViewport2D.cpp
-    - RoadViewport3D.cpp
-    - RoadEngineService.cpp
-    - LaneMakerService.cpp
-    - RoadIntersection.cpp
-    - editor/EditorController.cpp
-    - editor/RoadCommands.cpp
-    - editor/RoadGeometryHelper.cpp
-    - editor/RoadCreationSession.cpp
-    - editor/RoadDestroySession.cpp
-    - editor/RoadModificationSession.cpp
-    - widgets/RoadStudioToolbar.cpp
-    - widgets/RoadInspector.cpp
-    - widgets/RoadElevationEditor.cpp
-    - widgets/LaneConfigWidget.cpp
+Fix: removed the show() call from showAnimated(). The animation
+group still starts correctly without it.
 
-- Renamed app's MainWindow to AppMainWindow to avoid collision with
-  LaneMaker's MainWindow class
-
-- Fixed CMake:
-    - Added libOpenDRIVE/src/Geometries/*.cpp to glob
-    - Added libOpenDRIVE/src/Geometries/Spiral/*.cpp (odrSpiral)
-    - Added thirdparty/pugixml/pugixml.cpp
-    - Set AUTOMOC ON explicitly on lanemaker target
-    - LaneMaker is now always linked (not conditional)
+Also cleaned up:
+- Removed debug logging from main.cpp and main_window.cpp
+- Removed temporary test_minimal.cpp
+- Removed /STACK:8388608 override (no longer needed)
+- Removed duplicate lanemaker::core link line
 
 Build: OK | Tests: 473/473 passed | App: launches and responds
 
