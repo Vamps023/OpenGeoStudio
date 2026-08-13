@@ -1,21 +1,17 @@
-Phase 24: Editor session framework + QUndoStack migration
+Phase 25: Road creation, destroy, and modify sessions
 
-Establishes the architectural foundation for LaneMaker-style editing:
+Implements concrete EditSession subclasses mirroring LaneMaker's
+RoadDrawingSession pattern:
 
-- EditSession abstract base class (editor/EditSession.hpp) mirroring
-  LaneMaker RoadDrawingSession pattern with update/complete/cancel
-- EditorInput types (editor/EditorInput.hpp) decoupling Qt events
-  from session logic for testability
-- EditorController (editor/EditorController.hpp/.cpp) managing active
-  sessions, forwarding input, handling Space=confirm/Esc=cancel
-- RoadCommands (editor/RoadCommands.hpp/.cpp) with QUndoCommand
-  subclasses: SnapshotCommand, SetRoadPropertyCommand,
-  SetControlPointPropertyCommand
-- RoadStudioStore migrated from custom QList snapshot stacks to
-  QUndoStack with pushHistory/commitHistory pattern
-- RoadInspector now routes all property changes through QUndoCommand
-  so inspector edits are properly undoable for the first time
-- CMakeLists.txt updated with new editor source files and include path
+- RoadCreationSession: multi-click staged road creation with
+  ConnectRays geometry, direction handles, endpoint snapping
+- RoadDestroySession: click-to-select road, s-range deletion,
+  full road deletion on Space
+- RoadModificationSession: click-to-select road for profile editing
+- RoadGeometryHelper: shared geometry utilities extracted from
+  viewport (connectRays, snapToEndpoints, nearestPointOnRoad)
+- EditorController now creates the appropriate session per tool
+- CMakeLists.txt updated with new session source files
 
 Build: OK | Tests: 473/473 passed | App: launches and responds
 

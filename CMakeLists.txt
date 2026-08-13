@@ -205,6 +205,10 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadIntersection.cpp
     src/ui/roadstudio/editor/EditorController.cpp
     src/ui/roadstudio/editor/RoadCommands.cpp
+    src/ui/roadstudio/editor/RoadGeometryHelper.cpp
+    src/ui/roadstudio/editor/RoadCreationSession.cpp
+    src/ui/roadstudio/editor/RoadDestroySession.cpp
+    src/ui/roadstudio/editor/RoadModificationSession.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
     src/ui/roadstudio/widgets/RoadElevationEditor.cpp

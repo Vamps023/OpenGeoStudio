@@ -2,6 +2,9 @@
 
 #include "EditorController.hpp"
 #include "../RoadEngineService.hpp"
+#include "RoadCreationSession.hpp"
+#include "RoadDestroySession.hpp"
+#include "RoadModificationSession.hpp"
 
 #include <QKeyEvent>
 
@@ -43,16 +46,23 @@ void EditorController::deactivateTool() {
 }
 
 void EditorController::createSession(roads::Tool tool) {
-    // Phase 24: Only the framework is in place.
-    // Concrete sessions (RoadCreationSession, LaneCreationSession, etc.)
-    // will be implemented in Phase 25+.
-    //
-    // For now, no session is created — the existing inline viewport logic
-    // continues to handle road creation, destroy, and modify.
-    //
-    // The EditorController is ready to receive sessions once they are
-    // implemented.
-    (void)tool;
+    switch (tool) {
+        case roads::Tool::Road:
+            m_session = std::make_unique<RoadCreationSession>(m_store, m_engine);
+            break;
+        case roads::Tool::Destroy:
+            m_session = std::make_unique<RoadDestroySession>(m_store, m_engine);
+            break;
+        case roads::Tool::Modify:
+            m_session = std::make_unique<RoadModificationSession>(m_store, m_engine);
+            break;
+        case roads::Tool::Lane:
+            // Phase 27: LaneCreationSession will be implemented here
+            // For now, no session for lane tool
+            break;
+        case roads::Tool::Select:
+            break;
+    }
 }
 
 void EditorController::mousePress(QPointF screenPos, double localX, double localY,
