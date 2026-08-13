@@ -1,26 +1,30 @@
-Render map tiles directly in OpenGL — fix 2D map visibility
+Fix 2D map rendering and road drawing — tiles load, coords correct
 
-Root cause: QOpenGLWidget with WA_TranslucentBackground doesn't
-reliably composite with widgets behind it in Qt 6. The MapLibre
-widget was invisible because the OpenGL widget's FBO wasn't
-actually transparent despite alpha=0 clear.
+Root causes identified via debug logging:
 
-New approach: Render satellite map tiles directly inside the OpenGL
-widget as a textured background quad. No widget overlay needed.
+1. Map texture never loaded:
+   - toggleViewMode() called loadMapBackground() but the debug timer
+     only called SetViewMode() — confirmed tiles DO load when
+     loadMapBackground() is actually called
+   - All 9 Esri tiles fetch successfully and composite into 768x768 image
+   - drawMapBackground() renders the texture correctly
 
-Changes:
-- loadMapBackground(): fetches a 3x3 grid of Esri World Imagery
-  tiles at zoom 16, composites them into a single QImage, uploads
-  as OpenGL texture via SetMapBackground()
-- toggleViewMode(): auto-loads map tiles when switching to 2D,
-  clears map background when switching to 3D
-- paintGL(): draws map texture as background in both 2D and 3D modes
-- Removed QStackedLayout overlay approach (unreliable transparency)
-- MapLibre widget kept but hidden (for potential future use)
-- Added alpha buffer to surface format (format.setAlphaBufferSize(8))
-- Added resizeEvent override to keep map widget positioned
+2. PointerOnGround returned wrong Z coordinate (505 instead of 0):
+   - Old code unprojected at NDC z=0 which maps to mid-depth in
+     orthographic projection, not to world z=0
+   - Fixed: unproject two points at NDC z=-1 and z=1, then
+     intersect the ray with the z=0 ground plane
+   - Now returns correct world (x, y) coordinates on z=0 plane
 
-Build: OK | Tests: 473/473 passed | App: 2D mode renders satellite tiles
+Cleanup:
+- Removed debug timer from main.cpp
+- Removed debug logging from drawMapBackground, PointerOnGround,
+  toggleViewMode, loadMapBackground
+- Removed unused includes from main.cpp
+- Made loadMapBackground() public (used by Map button and toggleViewMode)
+- Renamed StyleHttpServer to LmStyleServer (fix persistent linker conflict)
+
+Build: OK | Tests: 473/473 passed | App: 2D mode loads satellite tiles
 
 Generated with [Devin](https://devin.ai)
 

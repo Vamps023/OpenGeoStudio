@@ -65,9 +65,10 @@ namespace LM
     {
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            // Top-down: camera directly above, looking straight down
+            // Top-down: camera directly above XY ground plane, looking straight down -Z.
+            // NO rotation — default camera looks down -Z, which is straight down at XY plane.
             m_camera.setTranslation(0, 0, 500);
-            m_camera.setRotation(90, QVector3D(1, 0, 0));
+            m_camera.setRotation(0, QVector3D(1, 0, 0));
         }
         else
         {
@@ -90,6 +91,8 @@ namespace LM
         m_mapCenterLon = centerLon;
         m_mapScale = scale;
         m_mapTextureValid = !tileImage.isNull();
+        // World extent = image width * meters per pixel
+        m_mapWorldExtent = tileImage.width() * scale;
 
         if (m_mapTextureValid)
         {
@@ -140,23 +143,24 @@ namespace LM
 
         m_texturedShader.link();
 
-        // Create a full-screen quad (in world XY plane)
+        // Create a quad (in world XY plane) — will be resized dynamically
         m_bgQuadVao.create();
         m_bgQuadVao.bind();
 
         m_bgQuadVbo.create();
         m_bgQuadVbo.bind();
-        m_bgQuadVbo.setUsagePattern(QOpenGLBuffer::StaticDraw);
+        m_bgQuadVbo.setUsagePattern(QOpenGLBuffer::DynamicDraw);
 
-        // Vertices: pos(x,y,z) + texcoord(u,v) — large quad covering the ground plane
+        // Initial quad size — will be updated in drawMapBackground
+        float halfExt = 1000.0f;
         float quadVerts[] = {
             // pos              // texcoord
-            -5000, -5000, 0,    0, 1,
-             5000, -5000, 0,    1, 1,
-             5000,  5000, 0,    1, 0,
-            -5000, -5000, 0,    0, 1,
-             5000,  5000, 0,    1, 0,
-            -5000,  5000, 0,    0, 0,
+            -halfExt, -halfExt, 0,    0, 1,
+             halfExt, -halfExt, 0,    1, 1,
+             halfExt,  halfExt, 0,    1, 0,
+            -halfExt, -halfExt, 0,    0, 1,
+             halfExt,  halfExt, 0,    1, 0,
+            -halfExt,  halfExt, 0,    0, 0,
         };
         m_bgQuadVbo.allocate(quadVerts, sizeof(quadVerts));
 
@@ -173,6 +177,21 @@ namespace LM
     {
         if (!m_mapTextureValid || !m_mapTexture) return;
         initTexturedShader();
+
+        // Update quad vertices to match the actual map world extent
+        float halfExt = float(m_mapWorldExtent) * 0.5f;
+        float quadVerts[] = {
+            // pos              // texcoord
+            -halfExt, -halfExt, 0,    0, 1,
+             halfExt, -halfExt, 0,    1, 1,
+             halfExt,  halfExt, 0,    1, 0,
+            -halfExt, -halfExt, 0,    0, 1,
+             halfExt,  halfExt, 0,    1, 0,
+            -halfExt,  halfExt, 0,    0, 0,
+        };
+        m_bgQuadVbo.bind();
+        m_bgQuadVbo.write(0, quadVerts, sizeof(quadVerts));
+        m_bgQuadVbo.release();
 
         glDisable(GL_DEPTH_TEST);
         m_texturedShader.bind();
@@ -386,24 +405,11 @@ namespace LM
 
     void MapViewGL::resizeGL(int width, int height)
     {
-        m_projection.setToIdentity();
-        if (m_viewMode == ViewMode::TopDown2D)
+        // Projection is updated in paintGL for 2D mode (depends on camera Z).
+        // For 3D mode, set perspective here.
+        if (m_viewMode != ViewMode::TopDown2D)
         {
-            // Orthographic projection for 2D top-down view.
-            // The view size scales with camera Z height, so wheel zoom
-            // (which changes camera Z) actually zooms the view.
-            float aspect = width / float(height ? height : 1);
-            float viewSize = m_camera.translation().z() * 0.6f; // scales with camera height
-            if (viewSize < 10.0f) viewSize = 10.0f; // clamp minimum
-            m_projection.ortho(
-                -viewSize * aspect, viewSize * aspect,
-                -viewSize, viewSize,
-                -5000.0f, 5000.0f
-            );
-        }
-        else
-        {
-            // Perspective projection for 3D view
+            m_projection.setToIdentity();
             m_projection.perspective(
                 /* vertical angle */ 60.0f,
                 /* aspect ratio */   width / float(height ? height : 1),
@@ -420,27 +426,37 @@ namespace LM
         m_painting = true;
 
         MainWidget::Instance()->Painted();
-        // update cached world2view matrix
-        m_worldToView = m_projection * m_camera.toMatrix();
 
         const qreal retinaScale = devicePixelRatio();
         glViewport(0, 0, width() * retinaScale, height() * retinaScale);
 
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            // In 2D mode, clear to dark and draw map texture as background
+            // Update ortho projection every frame so wheel zoom (camera Z change) works
+            float aspect = width() / float(height() ? height() : 1);
+            float viewSize = m_camera.translation().z() * 0.6f;
+            if (viewSize < 10.0f) viewSize = 10.0f;
+            m_projection.setToIdentity();
+            m_projection.ortho(
+                -viewSize * aspect, viewSize * aspect,
+                -viewSize, viewSize,
+                -5000.0f, 5000.0f
+            );
+
             glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            drawMapBackground();
         }
         else
         {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
-
-            // Draw satellite map background (if loaded) — only in 3D mode
-            drawMapBackground();
         }
+
+        // update cached world2view matrix
+        m_worldToView = m_projection * m_camera.toMatrix();
+
+        // Draw satellite map background (if loaded)
+        drawMapBackground();
 
         glDisable(GL_DEPTH_TEST);
         backgroundBuffer->Draw(m_worldToView);
@@ -583,8 +599,15 @@ namespace LM
         }
         else if (m_viewMode == ViewMode::TopDown2D)
         {
-            // In 2D orthographic mode, zoom = move camera up/down (changes ortho view size)
-            m_camera.translate(0, 0, dir * 30.0f);
+            // In 2D orthographic mode, zoom = move camera Z.
+            // Scroll up (dir=1) should zoom IN = decrease Z = smaller view size.
+            // Clamp Z to keep a reasonable range.
+            float newZ = m_camera.translation().z() - dir * 30.0f;
+            if (newZ < 50.0f) newZ = 50.0f;
+            if (newZ > 2000.0f) newZ = 2000.0f;
+            m_camera.setTranslation(m_camera.translation().x(),
+                                    m_camera.translation().y(),
+                                    newZ);
             ActionManager::Instance()->Record(m_camera);
         }
         else
@@ -762,7 +785,7 @@ namespace LM
         if (m_viewMode == ViewMode::TopDown2D)
         {
             // In orthographic top-down mode, unproject screen coords to world coords.
-            // Camera is at (0,0,H) rotated 90° around X — looking straight down at z=0 plane.
+            // Camera is at (0,0,H) with no rotation — looking straight down -Z at z=0 plane.
             // In ortho projection, all rays are parallel, so we can directly unproject
             // using the inverse view-projection matrix and then project onto z=0.
             float retinaScale = devicePixelRatio();

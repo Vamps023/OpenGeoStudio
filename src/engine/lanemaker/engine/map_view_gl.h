@@ -152,6 +152,7 @@ namespace LM
         double m_mapCenterLat = 0;
         double m_mapCenterLon = 0;
         double m_mapScale = 1.0; // meters per pixel
+        double m_mapWorldExtent = 1000.0; // world units (meters) covered by texture
         bool m_mapTextureValid = false;
 
         // Shader for textured background quad
