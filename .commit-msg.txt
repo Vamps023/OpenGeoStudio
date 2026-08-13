@@ -1,42 +1,49 @@
-Phase 26: Adopt LaneMaker source directly — engine, UI, widgets, traffic
+Phase 27: Embed LaneMaker's MainWindow directly as Road Studio
 
-Major architectural shift: LaneMaker's actual source code is now compiled
-directly into the project, replacing the stub-based approach.
+Major milestone: LaneMaker's actual road editor is now the Road Studio.
 
-Copied from D:/git/lanemaker:
-- engine/: Camera.h, Transform3D, Vertex.h, ShaderProgram, gl_buffer_manage,
-  map_view_gl, spatial_indexer, OBJ_Loader, shaders, 3D vehicle models
-- ui/: road_drawing.h/.cpp, road_creation, lane_creation, road_destruction,
-  road_modification, road_overlaps, road_graphics, action_manager,
-  action_defs, touch_controller, util, main_widget, main_window, icons
-- widgets/: AnimatedPopupDialog, DrawOptionDialog, LaneConfigWidget,
-  replay_window
-- util/: preference, stats, multi_segment, triangulation, label_with_link
-- traffic/: vehicle, vehicle_manager, signal
-- test/: validation, junction_validation, road_validation, test macros
+Changes:
+- RoadStudioWidget now embeds LaneMaker's MainWindow directly, which
+  contains:
+    - MapViewGL (OpenGL 3D viewport with real road rendering)
+    - MainWidget (toolbar: road/lane/destroy/modify/drag modes)
+    - LaneConfigWidget (lane configuration)
+    - DrawOptionDialog (draw options)
+    - Road drawing sessions (RoadCreation, LanesCreation, RoadDestroy,
+      RoadModification)
+    - ChangeTracker (undo/redo)
+    - ActionManager (action recording/replay)
+    - VehicleManager (traffic simulation)
+    - Menu bar (File, Edit, Replay, Simulation)
+    - Status bars (hint, FPS)
 
-Qt5→Qt6 adaptations:
-- QDesktopWidget removed (Qt6 dropped it)
-- QTouchEvent::touchPoints() → QTouchEvent::points() (Qt6 API)
-- QTouchEvent::TouchPoint → QEventPoint (Qt6)
-- QQuaternion::conjugate() → inverted() (Qt6)
-- QVector2D→QVector3D conversions made explicit (Qt6 stricter)
-- std::min int/size_t cast fixed
+- Removed old Road Studio sources from build:
+    - RoadStudioStore.cpp
+    - RoadViewport2D.cpp
+    - RoadViewport3D.cpp
+    - RoadEngineService.cpp
+    - LaneMakerService.cpp
+    - RoadIntersection.cpp
+    - editor/EditorController.cpp
+    - editor/RoadCommands.cpp
+    - editor/RoadGeometryHelper.cpp
+    - editor/RoadCreationSession.cpp
+    - editor/RoadDestroySession.cpp
+    - editor/RoadModificationSession.cpp
+    - widgets/RoadStudioToolbar.cpp
+    - widgets/RoadInspector.cpp
+    - widgets/RoadElevationEditor.cpp
+    - widgets/LaneConfigWidget.cpp
 
-CGAL 6.2 adaptations:
-- boost::optional → std::optional
-- boost::get<Point> → std::get<Point> / std::holds_alternative
-- CGAL variant type now uses std::variant
+- Renamed app's MainWindow to AppMainWindow to avoid collision with
+  LaneMaker's MainWindow class
 
-C++17→C++20 adaptation:
-- shared_ptr::unique() → use_count() (removed in C++17)
-
-Build system:
-- LaneMaker is now always built (not optional)
-- cereal added to vcpkg.json dependencies
-- All LaneMaker subdirectories added to include path
-- Qt resource files (images.qrc, shaders.qrc) integrated
-- Old stubs/ directory removed entirely
+- Fixed CMake:
+    - Added libOpenDRIVE/src/Geometries/*.cpp to glob
+    - Added libOpenDRIVE/src/Geometries/Spiral/*.cpp (odrSpiral)
+    - Added thirdparty/pugixml/pugixml.cpp
+    - Set AUTOMOC ON explicitly on lanemaker target
+    - LaneMaker is now always linked (not conditional)
 
 Build: OK | Tests: 473/473 passed | App: launches and responds
 

@@ -45,7 +45,6 @@
 // UI
 #include "ui/home/HomeWidget.hpp"
 #include "ui/roadstudio/RoadStudioWidget.hpp"
-#include "ui/roadstudio/widgets/RoadInspector.hpp"
 #include "ui/trainstudio/TrainStudioWidget.hpp"
 #include "ui/terrain/TerrainStudioWidget.hpp"
 
@@ -211,13 +210,13 @@ private:
 };
 
 // ═══════════════════════════════════════════════════════════
-// MainWindow — the application shell
+// AppMainWindow — the application shell
 // ═══════════════════════════════════════════════════════════
 
-class MainWindow : public QMainWindow {
+class AppMainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
+    explicit AppMainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
         : QMainWindow(parent), m_ctx(ctx)
     {
         setWindowTitle(QStringLiteral("OpenGeoStudio"));
@@ -231,13 +230,13 @@ public:
 
         // Wire workspace switching
         connect(&m_ctx->workspaces(), &WorkspaceManager::workspaceActivated,
-                this, &MainWindow::onWorkspaceActivated);
+                this, &AppMainWindow::onWorkspaceActivated);
 
         // Wire project changes
         connect(&m_ctx->projects(), &ProjectManager::projectChanged,
-                this, &MainWindow::onProjectChanged);
+                this, &AppMainWindow::onProjectChanged);
         connect(&m_ctx->projects(), &ProjectManager::projectOpened,
-                this, &MainWindow::onProjectOpened);
+                this, &AppMainWindow::onProjectOpened);
 
         updateStatusBar();
     }
@@ -254,7 +253,7 @@ private:
     QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
-    RoadInspector* m_roadInspector = nullptr;
+    // RoadInspector removed — LaneMaker's AppMainWindow has its own UI
 #if defined(HAVE_MAPLIBRE)
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
@@ -265,11 +264,11 @@ private:
 
         QAction* newProjectAct = fileMenu->addAction(tr("&New Project..."));
         newProjectAct->setShortcut(QKeySequence::New);
-        connect(newProjectAct, &QAction::triggered, this, &MainWindow::onNewProject);
+        connect(newProjectAct, &QAction::triggered, this, &AppMainWindow::onNewProject);
 
         QAction* openProjectAct = fileMenu->addAction(tr("&Open Project..."));
         openProjectAct->setShortcut(QKeySequence::Open);
-        connect(openProjectAct, &QAction::triggered, this, &MainWindow::onOpenProject);
+        connect(openProjectAct, &QAction::triggered, this, &AppMainWindow::onOpenProject);
 
         fileMenu->addSeparator();
 
@@ -390,11 +389,11 @@ private:
 
         QAction* openAct = toolbar->addAction(tr("Open"));
         openAct->setShortcut(QKeySequence::Open);
-        connect(openAct, &QAction::triggered, this, &MainWindow::onOpenProject);
+        connect(openAct, &QAction::triggered, this, &AppMainWindow::onOpenProject);
 
         QAction* newAct = toolbar->addAction(tr("New"));
         newAct->setShortcut(QKeySequence::New);
-        connect(newAct, &QAction::triggered, this, &MainWindow::onNewProject);
+        connect(newAct, &QAction::triggered, this, &AppMainWindow::onNewProject);
     }
 
     void setupStatusBar() {
@@ -408,9 +407,9 @@ private:
         // Page 0: Home
         m_homeWidget = new HomeWidget(m_ctx);
         connect(m_homeWidget, &HomeWidget::newProjectRequested,
-                this, &MainWindow::onNewProjectFromTemplate);
+                this, &AppMainWindow::onNewProjectFromTemplate);
         connect(m_homeWidget, &HomeWidget::openProjectRequested,
-                this, &MainWindow::onOpenProjectPath);
+                this, &AppMainWindow::onOpenProjectPath);
         m_centerStack->addWidget(m_homeWidget);
 
         // Page 1: Terrain Studio (area selection + export)
@@ -433,25 +432,9 @@ private:
         }
 #endif
 
-        // Page 2: Road Studio (2D map with road overlay)
-        m_roadStudioWidget = new RoadStudioWidget(m_ctx);
+        // Page 2: Road Studio (LaneMaker's AppMainWindow — full road editor)
+        m_roadStudioWidget = new RoadStudioWidget();
         m_centerStack->addWidget(m_roadStudioWidget);
-#if defined(HAVE_MAPLIBRE)
-        if (m_roadStudioWidget->mapWidget()) {
-            connect(m_roadStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
-                    this, [this](double lat, double lon) {
-                        m_statusLabel->setText(
-                            QStringLiteral("Road Studio — Clicked: %1, %2")
-                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
-                    });
-            connect(m_roadStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
-                    this, [this](double lat, double lon, double zoom) {
-                        m_statusLabel->setText(
-                            QStringLiteral("Lat: %1  Lon: %2  Zoom: %3  |  Road Studio")
-                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6).arg(zoom, 0, 'f', 1));
-                    });
-        }
-#endif
 
         // Page 3: Train Studio (2D track editing)
         m_trainStudioWidget = new TrainStudioWidget(m_ctx);
@@ -534,17 +517,10 @@ private slots:
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
         } else if (ws.id == "road-studio") {
-            m_centerStack->setCurrentIndex(2); // Road Studio
-            // Road Studio: right dock = Road Inspector
-            if (m_roadStudioWidget && !m_roadInspector) {
-                m_roadInspector = new RoadInspector(m_roadStudioWidget->store(), this);
-            }
-            if (m_roadInspector) {
-                m_rightDock->setWidget(m_roadInspector);
-                m_rightDock->setWindowTitle("Road Inspector");
-            }
+            m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
+            // LaneMaker's AppMainWindow has its own toolbar, lane config, etc.
             m_leftDock->setVisible(false);
-            m_rightDock->setVisible(true);
+            m_rightDock->setVisible(false);
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
             // Train Studio: no docks (matching reference)
@@ -746,7 +722,7 @@ int main(int argc, char* argv[]) {
     // Create application context with all services
     ApplicationContext ctx;
 
-    MainWindow window(&ctx);
+    AppMainWindow window(&ctx);
     window.show();
 
     qDebug() << "OpenGeoStudio started — Road Engine v"
@@ -756,3 +732,5 @@ int main(int argc, char* argv[]) {
 }
 
 #include "main.moc"
+
+

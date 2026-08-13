@@ -140,6 +140,9 @@ file(GLOB LANEMAKER_XODR_SOURCES
 # LaneMaker libOpenDRIVE sources
 file(GLOB LANEMAKER_LIBOPENDRIVE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/Geometries/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/Geometries/Spiral/*.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty/pugixml/pugixml.cpp
 )
 # LaneMaker engine sources (OpenGL rendering, buffers, camera, spatial indexer)
 file(GLOB LANEMAKER_ENGINE_SOURCES
@@ -210,6 +213,9 @@ add_library(lanemaker STATIC
     ${LANEMAKER_SHADER_QRC_SOURCES}
 )
 
+# Ensure AUTOMOC processes LaneMaker headers with Q_OBJECT
+set_target_properties(lanemaker PROPERTIES AUTOMOC ON)
+
 target_include_directories(lanemaker
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker
@@ -262,24 +268,8 @@ set(APP_SOURCES
     src/core/workspace/WorkspaceManager.cpp
     # UI - Home
     src/ui/home/HomeWidget.cpp
-    # UI - Road Studio
-    src/ui/roadstudio/RoadStudioStore.cpp
-    src/ui/roadstudio/RoadViewport2D.cpp
+    # UI - Road Studio (LaneMaker's MainWindow is used directly)
     src/ui/roadstudio/RoadStudioWidget.cpp
-    src/ui/roadstudio/RoadEngineService.cpp
-    src/ui/roadstudio/RoadViewport3D.cpp
-    src/ui/roadstudio/LaneMakerService.cpp
-    src/ui/roadstudio/RoadIntersection.cpp
-    src/ui/roadstudio/editor/EditorController.cpp
-    src/ui/roadstudio/editor/RoadCommands.cpp
-    src/ui/roadstudio/editor/RoadGeometryHelper.cpp
-    src/ui/roadstudio/editor/RoadCreationSession.cpp
-    src/ui/roadstudio/editor/RoadDestroySession.cpp
-    src/ui/roadstudio/editor/RoadModificationSession.cpp
-    src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
-    src/ui/roadstudio/widgets/RoadInspector.cpp
-    src/ui/roadstudio/widgets/RoadElevationEditor.cpp
-    src/ui/roadstudio/widgets/LaneConfigWidget.cpp
     # UI - Train Studio
     src/ui/trainstudio/TrainStudioStore.cpp
     src/ui/trainstudio/TrainViewport2D.cpp
@@ -346,6 +336,9 @@ endif()
 if(ENABLE_LANEMAKER)
     target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
 endif()
+
+# LaneMaker is now always built — link it
+target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
 
 # Set output directory for portable deployment
 set_target_properties(OpenGeoStudio PROPERTIES
