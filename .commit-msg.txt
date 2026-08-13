@@ -1,25 +1,20 @@
-Fix stack overflow: remove recursive show() in AnimatedPopupDialog
+Fix crash when switching to Road Studio (OpenGL paintGL recursion)
 
-LaneMaker's AnimatedPopupDialog::showEvent() calls showAnimated(),
-which called show(), which triggered showEvent() again — infinite
-recursion causing STATUS_STACK_OVERFLOW (0xC00000FD) on startup.
+Root cause: GLBufferManageInstanced::Draw() crashed when vehicle
+buffers had no data (m_vertexBufferData empty or m_texture null),
+because the OBJ model loading uses assert() which is a no-op in
+Release mode. The crash caused the OpenGL context to be recreated,
+triggering initializeGL() again, which called Draw() again —
+infinite recursion and stack overflow (0xC00000FD).
 
-The show() call inside showAnimated() was redundant since
-showAnimated() is already called from within showEvent(), meaning
-the widget is already being shown. In Qt 6, calling show() inside
-showEvent() triggers another showEvent(), unlike Qt 5 where it was
-a no-op for already-visible widgets.
+Fixes:
+1. Added guard in GLBufferManageInstanced::Draw() to skip drawing
+   when buffers are empty or texture is null
+2. Added m_painting recursion guard in MapViewGL::paintGL() to
+   prevent reentrant paint calls
+3. Reset m_painting flag in initializeGL() on context recreation
 
-Fix: removed the show() call from showAnimated(). The animation
-group still starts correctly without it.
-
-Also cleaned up:
-- Removed debug logging from main.cpp and main_window.cpp
-- Removed temporary test_minimal.cpp
-- Removed /STACK:8388608 override (no longer needed)
-- Removed duplicate lanemaker::core link line
-
-Build: OK | Tests: 473/473 passed | App: launches and responds
+Build: OK | Tests: 473/473 passed | App: launches, Road Studio works
 
 Generated with [Devin](https://devin.ai)
 

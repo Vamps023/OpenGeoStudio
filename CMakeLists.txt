@@ -192,7 +192,8 @@ set(LANEMAKER_TEST_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test/randomization_utils.cpp
 )
 
-# Qt resource files for LaneMaker
+# Qt resource files for LaneMaker — compiled into the main executable
+# (not the static library) to ensure they are not stripped by the linker
 qt_add_resources(LANEMAKER_QRC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/images.qrc
 )
@@ -209,8 +210,6 @@ add_library(lanemaker STATIC
     ${LANEMAKER_UTIL_SOURCES}
     ${LANEMAKER_TRAFFIC_SOURCES}
     ${LANEMAKER_TEST_SOURCES}
-    ${LANEMAKER_QRC_SOURCES}
-    ${LANEMAKER_SHADER_QRC_SOURCES}
 )
 
 # Ensure AUTOMOC processes LaneMaker headers with Q_OBJECT
@@ -291,6 +290,8 @@ endif()
 
 add_executable(OpenGeoStudio
     ${APP_SOURCES}
+    ${LANEMAKER_QRC_SOURCES}
+    ${LANEMAKER_SHADER_QRC_SOURCES}
 )
 
 target_include_directories(OpenGeoStudio PRIVATE
