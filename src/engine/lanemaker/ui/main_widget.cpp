@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
 
 #include <QtWidgets>
+#include <QStackedLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -188,24 +189,33 @@ MainWidget::MainWidget(QWidget* parent)
     loadMapButton->setIconSize(largeIconSize);
     labelLayout->addWidget(loadMapButton);
 
-    // Container widget that holds the map background + OpenGL overlay
+    // Container widget that holds the map background + OpenGL overlay (overlapping)
     auto* viewportContainer = new QWidget(this);
-    auto* viewportLayout = new QVBoxLayout(viewportContainer);
+    viewportContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    // Use QStackedLayout with StackAll so both widgets overlap and fill the entire area
+    auto* viewportLayout = new QStackedLayout(viewportContainer);
+    viewportLayout->setStackingMode(QStackedLayout::StackAll);
     viewportLayout->setContentsMargins(0, 0, 0, 0);
-    viewportLayout->setSpacing(0);
 
 #ifdef HAVE_MAPLIBRE
     setupMapBackground();
     if (m_mapWidget)
     {
         m_mapWidget->setParent(viewportContainer);
-        viewportLayout->addWidget(m_mapWidget, 1);
+        m_mapWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        viewportLayout->addWidget(m_mapWidget);
         m_mapWidget->hide(); // hidden until 2D mode is activated
     }
 #endif
 
     mapViewGL->setParent(viewportContainer);
-    viewportLayout->addWidget(mapViewGL, 1);
+    mapViewGL->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    viewportLayout->addWidget(mapViewGL);
+
+    // OpenGL widget must be on top to receive mouse events for drawing
+    mapViewGL->raise();
+    mapViewGL->setAttribute(Qt::WA_TransparentForMouseEvents, false);
 
     QVBoxLayout* mainLayout = new QVBoxLayout;
     mainLayout->addLayout(labelLayout);
@@ -288,11 +298,15 @@ void MainWidget::toggleViewMode(bool checked)
         if (m_mapWidget)
         {
             m_mapWidget->show();
+            // Map widget is behind — let mouse events pass through to OpenGL
+            m_mapWidget->setAttribute(Qt::WA_TransparentForMouseEvents, true);
             // Make OpenGL widget transparent so map shows through
             mapViewGL->setAttribute(Qt::WA_TranslucentBackground, true);
-            // Raise map widget to back, OpenGL on top
+            // Ensure OpenGL is on top and receives all mouse events
             m_mapWidget->lower();
             mapViewGL->raise();
+            mapViewGL->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+            mapViewGL->setFocus();
             // Sync map to current camera position
             syncMapToCamera();
         }
@@ -308,6 +322,7 @@ void MainWidget::toggleViewMode(bool checked)
         if (m_mapWidget)
         {
             m_mapWidget->hide();
+            m_mapWidget->setAttribute(Qt::WA_TransparentForMouseEvents, false);
             mapViewGL->setAttribute(Qt::WA_TranslucentBackground, false);
         }
 #endif

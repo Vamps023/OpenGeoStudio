@@ -1,29 +1,24 @@
-Add real interactive MapLibre satellite map as 2D background
+Fix road drawing in 2D top-down mode (coordinate conversion)
 
-Replace the single-tile approach with a full MapLibre Native Qt map
-widget embedded behind LaneMaker's OpenGL viewport in 2D mode.
+Root cause: PointerOnGround(), PointerDirection(), and PixelLocation()
+used perspective math (60° FOV, focal plane distance) which breaks
+in orthographic projection. In 2D top-down mode, the camera looks
+straight down, so PointerDirection() returned a ray with z≈0 at
+screen center, causing division by zero in PointerOnGround() —
+all road drawing clicks mapped to NaN/infinity coordinates.
 
-Features:
-- Full interactive satellite map (pan, zoom, multi-tile loading)
-- Esri World Imagery raster tiles (same as Terrain workspace)
-- "3D" button toggles between 3D perspective and 2D top-down
-- "Map" button activates the satellite map background
-- In 2D mode: MapLibre map shows behind, OpenGL renders roads on top
-  with transparent background (glClearColor alpha=0)
-- In 3D mode: MapLibre hidden, normal LaneMaker 3D rendering
+Fixes:
+- PointerDirection(): return (0,0,-1) in 2D mode (parallel rays)
+- PointerOnGround(): use proper inverse view-projection matrix
+  unprojection in 2D mode — maps screen coords to z=0 ground plane
+  via NDC unprojection and ray-plane intersection
+- PixelLocation(): use forward projection matrix in 2D mode
+- wheelEvent(): zoom by moving camera Z in 2D mode (changes ortho
+  view size) instead of perspective dolly
+- resizeGL(): ortho view size scales with camera Z height so wheel
+  zoom actually changes visible area
 
-Implementation:
-- MainWidget: embedded QMapLibre::MapWidget as background layer
-- MainWidget: LmStyleServer (local HTTP server for style JSON)
-- MainWidget: setupMapBackground() creates MapLibre widget with Esri style
-- MainWidget: toggleViewMode() shows/hides map, toggles OpenGL transparency
-- MainWidget: syncMapToCamera() centers map on default location
-- MapViewGL: transparent clear in 2D mode (alpha=0) so map shows through
-- CMakeLists: linked QMapLibre::Widgets to lanemaker target
-- Renamed StyleHttpServer to LmStyleServer to avoid symbol conflict
-  with MapViewportWidget's StyleHttpServer
-
-Build: OK | Tests: 473/473 passed | App: launches, map server starts
+Build: OK | Tests: 473/473 passed | App: Road Studio 2D drawing works
 
 Generated with [Devin](https://devin.ai)
 
