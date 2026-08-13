@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
 
 #include <QtWidgets>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QImage>
+#include <cmath>
 
 #include <CGAL/exceptions.h>
 
@@ -122,6 +127,24 @@ MainWidget::MainWidget(QWidget* parent)
     drawOptionButton->setIconSize(largeIconSize);
     labelLayout->addWidget(drawOptionButton);
 
+    labelLayout->addSpacing(size);
+
+    // 2D/3D view mode toggle button
+    viewModeButton = new QToolButton(this);
+    viewModeButton->setText("3D");
+    viewModeButton->setToolTip(tr("Toggle 2D/3D view"));
+    viewModeButton->setCheckable(true);
+    viewModeButton->setChecked(false);
+    viewModeButton->setIconSize(largeIconSize);
+    labelLayout->addWidget(viewModeButton);
+
+    // Load map background button
+    loadMapButton = new QToolButton(this);
+    loadMapButton->setText("Map");
+    loadMapButton->setToolTip(tr("Load satellite map background"));
+    loadMapButton->setIconSize(largeIconSize);
+    labelLayout->addWidget(loadMapButton);
+
     QVBoxLayout* mainLayout = new QVBoxLayout;
     mainLayout->addLayout(labelLayout);
     mainLayout->addWidget(mapViewGL);
@@ -140,6 +163,8 @@ MainWidget::MainWidget(QWidget* parent)
     connect(undoButton, &QAbstractButton::clicked, g_mainWindow, &MainWindow::undo);
     connect(redoButton, &QAbstractButton::clicked, g_mainWindow, &MainWindow::redo);
     connect(drawOptionButton, &QAbstractButton::clicked, drawOptionDialog, &QDialog::open);
+    connect(viewModeButton, &QAbstractButton::toggled, this, &MainWidget::toggleViewMode);
+    connect(loadMapButton, &QAbstractButton::clicked, this, &MainWidget::loadMapBackground);
     Reset();
 }
 
@@ -186,6 +211,76 @@ void MainWidget::gotoDragMode(bool checked)
     SetEditMode(LM::Mode_None);
     LM::ActionManager::Instance()->Record(LM::Mode_None);
     laneConfig->hide();
+}
+
+void MainWidget::toggleViewMode(bool checked)
+{
+    if (checked)
+    {
+        // Switch to 2D top-down view
+        viewModeButton->setText("2D");
+        mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::TopDown2D);
+    }
+    else
+    {
+        // Switch back to 3D perspective view
+        viewModeButton->setText("3D");
+        mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::Perspective3D);
+    }
+}
+
+void MainWidget::loadMapBackground()
+{
+    // Fetch Esri World Imagery tile for the current center location
+    // Default center: Pune, India (lat=18.52, lon=73.85) at zoom 15
+    const double lat = 18.52;
+    const double lon = 73.85;
+    const int zoom = 15;
+
+    // Convert lat/lon to tile numbers
+    double n = std::pow(2.0, zoom);
+    int xtile = int((lon + 180.0) / 360.0 * n);
+    int ytile = int((1.0 - std::log(std::tan(lat * M_PI / 180.0) +
+                 1.0 / std::cos(lat * M_PI / 180.0)) / M_PI) / 2.0 * n);
+
+    // Build Esri tile URL
+    QString url = QString(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/"
+        "World_Imagery/MapServer/tile/%1/%2/%3")
+        .arg(zoom).arg(ytile).arg(xtile);
+
+    qDebug() << "[MainWidget] Loading map tile from:" << url;
+
+    auto* nam = new QNetworkAccessManager(this);
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
+    auto* reply = nam->get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, lat, lon]() {
+        if (reply->error() == QNetworkReply::NoError)
+        {
+            QImage tileImage;
+            if (tileImage.loadFromData(reply->readAll()))
+            {
+                // Calculate approximate meters-per-pixel at this lat/zoom
+                const double earthCircumference = 40075016.686;
+                double metersPerPixel = earthCircumference * std::cos(lat * M_PI / 180.0) /
+                                        std::pow(2.0, 15);
+                mapViewGL->SetMapBackground(tileImage, lat, lon, metersPerPixel);
+                qDebug() << "[MainWidget] Map tile loaded successfully";
+            }
+            else
+            {
+                qWarning() << "[MainWidget] Failed to decode map tile image";
+            }
+        }
+        else
+        {
+            qWarning() << "[MainWidget] Failed to download map tile:" << reply->errorString();
+        }
+        reply->deleteLater();
+        nam->deleteLater();
+    });
 }
 
 void MainWidget::OnMouseAction(LM::MouseAction evt)

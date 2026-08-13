@@ -241,6 +241,7 @@ target_link_libraries(lanemaker
         Qt6::Widgets
         Qt6::OpenGL
         Qt6::OpenGLWidgets
+        Qt6::Network
         CGAL::CGAL
         Boost::boost
         spdlog::spdlog

@@ -7,6 +7,10 @@
 #include "touch_controller.h"
 
 #include <QOpenGLWidget>
+#include <QOpenGLTexture>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLBuffer>
+#include <QOpenGLVertexArrayObject>
 #include <qvector2d.h>
 #include <QMatrix4x4>
 #include <optional>
@@ -36,6 +40,15 @@ namespace LM
 		MapViewGL();
 		void CleanupResources();
 		void ResetCamera();
+
+		// 2D/3D view mode
+		enum class ViewMode { Perspective3D, TopDown2D };
+		void SetViewMode(ViewMode mode);
+		ViewMode GetViewMode() const { return m_viewMode; }
+
+		// Map background — load a satellite image tile as the OpenGL background
+		void SetMapBackground(const QImage& tileImage, double centerLat, double centerLon, double scale);
+		void ClearMapBackground();
 
 		// permanent objects only
 		void UpdateObject(unsigned int objectID, uint8_t flag);
@@ -130,6 +143,25 @@ namespace LM
 
         bool ignoreNextMouseRelease; // for scene buttons
         bool m_painting = false; // recursion guard for paintGL
+
+        // 2D/3D view mode
+        ViewMode m_viewMode = ViewMode::Perspective3D;
+
+        // Map background texture (satellite imagery)
+        std::unique_ptr<QOpenGLTexture> m_mapTexture;
+        double m_mapCenterLat = 0;
+        double m_mapCenterLon = 0;
+        double m_mapScale = 1.0; // meters per pixel
+        bool m_mapTextureValid = false;
+
+        // Shader for textured background quad
+        QOpenGLShaderProgram m_texturedShader;
+        QOpenGLBuffer m_bgQuadVbo;
+        QOpenGLVertexArrayObject m_bgQuadVao;
+        bool m_texturedShaderInit = false;
+
+        void initTexturedShader();
+        void drawMapBackground();
 	};
 
 	extern MapViewGL* g_mapViewGL;

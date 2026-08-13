@@ -57,6 +57,8 @@ private slots:
     void gotoDestroyMode(bool);
     void gotoModifyMode(bool);
     void gotoDragMode(bool c=true);
+    void toggleViewMode(bool checked);
+    void loadMapBackground();
 
 private:
     static MainWidget* instance;
@@ -73,6 +75,8 @@ private:
 
     QButtonGroup* pointerModeGroup;
     QToolButton* createModeButton, * createLaneModeButton, * destroyModeButton, * modifyModeButton, * dragModeButton;
+    QToolButton* viewModeButton;   // 2D/3D toggle
+    QToolButton* loadMapButton;    // Load satellite map background
 
     LaneConfigWidget* laneConfig;
     DrawOptionDialog* drawOptionDialog;

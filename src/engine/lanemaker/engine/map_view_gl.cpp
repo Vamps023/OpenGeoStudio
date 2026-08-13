@@ -2,6 +2,11 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QCoreApplication>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QImage>
+#include <QTimer>
 
 #include "main_widget.h"
 #include "id_generator.h"
@@ -58,8 +63,129 @@ namespace LM
 
     void MapViewGL::ResetCamera()
     {
-        m_camera.setTranslation(0, -200, 250);
-        m_camera.setRotation(30, QVector3D(1, 0, 0));
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // Top-down: camera directly above, looking straight down
+            m_camera.setTranslation(0, 0, 500);
+            m_camera.setRotation(90, QVector3D(1, 0, 0));
+        }
+        else
+        {
+            m_camera.setTranslation(0, -200, 250);
+            m_camera.setRotation(30, QVector3D(1, 0, 0));
+        }
+    }
+
+    void MapViewGL::SetViewMode(ViewMode mode)
+    {
+        if (m_viewMode == mode) return;
+        m_viewMode = mode;
+        ResetCamera();
+        update();
+    }
+
+    void MapViewGL::SetMapBackground(const QImage& tileImage, double centerLat, double centerLon, double scale)
+    {
+        m_mapCenterLat = centerLat;
+        m_mapCenterLon = centerLon;
+        m_mapScale = scale;
+        m_mapTextureValid = !tileImage.isNull();
+
+        if (m_mapTextureValid)
+        {
+            makeCurrent();
+            m_mapTexture = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
+            m_mapTexture->setData(tileImage);
+            m_mapTexture->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+            m_mapTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+            m_mapTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+            doneCurrent();
+        }
+        update();
+    }
+
+    void MapViewGL::ClearMapBackground()
+    {
+        makeCurrent();
+        m_mapTexture.reset();
+        m_mapTextureValid = false;
+        doneCurrent();
+        update();
+    }
+
+    void MapViewGL::initTexturedShader()
+    {
+        if (m_texturedShaderInit) return;
+        m_texturedShaderInit = true;
+
+        m_texturedShader.addShaderFromSourceCode(QOpenGLShader::Vertex,
+            R"(#version 330 core
+            layout(location = 0) in vec3 aPos;
+            layout(location = 1) in vec2 aTexCoord;
+            uniform mat4 worldToView;
+            out vec2 TexCoord;
+            void main() {
+                gl_Position = worldToView * vec4(aPos, 1.0);
+                TexCoord = aTexCoord;
+            })");
+
+        m_texturedShader.addShaderFromSourceCode(QOpenGLShader::Fragment,
+            R"(#version 330 core
+            in vec2 TexCoord;
+            out vec4 FragColor;
+            uniform sampler2D tex;
+            void main() {
+                FragColor = texture(tex, TexCoord);
+            })");
+
+        m_texturedShader.link();
+
+        // Create a full-screen quad (in world XY plane)
+        m_bgQuadVao.create();
+        m_bgQuadVao.bind();
+
+        m_bgQuadVbo.create();
+        m_bgQuadVbo.bind();
+        m_bgQuadVbo.setUsagePattern(QOpenGLBuffer::StaticDraw);
+
+        // Vertices: pos(x,y,z) + texcoord(u,v) — large quad covering the ground plane
+        float quadVerts[] = {
+            // pos              // texcoord
+            -5000, -5000, 0,    0, 1,
+             5000, -5000, 0,    1, 1,
+             5000,  5000, 0,    1, 0,
+            -5000, -5000, 0,    0, 1,
+             5000,  5000, 0,    1, 0,
+            -5000,  5000, 0,    0, 0,
+        };
+        m_bgQuadVbo.allocate(quadVerts, sizeof(quadVerts));
+
+        m_texturedShader.enableAttributeArray(0);
+        m_texturedShader.setAttributeBuffer(0, GL_FLOAT, 0, 3, 5 * sizeof(float));
+        m_texturedShader.enableAttributeArray(1);
+        m_texturedShader.setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 2, 5 * sizeof(float));
+
+        m_bgQuadVbo.release();
+        m_bgQuadVao.release();
+    }
+
+    void MapViewGL::drawMapBackground()
+    {
+        if (!m_mapTextureValid || !m_mapTexture) return;
+        initTexturedShader();
+
+        glDisable(GL_DEPTH_TEST);
+        m_texturedShader.bind();
+        m_texturedShader.setUniformValue("worldToView", m_worldToView);
+        m_mapTexture->bind(0);
+        m_texturedShader.setUniformValue("tex", 0);
+
+        m_bgQuadVao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        m_bgQuadVao.release();
+
+        m_texturedShader.release();
+        glEnable(GL_DEPTH_TEST);
     }
 
     unsigned int MapViewGL::AddQuads(const odr::Line3D& lBorder, const odr::Line3D& rBorder, QColor color, unsigned int objID)
@@ -261,14 +387,27 @@ namespace LM
     void MapViewGL::resizeGL(int width, int height)
     {
         m_projection.setToIdentity();
-        // create projection matrix, i.e. camera lens
-        m_projection.perspective(
-            /* vertical angle */ 60.0f,
-            /* aspect ratio */   width / float(height),
-            /* near */           5.0f,
-            /* far */            2000.0f
-        );
-        // Mind: to not use 0.0 for near plane, otherwise depth buffering and depth testing won't work!
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // Orthographic projection for 2D top-down view
+            float aspect = width / float(height ? height : 1);
+            float viewSize = 300.0f; // visible world units
+            m_projection.ortho(
+                -viewSize * aspect, viewSize * aspect,
+                -viewSize, viewSize,
+                -2000.0f, 2000.0f
+            );
+        }
+        else
+        {
+            // Perspective projection for 3D view
+            m_projection.perspective(
+                /* vertical angle */ 60.0f,
+                /* aspect ratio */   width / float(height ? height : 1),
+                /* near */           5.0f,
+                /* far */            2000.0f
+            );
+        }
     }
 
     void MapViewGL::paintGL()
@@ -286,6 +425,9 @@ namespace LM
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
+
+        // Draw satellite map background (if loaded)
+        drawMapBackground();
 
         glDisable(GL_DEPTH_TEST);
         backgroundBuffer->Draw(m_worldToView);

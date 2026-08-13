@@ -1,20 +1,21 @@
-Fix crash when switching to Road Studio (OpenGL paintGL recursion)
+Fix LaneMaker Qt resources not loading (shaders, models, icons)
 
-Root cause: GLBufferManageInstanced::Draw() crashed when vehicle
-buffers had no data (m_vertexBufferData empty or m_texture null),
-because the OBJ model loading uses assert() which is a no-op in
-Release mode. The crash caused the OpenGL context to be recreated,
-triggering initializeGL() again, which called Draw() again —
-infinite recursion and stack overflow (0xC00000FD).
+Root cause: Qt resources compiled into a static library (lanemaker.lib)
+were being stripped by the linker because nothing in the library
+directly referenced the qrc object files. The Q_INIT_RESOURCE() calls
+in main.cpp were not sufficient to force inclusion.
 
-Fixes:
-1. Added guard in GLBufferManageInstanced::Draw() to skip drawing
-   when buffers are empty or texture is null
-2. Added m_painting recursion guard in MapViewGL::paintGL() to
-   prevent reentrant paint calls
-3. Reset m_painting flag in initializeGL() on context recreation
+Fix: Move qt_add_resources() output from the lanemaker static library
+to the OpenGeoStudio executable target. This ensures the qrc object
+files are always linked into the final binary.
 
-Build: OK | Tests: 473/473 passed | App: launches, Road Studio works
+Resources affected:
+- shaders/simple.vert, simple.frag, instanced.vert, texture.frag
+- models/jeep.obj, jeep.jpg, cadillac.obj, cadillac.jpg,
+  military.obj, military.jpg
+- icons/*.png (toolbar, mode buttons, etc.)
+
+Build: OK | Tests: 473/473 | App: Road Studio renders correctly
 
 Generated with [Devin](https://devin.ai)
 
