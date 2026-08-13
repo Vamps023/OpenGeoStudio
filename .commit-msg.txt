@@ -1,0 +1,24 @@
+Phase 24: Editor session framework + QUndoStack migration
+
+Establishes the architectural foundation for LaneMaker-style editing:
+
+- EditSession abstract base class (editor/EditSession.hpp) mirroring
+  LaneMaker RoadDrawingSession pattern with update/complete/cancel
+- EditorInput types (editor/EditorInput.hpp) decoupling Qt events
+  from session logic for testability
+- EditorController (editor/EditorController.hpp/.cpp) managing active
+  sessions, forwarding input, handling Space=confirm/Esc=cancel
+- RoadCommands (editor/RoadCommands.hpp/.cpp) with QUndoCommand
+  subclasses: SnapshotCommand, SetRoadPropertyCommand,
+  SetControlPointPropertyCommand
+- RoadStudioStore migrated from custom QList snapshot stacks to
+  QUndoStack with pushHistory/commitHistory pattern
+- RoadInspector now routes all property changes through QUndoCommand
+  so inspector edits are properly undoable for the first time
+- CMakeLists.txt updated with new editor source files and include path
+
+Build: OK | Tests: 473/473 passed | App: launches and responds
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

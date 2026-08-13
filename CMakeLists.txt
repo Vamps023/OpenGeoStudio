@@ -203,6 +203,8 @@ set(APP_SOURCES
     src/ui/roadstudio/RoadViewport3D.cpp
     src/ui/roadstudio/LaneMakerService.cpp
     src/ui/roadstudio/RoadIntersection.cpp
+    src/ui/roadstudio/editor/EditorController.cpp
+    src/ui/roadstudio/editor/RoadCommands.cpp
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
     src/ui/roadstudio/widgets/RoadElevationEditor.cpp
@@ -242,6 +244,7 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/home
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/widgets
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/editor
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
 )

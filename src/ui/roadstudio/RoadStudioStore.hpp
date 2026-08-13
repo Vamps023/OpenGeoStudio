@@ -20,6 +20,7 @@
 #include <QSet>
 #include <QUuid>
 #include <QDateTime>
+#include <QUndoStack>
 
 class RoadStudioStore : public QObject {
     Q_OBJECT
@@ -54,8 +55,11 @@ public:
     bool debugMode() const { return m_debugMode; }
     bool debugLayerEnabled(DebugLayer layer) const { return m_debugLayers.contains(layer); }
 
-    bool canUndo() const { return !m_undoStack.isEmpty(); }
-    bool canRedo() const { return !m_redoStack.isEmpty(); }
+    bool canUndo() const { return m_undoStack.canUndo(); }
+    bool canRedo() const { return m_undoStack.canRedo(); }
+
+    // QUndoStack access (for pushing commands from inspector/editor)
+    QUndoStack& undoStack() { return m_undoStack; }
 
     // LaneMaker workflow state
     bool isLmRoadActive() const { return m_lmRoadActive; }
@@ -117,9 +121,18 @@ public:
 
     // --- Undo/Redo ---
 
+    // Capture the current road state before a mutation (call before changing roads)
     void pushHistory(const QString& description);
+
+    // Commit the captured state as a SnapshotCommand onto the QUndoStack
+    // (call after the mutation is complete)
+    void commitHistory();
+
     void undo();
     void redo();
+
+    // Apply a road list directly (used by SnapshotCommand::undo/redo)
+    void applyRoads(const QList<roads::Road>& roads);
 
     // --- LaneMaker workflow ---
 
@@ -217,9 +230,10 @@ private:
     bool m_debugMode = false;
     QSet<DebugLayer> m_debugLayers;
 
-    // Undo/redo
-    QList<roads::HistorySnapshot> m_undoStack;
-    QList<roads::HistorySnapshot> m_redoStack;
+    // Undo/redo — QUndoStack replaces the custom snapshot lists
+    QUndoStack m_undoStack;
+    QList<roads::Road> m_pendingBefore;  // captured by pushHistory, used by commitHistory
+    QString m_pendingDesc;
 
     // Geo reference origin
     double m_refLat = 18.52;

@@ -2,6 +2,7 @@
 
 #include "RoadInspector.hpp"
 #include "GeoConvert.hpp"
+#include "editor/RoadCommands.hpp"
 
 #include <QColorDialog>
 #include <QPushButton>
@@ -243,64 +244,93 @@ void RoadInspector::onRoadsChanged() {
 
 void RoadInspector::onNameChanged() {
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road) road->name = m_nameEdit->text();
+    if (!road) return;
+    QString newName = m_nameEdit->text();
+    if (road->name == newName) return;
+    m_store->undoStack().push(new SetRoadPropertyCommand(
+        m_store, m_currentRoadId, SetRoadPropertyCommand::Property::Name,
+        road->name, newName, "Rename road"));
 }
 
 void RoadInspector::onWidthChanged(double w) {
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road) road->width = w;
+    if (!road) return;
+    if (std::abs(road->width - w) < 1e-6) return;
+    m_store->undoStack().push(new SetRoadPropertyCommand(
+        m_store, m_currentRoadId, SetRoadPropertyCommand::Property::Width,
+        road->width, w, "Change road width"));
 }
 
 void RoadInspector::onLaneCountChanged(int n) {
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road) road->laneCount = n;
+    if (!road) return;
+    if (road->laneCount == n) return;
+    m_store->undoStack().push(new SetRoadPropertyCommand(
+        m_store, m_currentRoadId, SetRoadPropertyCommand::Property::LaneCount,
+        road->laneCount, n, "Change lane count"));
 }
 
 void RoadInspector::onColorChanged() {
     auto* road = m_store->getRoad(m_currentRoadId);
     if (!road) return;
     QColor color = QColorDialog::getColor(QColor(road->color), this, "Road Color");
-    if (color.isValid()) {
-        road->color = color.name();
-        m_colorBtn->setStyleSheet(
-            QString("background-color: %1; border: 1px solid #30363d;").arg(road->color));
-    }
+    if (!color.isValid()) return;
+    QString newColor = color.name();
+    if (road->color == newColor) return;
+    m_store->undoStack().push(new SetRoadPropertyCommand(
+        m_store, m_currentRoadId, SetRoadPropertyCommand::Property::Color,
+        road->color, newColor, "Change road color"));
 }
 
 void RoadInspector::onProfileChanged(const QString& profile) {
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road) road->profile.type = profile;
+    if (!road) return;
+    if (road->profile.type == profile) return;
+    m_store->undoStack().push(new SetRoadPropertyCommand(
+        m_store, m_currentRoadId, SetRoadPropertyCommand::Property::ProfileType,
+        road->profile.type, profile, "Change road profile"));
 }
 
 void RoadInspector::onLatChanged(double v) {
     if (m_currentPointIdx < 0) return;
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road && m_currentPointIdx < road->points.size()) {
-        road->points[m_currentPointIdx].lat = v;
-    }
+    if (!road || m_currentPointIdx >= road->points.size()) return;
+    if (std::abs(road->points[m_currentPointIdx].lat - v) < 1e-9) return;
+    m_store->undoStack().push(new SetControlPointPropertyCommand(
+        m_store, m_currentRoadId, m_currentPointIdx,
+        SetControlPointPropertyCommand::Property::Latitude,
+        road->points[m_currentPointIdx].lat, v, "Change latitude"));
 }
 
 void RoadInspector::onLonChanged(double v) {
     if (m_currentPointIdx < 0) return;
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road && m_currentPointIdx < road->points.size()) {
-        road->points[m_currentPointIdx].lon = v;
-    }
+    if (!road || m_currentPointIdx >= road->points.size()) return;
+    if (std::abs(road->points[m_currentPointIdx].lon - v) < 1e-9) return;
+    m_store->undoStack().push(new SetControlPointPropertyCommand(
+        m_store, m_currentRoadId, m_currentPointIdx,
+        SetControlPointPropertyCommand::Property::Longitude,
+        road->points[m_currentPointIdx].lon, v, "Change longitude"));
 }
 
 void RoadInspector::onZChanged(double v) {
     if (m_currentPointIdx < 0) return;
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road && m_currentPointIdx < road->points.size()) {
-        road->points[m_currentPointIdx].z = v;
-    }
+    if (!road || m_currentPointIdx >= road->points.size()) return;
+    if (std::abs(road->points[m_currentPointIdx].z - v) < 1e-6) return;
+    m_store->undoStack().push(new SetControlPointPropertyCommand(
+        m_store, m_currentRoadId, m_currentPointIdx,
+        SetControlPointPropertyCommand::Property::Elevation,
+        road->points[m_currentPointIdx].z, v, "Change elevation"));
 }
 
 void RoadInspector::onPointTypeChanged(const QString& type) {
     if (m_currentPointIdx < 0) return;
     auto* road = m_store->getRoad(m_currentRoadId);
-    if (road && m_currentPointIdx < road->points.size()) {
-        road->points[m_currentPointIdx].type =
-            roads::ControlPoint::typeFromStr(type);
-    }
+    if (!road || m_currentPointIdx >= road->points.size()) return;
+    if (road->points[m_currentPointIdx].typeStr() == type) return;
+    m_store->undoStack().push(new SetControlPointPropertyCommand(
+        m_store, m_currentRoadId, m_currentPointIdx,
+        SetControlPointPropertyCommand::Property::Type,
+        road->points[m_currentPointIdx].typeStr(), type, "Change point type"));
 }

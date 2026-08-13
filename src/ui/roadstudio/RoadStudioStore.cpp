@@ -3,9 +3,10 @@
 #include "RoadStudioStore.hpp"
 #include "GeoConvert.hpp"
 #include "LaneMakerService.hpp"
+#include "editor/RoadCommands.hpp"
 
 RoadStudioStore::RoadStudioStore(EventBus* bus, QObject* parent)
-    : QObject(parent), m_bus(bus), m_log("RoadStudioStore") {
+    : QObject(parent), m_bus(bus), m_log("RoadStudioStore"), m_undoStack(this) {
     // Enable all debug layers by default when debug mode is on
     // (matching reference app behavior)
 }
@@ -63,6 +64,7 @@ QString RoadStudioStore::startNewRoad(double lat, double lon) {
     m_drawingRoadId = road.id;
 
     m_log.info("Started new road:", road.id, "at", lat, lon);
+    commitHistory();
     emit roadsChanged();
     return road.id;
 }
@@ -80,6 +82,7 @@ void RoadStudioStore::addControlPoint(const QString& roadId, double lat, double 
     road->points.append(cp);
 
     m_log.info("Added control point to road:", roadId, "at", lat, lon);
+    commitHistory();
     emit roadsChanged();
 }
 
@@ -91,6 +94,7 @@ void RoadStudioStore::updateControlPoint(const QString& roadId, int index,
     pushHistory("Update control point");
     road->points[index].lat = lat;
     road->points[index].lon = lon;
+    commitHistory();
     emit roadsChanged();
 }
 
@@ -100,6 +104,7 @@ void RoadStudioStore::updateControlPointElevation(const QString& roadId, int ind
 
     pushHistory("Update elevation");
     road->points[index].z = z;
+    commitHistory();
     emit roadsChanged();
 }
 
@@ -115,6 +120,7 @@ void RoadStudioStore::deleteControlPoint(const QString& roadId, int index) {
         if (m_drawingRoadId == roadId) m_drawingRoadId.clear();
     }
 
+    commitHistory();
     emit roadsChanged();
 }
 
@@ -131,6 +137,7 @@ void RoadStudioStore::deleteRoad(const QString& roadId) {
     if (m_drawingRoadId == roadId) m_drawingRoadId.clear();
 
     m_log.info("Deleted road:", roadId);
+    commitHistory();
     emit roadsChanged();
     emit selectionChanged(m_selection);
 }
@@ -144,6 +151,7 @@ void RoadStudioStore::clearAll() {
     m_selectedRoadIds.clear();
     m_drawingRoadId.clear();
     m_log.info("Cleared all roads");
+    commitHistory();
     emit roadsChanged();
     emit selectionChanged(m_selection);
 }
@@ -179,6 +187,7 @@ QString RoadStudioStore::createDemoRoad() {
 
     m_roads.append(road);
     m_log.info("Created demo road:", road.id);
+    commitHistory();
     emit roadsChanged();
     return road.id;
 }
@@ -256,57 +265,47 @@ void RoadStudioStore::toggleDebugLayer(DebugLayer layer) {
 // --- Undo/Redo ---
 
 void RoadStudioStore::pushHistory(const QString& description) {
-    roads::HistorySnapshot snap;
-    snap.roads = m_roads;
-    snap.description = description;
-    snap.timestamp = QDateTime::currentMSecsSinceEpoch();
-    m_undoStack.append(snap);
-    m_redoStack.clear(); // clear redo on new action
+    // Capture the current road state before the mutation.
+    // commitHistory() will be called after the mutation to create
+    // the SnapshotCommand.
+    m_pendingBefore = m_roads;
+    m_pendingDesc = description;
+}
 
-    // Limit undo stack to 50 entries
-    if (m_undoStack.size() > 50) {
-        m_undoStack.removeFirst();
-    }
+void RoadStudioStore::commitHistory() {
+    if (m_pendingDesc.isEmpty()) return;
 
+    m_undoStack.push(new SnapshotCommand(this, m_pendingBefore, m_roads, m_pendingDesc));
+    m_pendingBefore.clear();
+    m_pendingDesc.clear();
     emit historyChanged();
 }
 
 void RoadStudioStore::undo() {
-    if (m_undoStack.isEmpty()) return;
-    roads::HistorySnapshot current;
-    current.roads = m_roads;
-    current.description = "before undo";
-    current.timestamp = QDateTime::currentMSecsSinceEpoch();
-    m_redoStack.append(current);
-
-    auto snap = m_undoStack.takeLast();
-    m_roads = snap.roads;
+    if (!m_undoStack.canUndo()) return;
+    m_undoStack.undo();
     m_selection.clear();
     m_selectedRoadIds.clear();
     m_drawingRoadId.clear();
-    m_log.info("Undo:", snap.description);
-    emit roadsChanged();
+    m_log.info("Undo");
     emit selectionChanged(m_selection);
     emit historyChanged();
 }
 
 void RoadStudioStore::redo() {
-    if (m_redoStack.isEmpty()) return;
-    roads::HistorySnapshot current;
-    current.roads = m_roads;
-    current.description = "before redo";
-    current.timestamp = QDateTime::currentMSecsSinceEpoch();
-    m_undoStack.append(current);
-
-    auto snap = m_redoStack.takeLast();
-    m_roads = snap.roads;
+    if (!m_undoStack.canRedo()) return;
+    m_undoStack.redo();
     m_selection.clear();
     m_selectedRoadIds.clear();
     m_drawingRoadId.clear();
-    m_log.info("Redo:", snap.description);
-    emit roadsChanged();
+    m_log.info("Redo");
     emit selectionChanged(m_selection);
     emit historyChanged();
+}
+
+void RoadStudioStore::applyRoads(const QList<roads::Road>& roads) {
+    m_roads = roads;
+    emit roadsChanged();
 }
 
 // --- LaneMaker workflow ---
@@ -368,6 +367,7 @@ void RoadStudioStore::finishLmRoad() {
         if (road.points.size() >= 2) {
             m_roads.append(road);
             m_log.info("Finished staged LaneMaker road:", road.id, "with", road.points.size(), "control points");
+            commitHistory();
             emit roadsChanged();
         }
         cancelLmRoad();
@@ -402,6 +402,7 @@ void RoadStudioStore::finishLmRoad() {
 
     m_roads.append(road);
     m_log.info("Finished LaneMaker road:", road.id, "with", road.points.size(), "control points");
+    commitHistory();
     emit roadsChanged();
 
     cancelLmRoad();
