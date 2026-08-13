@@ -65,6 +65,19 @@ public:
     const std::optional<roads::Vec2>& lmRoadEndDir() const { return m_lmRoadEndDir; }
     const std::optional<roads::Point2D>& previewPoint() const { return m_previewPoint; }
 
+    // Staged geometry (multi-click road creation)
+    const QList<roads::StagedGeometry>& stagedGeometries() const { return m_stagedGeometries; }
+    const roads::LaneConfig& laneConfig() const { return m_laneConfig; }
+    bool isDirectionHandleActive() const { return m_directionHandleActive; }
+    double directionHandleAngle() const { return m_directionHandleAngle; }
+    const std::optional<roads::Point2D>& directionHandlePos() const { return m_directionHandlePos; }
+
+    // Snap state
+    bool isSnappingToRoad() const { return m_snapToRoad; }
+    const QString& snapRoadId() const { return m_snapRoadId; }
+    double snapS() const { return m_snapS; }
+    bool snapIsExtend() const { return m_snapIsExtend; }
+
     // --- Tool / view mode ---
 
     void setTool(roads::Tool tool);
@@ -117,6 +130,25 @@ public:
     void finishLmRoad();
     void cancelLmRoad();
 
+    // --- Staged geometry workflow (multi-click road creation) ---
+
+    void stageGeometry(roads::StagedGeometry geo);
+    void popStagedGeometry();
+    void clearStagedGeometry();
+    void setDirectionHandle(roads::Point2D pos, double angle);
+    void updateDirectionHandleAngle(double angle);
+    void clearDirectionHandle();
+
+    // --- Lane config ---
+
+    void setLaneConfig(const roads::LaneConfig& config);
+    void setLeftLaneCount(int count);
+    void setRightLaneCount(int count);
+
+    // --- Snap ---
+
+    void setSnapToRoad(bool snapping, const QString& roadId = {}, double s = 0, bool isExtend = false);
+
     // --- Helpers ---
 
     roads::Road* getRoad(const QString& id);
@@ -165,6 +197,21 @@ private:
     std::optional<roads::Point2D> m_lmRoadEnd;
     std::optional<roads::Vec2> m_lmRoadEndDir;
     std::optional<roads::Point2D> m_previewPoint;
+
+    // Staged geometry (multi-click road creation)
+    QList<roads::StagedGeometry> m_stagedGeometries;
+    bool m_directionHandleActive = false;
+    double m_directionHandleAngle = 0;
+    std::optional<roads::Point2D> m_directionHandlePos;
+
+    // Lane config
+    roads::LaneConfig m_laneConfig;
+
+    // Snap state
+    bool m_snapToRoad = false;
+    QString m_snapRoadId;
+    double m_snapS = 0;
+    bool m_snapIsExtend = false;
 
     // Debug
     bool m_debugMode = false;

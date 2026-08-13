@@ -224,11 +224,46 @@ struct HistorySnapshot {
     qint64 timestamp = 0;
 };
 
-// Tool — available tools
-enum class Tool { Select, Road };
+// Tool — available tools (LaneMaker-style edit modes)
+enum class Tool {
+    Select,     // Drag/pan mode
+    Road,       // Create road mode
+    Lane,       // Create lanes (ramps/splits)
+    Destroy,    // Destroy road segment
+    Modify      // Modify lane profile
+};
 
 // ViewMode — 2D top or 3D perspective
 enum class ViewMode { Top, Perspective };
+
+// StagedGeometry — a confirmed geometry segment in the multi-click workflow
+struct StagedGeometry {
+    Point2D startPos;
+    Vec2 startDir;
+    Point2D endPos;
+    Vec2 endDir;
+    double length = 0;
+    // Sampled points along the geometry
+    QList<Point2D> samples;
+};
+
+// LanePlan — lane configuration for one side of the road
+struct LanePlan {
+    int laneCount = 1;
+    double offsetx2 = 0;  // 2x offset from center
+
+    bool operator==(const LanePlan& o) const {
+        return laneCount == o.laneCount && std::abs(offsetx2 - o.offsetx2) < 1e-6;
+    }
+    bool operator!=(const LanePlan& o) const { return !(*this == o); }
+};
+
+// LaneConfig — full lane configuration (left + right)
+struct LaneConfig {
+    LanePlan left;
+    LanePlan right;
+    bool roadMode = true;  // true=road, false=lane creation
+};
 
 // MeshData — triangle mesh from the C++ engine
 struct MeshData {

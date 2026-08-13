@@ -49,6 +49,7 @@ private:
     QAction* m_redoAct = nullptr;
     QAction* m_deleteAct = nullptr;
     QAction* m_finishAct = nullptr;
+    QAction* m_cancelAct = nullptr;
     QCheckBox* m_snapCheck = nullptr;
     QDoubleSpinBox* m_gridSizeSpin = nullptr;
     QDoubleSpinBox* m_widthSpin = nullptr;

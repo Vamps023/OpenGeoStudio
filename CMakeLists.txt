@@ -206,6 +206,7 @@ set(APP_SOURCES
     src/ui/roadstudio/widgets/RoadStudioToolbar.cpp
     src/ui/roadstudio/widgets/RoadInspector.cpp
     src/ui/roadstudio/widgets/RoadElevationEditor.cpp
+    src/ui/roadstudio/widgets/LaneConfigWidget.cpp
     # UI - Train Studio
     src/ui/trainstudio/TrainStudioStore.cpp
     src/ui/trainstudio/TrainViewport2D.cpp

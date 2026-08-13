@@ -15,7 +15,23 @@ RoadStudioStore::RoadStudioStore(EventBus* bus, QObject* parent)
 void RoadStudioStore::setTool(roads::Tool tool) {
     if (m_tool == tool) return;
     m_tool = tool;
-    m_log.info("Tool changed:", tool == roads::Tool::Select ? "select" : "road");
+
+    const char* toolName = "unknown";
+    switch (tool) {
+        case roads::Tool::Select: toolName = "select/drag"; break;
+        case roads::Tool::Road: toolName = "road create"; break;
+        case roads::Tool::Lane: toolName = "lane create"; break;
+        case roads::Tool::Destroy: toolName = "destroy"; break;
+        case roads::Tool::Modify: toolName = "modify"; break;
+    }
+    m_log.info("Tool changed:", toolName);
+
+    // Cancel any active LaneMaker workflow when switching tools
+    if (m_lmRoadActive) cancelLmRoad();
+    m_stagedGeometries.clear();
+    m_directionHandleActive = false;
+    m_directionHandlePos = std::nullopt;
+
     emit toolChanged(tool);
 }
 
@@ -322,6 +338,43 @@ void RoadStudioStore::setPreviewPoint(roads::Point2D pt) {
 }
 
 void RoadStudioStore::finishLmRoad() {
+    // If we have staged geometries, build the road from them
+    if (!m_stagedGeometries.isEmpty()) {
+        pushHistory("Finish LaneMaker road (staged)");
+
+        roads::Road road;
+        road.id = generateId();
+        road.name = "Road " + QString::number(m_roads.size() + 1);
+        road.width = m_defaultWidth;
+        road.laneCount = m_defaultLaneCount;
+        road.color = "#4488ff";
+        road.formatVersion = 2;
+
+        // Collect all sampled points from staged geometries
+        for (const auto& staged : m_stagedGeometries) {
+            for (const auto& pt : staged.samples) {
+                double lat, lon;
+                roads::localToGeo(pt.x, pt.y, m_refLat, m_refLon, lat, lon);
+                roads::ControlPoint cp;
+                cp.id = generateId();
+                cp.lat = lat;
+                cp.lon = lon;
+                cp.z = 0;
+                cp.type = roads::ControlPoint::Type::Smooth;
+                road.points.append(cp);
+            }
+        }
+
+        if (road.points.size() >= 2) {
+            m_roads.append(road);
+            m_log.info("Finished staged LaneMaker road:", road.id, "with", road.points.size(), "control points");
+            emit roadsChanged();
+        }
+        cancelLmRoad();
+        return;
+    }
+
+    // Fallback: simple 2-point road
     if (!m_lmRoadActive || !m_lmRoadStart || !m_lmRoadEnd) {
         cancelLmRoad();
         return;
@@ -335,7 +388,6 @@ void RoadStudioStore::finishLmRoad() {
     roads::localToGeo(m_lmRoadEnd->x, m_lmRoadEnd->y, m_refLat, m_refLon, endLat, endLon);
 
     // Use LaneMaker's ConnectRays to generate proper road geometry
-    // (Line + Arc + Line, or Spiral, or Bezier with G1 continuity)
     double startDirX = m_lmRoadStartDir ? m_lmRoadStartDir->x : 1.0;
     double startDirY = m_lmRoadStartDir ? m_lmRoadStartDir->y : 0.0;
     double endDirX = m_lmRoadEndDir ? m_lmRoadEndDir->x : (m_lmRoadEnd->x - m_lmRoadStart->x);
@@ -362,6 +414,76 @@ void RoadStudioStore::cancelLmRoad() {
     m_lmRoadEnd = std::nullopt;
     m_lmRoadEndDir = std::nullopt;
     m_previewPoint = std::nullopt;
+    m_stagedGeometries.clear();
+    m_directionHandleActive = false;
+    m_directionHandlePos = std::nullopt;
+    m_snapToRoad = false;
+    emit lmRoadStateChanged();
+}
+
+// --- Staged geometry workflow ---
+
+void RoadStudioStore::stageGeometry(roads::StagedGeometry geo) {
+    m_stagedGeometries.append(std::move(geo));
+    m_log.info("Staged geometry segment, total:", m_stagedGeometries.size());
+    emit lmRoadStateChanged();
+}
+
+void RoadStudioStore::popStagedGeometry() {
+    if (!m_stagedGeometries.isEmpty()) {
+        m_stagedGeometries.removeLast();
+        m_log.info("Popped staged geometry, remaining:", m_stagedGeometries.size());
+        emit lmRoadStateChanged();
+    }
+}
+
+void RoadStudioStore::clearStagedGeometry() {
+    m_stagedGeometries.clear();
+    emit lmRoadStateChanged();
+}
+
+void RoadStudioStore::setDirectionHandle(roads::Point2D pos, double angle) {
+    m_directionHandleActive = true;
+    m_directionHandlePos = pos;
+    m_directionHandleAngle = angle;
+    emit lmRoadStateChanged();
+}
+
+void RoadStudioStore::updateDirectionHandleAngle(double angle) {
+    m_directionHandleAngle = angle;
+    emit lmRoadStateChanged();
+}
+
+void RoadStudioStore::clearDirectionHandle() {
+    m_directionHandleActive = false;
+    m_directionHandlePos = std::nullopt;
+    emit lmRoadStateChanged();
+}
+
+// --- Lane config ---
+
+void RoadStudioStore::setLaneConfig(const roads::LaneConfig& config) {
+    m_laneConfig = config;
+    emit configChanged();
+}
+
+void RoadStudioStore::setLeftLaneCount(int count) {
+    m_laneConfig.left.laneCount = std::max(0, count);
+    emit configChanged();
+}
+
+void RoadStudioStore::setRightLaneCount(int count) {
+    m_laneConfig.right.laneCount = std::max(0, count);
+    emit configChanged();
+}
+
+// --- Snap ---
+
+void RoadStudioStore::setSnapToRoad(bool snapping, const QString& roadId, double s, bool isExtend) {
+    m_snapToRoad = snapping;
+    m_snapRoadId = roadId;
+    m_snapS = s;
+    m_snapIsExtend = isExtend;
     emit lmRoadStateChanged();
 }
 

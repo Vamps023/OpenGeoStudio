@@ -16,6 +16,7 @@
 #include "RoadViewport3D.hpp"
 #include "widgets/RoadStudioToolbar.hpp"
 #include "widgets/RoadElevationEditor.hpp"
+#include "widgets/LaneConfigWidget.hpp"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -56,6 +57,10 @@ public:
         // Elevation editor (bottom panel, collapsible)
         m_elevationEditor = new RoadElevationEditor(m_store, this);
         layout->addWidget(m_elevationEditor);
+
+        // Lane config widget (shown in road/lane modes)
+        m_laneConfig = new LaneConfigWidget(m_store, this);
+        layout->addWidget(m_laneConfig);
 
         // Connect store changes
         connect(m_store, &RoadStudioStore::roadsChanged, this, &RoadStudioWidget::onRoadsChanged);
@@ -111,4 +116,5 @@ private:
     RoadViewport2D* m_viewport2d = nullptr;
     RoadViewport3D* m_viewport3d = nullptr;
     RoadElevationEditor* m_elevationEditor = nullptr;
+    LaneConfigWidget* m_laneConfig = nullptr;
 };

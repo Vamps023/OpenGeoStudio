@@ -75,6 +75,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     // Coordinate conversion
@@ -88,13 +89,27 @@ private:
     void drawRoad(QPainter& p, const roads::Road& road);
     void drawControlPoints(QPainter& p, const roads::Road& road);
     void drawLaneMakerPreview(QPainter& p);
+    void drawDirectionHandle(QPainter& p);
+    void drawStagedPreview(QPainter& p);
+    void drawFlexPreview(QPainter& p);
+    void drawSnapIndicator(QPainter& p);
+    void drawDestroyPreview(QPainter& p);
     void drawSelection(QPainter& p);
     void drawDebugLayers(QPainter& p);
+    void drawLaneConfigOverlay(QPainter& p);
 
     // Interaction
     void handleClick(const QPointF& pos);
     void handleLmRoadClick(const QPointF& pos);
+    void handleDestroyClick(const QPointF& pos);
+    void handleModifyClick(const QPointF& pos);
     roads::ControlPoint* hitTestControlPoint(const QPointF& pos, QString& outRoadId);
+    bool hitTestDirectionHandle(const QPointF& pos);
+    roads::Road* hitTestRoad(const QPointF& pos, double& outS);
+
+    // Geometry generation for flex preview
+    roads::StagedGeometry generateFlexGeometry(roads::Point2D start, roads::Vec2 startDir,
+                                                roads::Point2D end, roads::Vec2 endDir);
 
     RoadStudioStore* m_store;
     MapViewportWidget* m_map;
@@ -112,4 +127,16 @@ private:
     QPointF m_lastPanPos;
     roads::ControlPoint* m_draggingPoint = nullptr;
     QString m_draggingRoadId;
+
+    // Direction handle dragging
+    bool m_draggingDirHandle = false;
+    double m_dirHandleDragOffset = 0;
+
+    // Destroy mode state
+    roads::Road* m_destroyTarget = nullptr;
+    double m_destroyS1 = 0, m_destroyS2 = 0;
+
+    // Flex preview cache
+    roads::StagedGeometry m_flexPreview;
+    bool m_flexValid = false;
 };

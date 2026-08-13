@@ -10,6 +10,11 @@
 #include <QFont>
 #include <cmath>
 
+#ifdef ENABLE_LANEMAKER
+#include "curve_fitting.h"
+#include "Geometries/RoadGeometry.h"
+#endif
+
 // ============================================================
 // RoadViewport2D
 // ============================================================
@@ -154,15 +159,29 @@ void RoadOverlayWidget::paintEvent(QPaintEvent*) {
     // Draw roads
     drawRoads(p);
 
-    // Draw LaneMaker preview if active
-    if (m_store->isLmRoadActive()) {
+    const auto tool = m_store->tool();
+
+    // Draw LaneMaker preview if active (road creation mode)
+    if (tool == roads::Tool::Road) {
+        drawStagedPreview(p);
+        drawFlexPreview(p);
+        drawDirectionHandle(p);
         drawLaneMakerPreview(p);
+        drawSnapIndicator(p);
+    }
+
+    // Draw destroy preview
+    if (tool == roads::Tool::Destroy) {
+        drawDestroyPreview(p);
     }
 
     // Draw debug layers if enabled
     if (m_store->debugMode()) {
         drawDebugLayers(p);
     }
+
+    // Draw mode hint
+    drawLaneConfigOverlay(p);
 }
 
 void RoadOverlayWidget::drawRoads(QPainter& p) {
@@ -369,6 +388,241 @@ void RoadOverlayWidget::drawLaneMakerPreview(QPainter& p) {
 
 void RoadOverlayWidget::drawSelection(QPainter& p) {
     // Selection highlighting is done in drawControlPoints
+}
+
+void RoadOverlayWidget::drawDirectionHandle(QPainter& p) {
+    if (!m_store->isDirectionHandleActive() || !m_store->directionHandlePos()) return;
+
+    QPointF center = localToScreen(m_store->directionHandlePos()->x,
+                                    m_store->directionHandlePos()->y);
+    double angle = m_store->directionHandleAngle();
+
+    const double innerR = 4.0 * m_ppm;
+    const double outerR = 6.0 * m_ppm;
+
+    // Draw direction handle ring (green)
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(QColor(0, 200, 0, 200), 2));
+    p.drawEllipse(center, outerR, outerR);
+    p.setPen(QPen(QColor(0, 150, 0, 150), 1));
+    p.drawEllipse(center, innerR, innerR);
+
+    // Draw direction arrow
+    QPointF arrowEnd(center.x() + std::cos(angle) * outerR * 1.5,
+                     center.y() - std::sin(angle) * outerR * 1.5);
+    p.setPen(QPen(QColor(0, 255, 0, 220), 2));
+    p.drawLine(center, arrowEnd);
+
+    // Arrowhead
+    QPointF arrow1(arrowEnd.x() - 8 * std::cos(angle - 0.4),
+                   arrowEnd.y() + 8 * std::sin(angle - 0.4));
+    QPointF arrow2(arrowEnd.x() - 8 * std::cos(angle + 0.4),
+                   arrowEnd.y() + 8 * std::sin(angle + 0.4));
+    p.drawLine(arrowEnd, arrow1);
+    p.drawLine(arrowEnd, arrow2);
+}
+
+void RoadOverlayWidget::drawStagedPreview(QPainter& p) {
+    const auto& staged = m_store->stagedGeometries();
+    if (staged.isEmpty()) return;
+
+    // Draw all staged geometry segments
+    for (const auto& geo : staged) {
+        if (geo.samples.size() < 2) continue;
+
+        // Draw centerline (solid green)
+        QPainterPath path;
+        path.moveTo(localToScreen(geo.samples[0].x, geo.samples[0].y));
+        for (int i = 1; i < geo.samples.size(); ++i) {
+            path.lineTo(localToScreen(geo.samples[i].x, geo.samples[i].y));
+        }
+        p.setPen(QPen(QColor(0, 255, 0, 200), 2));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(path);
+
+        // Draw road boundaries (lighter green)
+        double halfWidth = m_store->defaultWidth() / 2.0;
+        QPainterPath leftPath, rightPath;
+        for (int i = 0; i < geo.samples.size(); ++i) {
+            // Compute normal at each sample point
+            double dx, dy;
+            if (i < geo.samples.size() - 1) {
+                dx = geo.samples[i+1].x - geo.samples[i].x;
+                dy = geo.samples[i+1].y - geo.samples[i].y;
+            } else {
+                dx = geo.samples[i].x - geo.samples[i-1].x;
+                dy = geo.samples[i].y - geo.samples[i-1].y;
+            }
+            double len = std::sqrt(dx*dx + dy*dy);
+            if (len < 1e-9) continue;
+            double nx = -dy / len * halfWidth;
+            double ny = dx / len * halfWidth;
+
+            QPointF left = localToScreen(geo.samples[i].x + nx, geo.samples[i].y + ny);
+            QPointF right = localToScreen(geo.samples[i].x - nx, geo.samples[i].y - ny);
+            if (i == 0) {
+                leftPath.moveTo(left);
+                rightPath.moveTo(right);
+            } else {
+                leftPath.lineTo(left);
+                rightPath.lineTo(right);
+            }
+        }
+        p.setPen(QPen(QColor(100, 255, 100, 120), 1));
+        p.drawPath(leftPath);
+        p.drawPath(rightPath);
+    }
+}
+
+void RoadOverlayWidget::drawFlexPreview(QPainter& p) {
+    if (!m_flexValid || m_flexPreview.samples.size() < 2) return;
+
+    // Draw flex preview as dashed yellow line
+    QPainterPath path;
+    path.moveTo(localToScreen(m_flexPreview.samples[0].x, m_flexPreview.samples[0].y));
+    for (int i = 1; i < m_flexPreview.samples.size(); ++i) {
+        path.lineTo(localToScreen(m_flexPreview.samples[i].x, m_flexPreview.samples[i].y));
+    }
+    p.setPen(QPen(QColor(255, 255, 0, 180), 2, Qt::DashLine));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(path);
+
+    // Draw flex preview boundaries
+    double halfWidth = m_store->defaultWidth() / 2.0;
+    QPainterPath leftPath, rightPath;
+    for (int i = 0; i < m_flexPreview.samples.size(); ++i) {
+        double dx, dy;
+        if (i < m_flexPreview.samples.size() - 1) {
+            dx = m_flexPreview.samples[i+1].x - m_flexPreview.samples[i].x;
+            dy = m_flexPreview.samples[i+1].y - m_flexPreview.samples[i].y;
+        } else {
+            dx = m_flexPreview.samples[i].x - m_flexPreview.samples[i-1].x;
+            dy = m_flexPreview.samples[i].y - m_flexPreview.samples[i-1].y;
+        }
+        double len = std::sqrt(dx*dx + dy*dy);
+        if (len < 1e-9) continue;
+        double nx = -dy / len * halfWidth;
+        double ny = dx / len * halfWidth;
+
+        QPointF left = localToScreen(m_flexPreview.samples[i].x + nx, m_flexPreview.samples[i].y + ny);
+        QPointF right = localToScreen(m_flexPreview.samples[i].x - nx, m_flexPreview.samples[i].y - ny);
+        if (i == 0) {
+            leftPath.moveTo(left);
+            rightPath.moveTo(right);
+        } else {
+            leftPath.lineTo(left);
+            rightPath.lineTo(right);
+        }
+    }
+    p.setPen(QPen(QColor(255, 255, 100, 80), 1, Qt::DashLine));
+    p.drawPath(leftPath);
+    p.drawPath(rightPath);
+
+    // Draw distance hint
+    if (m_flexPreview.length > 0) {
+        QPointF mid = localToScreen(
+            (m_flexPreview.startPos.x + m_flexPreview.endPos.x) / 2.0,
+            (m_flexPreview.startPos.y + m_flexPreview.endPos.y) / 2.0);
+        p.setPen(QColor(255, 255, 255, 220));
+        QFont font = p.font();
+        font.setPointSize(10);
+        font.setBold(true);
+        p.setFont(font);
+        p.drawText(mid + QPointF(5, -5), QString::number(m_flexPreview.length, 'f', 1) + " m");
+    }
+}
+
+void RoadOverlayWidget::drawSnapIndicator(QPainter& p) {
+    if (!m_store->isSnappingToRoad()) return;
+
+    // Draw a green highlight at the snap point
+    // (The snap state is set during click handling)
+    p.setPen(QPen(QColor(0, 255, 0, 200), 2));
+    p.setBrush(QColor(0, 255, 0, 80));
+    p.drawEllipse(QPointF(width()/2.0, height()/2.0), 10, 10);
+}
+
+void RoadOverlayWidget::drawDestroyPreview(QPainter& p) {
+    if (!m_destroyTarget) return;
+
+    // Highlight the road segment that will be destroyed
+    auto samples = m_engine->sampleCenterline(*m_destroyTarget, m_store->refLat(), m_store->refLon(), 64);
+
+    double s1 = std::min(m_destroyS1, m_destroyS2);
+    double s2 = std::max(m_destroyS1, m_destroyS2);
+
+    // Find the sample range that corresponds to s1..s2
+    QPainterPath path;
+    bool started = false;
+    double totalS = 0;
+    for (size_t i = 0; i < samples.size(); ++i) {
+        if (i > 0) {
+            totalS += std::hypot(samples[i].x - samples[i-1].x, samples[i].y - samples[i-1].y);
+        }
+        if (totalS >= s1 && totalS <= s2) {
+            QPointF screen = localToScreen(samples[i].x, samples[i].y);
+            if (!started) {
+                path.moveTo(screen);
+                started = true;
+            } else {
+                path.lineTo(screen);
+            }
+        }
+    }
+
+    p.setPen(QPen(QColor(255, 0, 0, 200), 4));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(path);
+
+    // Draw instruction
+    p.setPen(QColor(255, 255, 255, 220));
+    QFont font = p.font();
+    font.setPointSize(10);
+    font.setBold(true);
+    p.setFont(font);
+    if (m_destroyS1 == m_destroyS2) {
+        p.drawText(10, height() - 20, "Click second point to select destroy range");
+    } else {
+        p.drawText(10, height() - 20, "Click again to confirm destroy");
+    }
+}
+
+void RoadOverlayWidget::drawLaneConfigOverlay(QPainter& p) {
+    const auto tool = m_store->tool();
+    if (tool == roads::Tool::Select) return;
+
+    // Draw mode hint at bottom
+    QString hint;
+    switch (tool) {
+    case roads::Tool::Road:
+        if (!m_store->isLmRoadActive()) {
+            hint = "Road Mode: Click to set start point";
+        } else if (!m_store->isDirectionHandleActive()) {
+            hint = "Click to set first segment endpoint | Esc: cancel";
+        } else {
+            hint = "Click to add segment | Drag green handle to change direction | Space: finish | Esc: undo";
+        }
+        break;
+    case roads::Tool::Lane:
+        hint = "Lane Mode: Click on a road to create lanes/ramps";
+        break;
+    case roads::Tool::Destroy:
+        hint = "Destroy Mode: Click two points on a road to destroy that segment";
+        break;
+    case roads::Tool::Modify:
+        hint = "Modify Mode: Click on a road to modify its lane profile";
+        break;
+    default:
+        break;
+    }
+
+    if (!hint.isEmpty()) {
+        p.setPen(QColor(255, 255, 255, 200));
+        QFont font = p.font();
+        font.setPointSize(9);
+        p.setFont(font);
+        p.drawText(10, height() - 5, hint);
+    }
 }
 
 void RoadOverlayWidget::drawDebugLayers(QPainter& p) {
@@ -717,7 +971,6 @@ void RoadOverlayWidget::mouseMoveEvent(QMouseEvent* event) {
         // Pan the map by dragging
         QPointF delta = pos - m_lastPanPos;
         if (m_map && m_map->map()) {
-            // Pan the map in pixels
             m_map->map()->moveBy(delta);
         }
         m_lastPanPos = pos;
@@ -725,11 +978,69 @@ void RoadOverlayWidget::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    // Update preview point for LaneMaker
-    if (m_store->isLmRoadActive() && !m_store->lmRoadEnd()) {
+    // Direction handle dragging
+    if (m_draggingDirHandle && m_store->isDirectionHandleActive() && m_store->directionHandlePos()) {
+        double localX, localY;
+        screenToLocal(pos, localX, localY);
+        double dx = localX - m_store->directionHandlePos()->x;
+        double dy = localY - m_store->directionHandlePos()->y;
+        double angle = std::atan2(dy, dx);
+        m_store->updateDirectionHandleAngle(angle);
+
+        // Re-fit the last staged geometry with the new end direction
+        if (!m_store->stagedGeometries().isEmpty()) {
+            const auto& lastGeo = m_store->stagedGeometries().last();
+            roads::Vec2 newEndDir = {std::cos(angle), std::sin(angle)};
+            auto refitted = generateFlexGeometry(lastGeo.startPos, lastGeo.startDir,
+                                                  lastGeo.endPos, newEndDir);
+            // Replace the last staged geometry
+            m_store->popStagedGeometry();
+            m_store->stageGeometry(refitted);
+        }
+        return;
+    }
+
+    // Update flex preview for LaneMaker road creation
+    if (m_store->tool() == roads::Tool::Road && m_store->isDirectionHandleActive()) {
+        double localX, localY;
+        screenToLocal(pos, localX, localY);
+
+        // Generate flex preview from last staged end to cursor
+        auto lastEnd = m_store->directionHandlePos().value();
+        auto lastDir = roads::Vec2{std::cos(m_store->directionHandleAngle()),
+                                    std::sin(m_store->directionHandleAngle())};
+        roads::Point2D cursor = {localX, localY};
+
+        double dx = cursor.x - lastEnd.x;
+        double dy = cursor.y - lastEnd.y;
+        double len = std::sqrt(dx*dx + dy*dy);
+        roads::Vec2 cursorDir = len > 1e-6 ? roads::Vec2{dx/len, dy/len} : lastDir;
+
+        m_flexPreview = generateFlexGeometry(lastEnd, lastDir, cursor, cursorDir);
+        m_flexValid = m_flexPreview.length > 1.0;
+        update();
+        return;
+    }
+
+    // Update preview point for LaneMaker (before first segment)
+    if (m_store->tool() == roads::Tool::Road && m_store->isLmRoadActive() && !m_store->isDirectionHandleActive()) {
         double localX, localY;
         screenToLocal(pos, localX, localY);
         m_store->setPreviewPoint({localX, localY});
+
+        // Generate flex preview from start to cursor
+        auto start = m_store->lmRoadStart().value();
+        auto startDir = m_store->lmRoadStartDir().value_or(roads::Vec2{1.0, 0.0});
+        roads::Point2D cursor = {localX, localY};
+        double dx = cursor.x - start.x;
+        double dy = cursor.y - start.y;
+        double len = std::sqrt(dx*dx + dy*dy);
+        roads::Vec2 endDir = len > 1e-6 ? roads::Vec2{dx/len, dy/len} : startDir;
+
+        m_flexPreview = generateFlexGeometry(start, startDir, cursor, endDir);
+        m_flexValid = m_flexPreview.length > 1.0;
+        update();
+        return;
     }
 
     // Dragging control point
@@ -748,6 +1059,7 @@ void RoadOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
         setCursor(Qt::ArrowCursor);
     }
     m_draggingPoint = nullptr;
+    m_draggingDirHandle = false;
 }
 
 void RoadOverlayWidget::wheelEvent(QWheelEvent* event) {
@@ -764,17 +1076,54 @@ void RoadOverlayWidget::wheelEvent(QWheelEvent* event) {
     update();
 }
 
+void RoadOverlayWidget::keyPressEvent(QKeyEvent* event) {
+    switch (event->key()) {
+    case Qt::Key_Escape:
+        // Cancel: pop last staged geometry, or cancel entire session
+        if (!m_store->stagedGeometries().isEmpty()) {
+            m_store->popStagedGeometry();
+            if (m_store->stagedGeometries().isEmpty()) {
+                m_store->clearDirectionHandle();
+            } else {
+                // Reset direction handle to end of last staged
+                const auto& last = m_store->stagedGeometries().last();
+                double angle = std::atan2(last.endDir.y, last.endDir.x);
+                m_store->setDirectionHandle(last.endPos, angle);
+            }
+        } else if (m_store->isLmRoadActive()) {
+            m_store->cancelLmRoad();
+        } else {
+            QWidget::keyPressEvent(event);
+        }
+        break;
+    case Qt::Key_Space:
+    case Qt::Key_Return:
+        // Confirm: finish the road
+        if (m_store->isLmRoadActive()) {
+            m_store->finishLmRoad();
+        }
+        break;
+    default:
+        QWidget::keyPressEvent(event);
+        break;
+    }
+    update();
+}
+
 void RoadOverlayWidget::handleClick(const QPointF& pos) {
     const auto tool = m_store->tool();
 
     if (tool == roads::Tool::Road) {
         handleLmRoadClick(pos);
+    } else if (tool == roads::Tool::Destroy) {
+        handleDestroyClick(pos);
+    } else if (tool == roads::Tool::Modify) {
+        handleModifyClick(pos);
     } else {
         // Select tool — hit test control points
         QString roadId;
         auto* cp = hitTestControlPoint(pos, roadId);
         if (cp) {
-            // Find the index of this control point in the road
             auto* road = m_store->getRoad(roadId);
             int pointIdx = -1;
             if (road) {
@@ -802,16 +1151,220 @@ void RoadOverlayWidget::handleLmRoadClick(const QPointF& pos) {
     double localX, localY;
     screenToLocal(pos, localX, localY);
 
-    if (!m_store->isLmRoadActive()) {
-        // First click — set start point with default direction (east)
-        m_store->startLmRoad({localX, localY}, {1.0, 0.0});
-    } else if (!m_store->lmRoadEnd()) {
-        // Second click — set end point
-        m_store->setLmRoadEnd({localX, localY});
-    } else {
-        // Third click — finish the road
-        m_store->finishLmRoad();
+    // Check if clicking on direction handle
+    if (m_store->isDirectionHandleActive() && hitTestDirectionHandle(pos)) {
+        m_draggingDirHandle = true;
+        return;
     }
+
+    if (!m_store->isLmRoadActive()) {
+        // First click — set start point
+        // Default direction: toward the cursor (or east if cursor is at same point)
+        roads::Point2D start = {localX, localY};
+        roads::Vec2 dir = {1.0, 0.0};
+
+        // Check snap to existing road
+        double snapS;
+        auto* snapRoad = hitTestRoad(pos, snapS);
+        if (snapRoad && m_store->snapEnabled()) {
+            // Snap to road endpoint
+            if (snapS < 5.0 && snapRoad->points.size() >= 2) {
+                // Snap to start
+                start = {
+                    (snapRoad->points[0].lat - m_store->refLat()) * 111320.0,
+                    (snapRoad->points[0].lon - m_store->refLon()) * 111320.0 * std::cos(m_store->refLat() * M_PI / 180.0)
+                };
+                // Direction from first to second point
+                if (snapRoad->points.size() >= 2) {
+                    double dx = (snapRoad->points[1].lon - snapRoad->points[0].lon) * 111320.0 * std::cos(m_store->refLat() * M_PI / 180.0);
+                    double dy = (snapRoad->points[1].lat - snapRoad->points[0].lat) * 111320.0;
+                    double len = std::sqrt(dx*dx + dy*dy);
+                    if (len > 1e-6) dir = {dx/len, dy/len};
+                }
+                m_store->setSnapToRoad(true, snapRoad->id, 0, true);
+            } else if (snapS > 0 && snapRoad->points.size() >= 2) {
+                // Snap to end — compute direction from last segment
+                int n = snapRoad->points.size();
+                start = {
+                    (snapRoad->points[n-1].lat - m_store->refLat()) * 111320.0,
+                    (snapRoad->points[n-1].lon - m_store->refLon()) * 111320.0 * std::cos(m_store->refLat() * M_PI / 180.0)
+                };
+                double dx = (snapRoad->points[n-1].lon - snapRoad->points[n-2].lon) * 111320.0 * std::cos(m_store->refLat() * M_PI / 180.0);
+                double dy = (snapRoad->points[n-1].lat - snapRoad->points[n-2].lat) * 111320.0;
+                double len = std::sqrt(dx*dx + dy*dy);
+                if (len > 1e-6) dir = {dx/len, dy/len};
+                m_store->setSnapToRoad(true, snapRoad->id, snapS, true);
+            }
+        }
+
+        m_store->startLmRoad(start, dir);
+    } else if (!m_store->isDirectionHandleActive()) {
+        // No staged geometry yet — this click sets the first segment
+        auto start = m_store->lmRoadStart().value();
+        auto startDir = m_store->lmRoadStartDir().value_or(roads::Vec2{1.0, 0.0});
+
+        roads::Point2D end = {localX, localY};
+        // End direction: from start to end
+        double dx = end.x - start.x;
+        double dy = end.y - start.y;
+        double len = std::sqrt(dx*dx + dy*dy);
+        roads::Vec2 endDir = len > 1e-6 ? roads::Vec2{dx/len, dy/len} : roads::Vec2{1.0, 0.0};
+
+        // Generate geometry using ConnectRays
+        auto geo = generateFlexGeometry(start, startDir, end, endDir);
+
+        if (geo.length > 1.0) {
+            m_store->stageGeometry(geo);
+
+            // Set direction handle at the end of this segment
+            double endAngle = std::atan2(geo.endDir.y, geo.endDir.x);
+            m_store->setDirectionHandle(geo.endPos, endAngle);
+        }
+    } else {
+        // Direction handle is active — this click stages another segment
+        // The flex preview shows where the next segment will go
+        if (m_flexValid && m_flexPreview.length > 1.0) {
+            m_store->stageGeometry(m_flexPreview);
+
+            // Update direction handle to end of new segment
+            double endAngle = std::atan2(m_flexPreview.endDir.y, m_flexPreview.endDir.x);
+            m_store->setDirectionHandle(m_flexPreview.endPos, endAngle);
+        }
+    }
+}
+
+void RoadOverlayWidget::handleDestroyClick(const QPointF& pos) {
+    double s;
+    auto* road = hitTestRoad(pos, s);
+    if (!road) return;
+
+    if (m_destroyTarget != road) {
+        m_destroyTarget = road;
+        m_destroyS1 = s;
+        m_destroyS2 = s;
+    } else {
+        m_destroyS2 = s;
+        if (m_destroyS1 > m_destroyS2) std::swap(m_destroyS1, m_destroyS2);
+
+        // Delete control points in the selected range
+        // Simple approach: remove the road if most of it is selected
+        if (m_destroyS2 - m_destroyS1 > road->points.size() * 5.0) {
+            m_store->deleteRoad(road->id);
+        }
+        m_destroyTarget = nullptr;
+    }
+    update();
+}
+
+void RoadOverlayWidget::handleModifyClick(const QPointF& pos) {
+    // Select a road to modify its lane profile
+    double s;
+    auto* road = hitTestRoad(pos, s);
+    if (road) {
+        roads::Selection sel;
+        sel.roadId = road->id;
+        m_store->setSelection(sel);
+    }
+    update();
+}
+
+bool RoadOverlayWidget::hitTestDirectionHandle(const QPointF& pos) {
+    if (!m_store->isDirectionHandleActive() || !m_store->directionHandlePos()) return false;
+
+    QPointF handleScreen = localToScreen(m_store->directionHandlePos()->x,
+                                          m_store->directionHandlePos()->y);
+    double dist = std::hypot(handleScreen.x() - pos.x(), handleScreen.y() - pos.y());
+
+    // Inner radius ~4m, outer ~6m in screen pixels
+    double innerPx = 4.0 * m_ppm;
+    double outerPx = 6.0 * m_ppm;
+    return dist >= innerPx && dist <= outerPx;
+}
+
+roads::Road* RoadOverlayWidget::hitTestRoad(const QPointF& pos, double& outS) {
+    double localX, localY;
+    screenToLocal(pos, localX, localY);
+
+    double bestDist = 15.0; // 15px tolerance
+    roads::Road* bestRoad = nullptr;
+    double bestS = 0;
+
+    for (auto& road : m_store->roads()) {
+        if (road.points.size() < 2) continue;
+        auto samples = m_engine->sampleCenterline(road, m_store->refLat(), m_store->refLon(), 64);
+        for (size_t i = 0; i < samples.size(); ++i) {
+            QPointF screen = localToScreen(samples[i].x, samples[i].y);
+            double dist = std::hypot(screen.x() - pos.x(), screen.y() - pos.y());
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestRoad = m_store->getRoad(road.id);
+                // Approximate s along the road
+                double totalS = 0;
+                for (size_t j = 1; j <= i && j < samples.size(); ++j) {
+                    totalS += std::hypot(samples[j].x - samples[j-1].x, samples[j].y - samples[j-1].y);
+                }
+                bestS = totalS;
+            }
+        }
+    }
+
+    if (bestRoad) outS = bestS;
+    return bestRoad;
+}
+
+roads::StagedGeometry RoadOverlayWidget::generateFlexGeometry(
+    roads::Point2D start, roads::Vec2 startDir,
+    roads::Point2D end, roads::Vec2 endDir) {
+
+    roads::StagedGeometry geo;
+    geo.startPos = start;
+    geo.startDir = startDir;
+    geo.endPos = end;
+    geo.endDir = endDir;
+
+#ifdef ENABLE_LANEMAKER
+    // Use LaneMaker's ConnectRays
+    odr::Vec2D startPos = {start.x, start.y};
+    odr::Vec2D startHdg = {startDir.x, startDir.y};
+    odr::Vec2D endPos = {end.x, end.y};
+    odr::Vec2D endHdg = {endDir.x, endDir.y};
+
+    try {
+        auto geometry = LM::ConnectRays(startPos, startHdg, endPos, endHdg);
+        if (geometry && geometry->length > 0) {
+            geo.length = geometry->length;
+            const int numSamples = 32;
+            for (int i = 0; i <= numSamples; ++i) {
+                double s = geo.length * i / numSamples;
+                auto pt = geometry->get_point(s);
+                geo.samples.append({pt[0], pt[1]});
+            }
+            // Get end direction from geometry
+            auto grad = geometry->get_grad(geo.length);
+            double len = std::sqrt(grad[0]*grad[0] + grad[1]*grad[1]);
+            if (len > 1e-9) {
+                geo.endDir = {grad[0]/len, grad[1]/len};
+            }
+            return geo;
+        }
+    } catch (...) {
+        // Fall through to line fallback
+    }
+#endif
+
+    // Fallback: straight line
+    double dx = end.x - start.x;
+    double dy = end.y - start.y;
+    geo.length = std::sqrt(dx*dx + dy*dy);
+    const int numSamples = 32;
+    for (int i = 0; i <= numSamples; ++i) {
+        double t = static_cast<double>(i) / numSamples;
+        geo.samples.append({start.x + dx * t, start.y + dy * t});
+    }
+    if (geo.length > 1e-6) {
+        geo.endDir = {dx/geo.length, dy/geo.length};
+    }
+    return geo;
 }
 
 roads::ControlPoint* RoadOverlayWidget::hitTestControlPoint(const QPointF& pos,
