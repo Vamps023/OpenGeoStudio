@@ -13,8 +13,12 @@
 #include <QOpenGLVertexArrayObject>
 #include <qvector2d.h>
 #include <QMatrix4x4>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QImage>
 #include <optional>
 #include <map>
+#include <vector>
 
 namespace LM
 {
@@ -46,9 +50,10 @@ namespace LM
 		void SetViewMode(ViewMode mode);
 		ViewMode GetViewMode() const { return m_viewMode; }
 
-		// Map background — load a satellite image tile as the OpenGL background
-		void SetMapBackground(const QImage& tileImage, double centerLat, double centerLon, double scale);
+		// Map background — dynamic tile-based satellite imagery
+		void SetMapCenter(double lat, double lon);
 		void ClearMapBackground();
+		void UpdateMapTiles(); // called on pan/zoom to load visible tiles
 
 		// permanent objects only
 		void UpdateObject(unsigned int objectID, uint8_t flag);
@@ -147,15 +152,26 @@ namespace LM
         // 2D/3D view mode
         ViewMode m_viewMode = ViewMode::Perspective3D;
 
-        // Map background texture (satellite imagery)
-        std::unique_ptr<QOpenGLTexture> m_mapTexture;
-        double m_mapCenterLat = 0;
-        double m_mapCenterLon = 0;
-        double m_mapScale = 1.0; // meters per pixel
-        double m_mapWorldExtent = 1000.0; // world units (meters) covered by texture
-        bool m_mapTextureValid = false;
+        // Dynamic tile cache for satellite map
+        struct MapTile {
+            int z, x, y; // tile coordinates
+            std::unique_ptr<QOpenGLTexture> texture;
+            double worldX, worldY; // center in world meters
+            double worldSize; // size in world meters
+            bool loading = false;
+        };
+        std::vector<std::unique_ptr<MapTile>> m_mapTiles;
+        double m_mapCenterLat = 18.52;
+        double m_mapCenterLon = 73.85;
+        double m_mapOriginX = 0; // world X for map center (meters)
+        double m_mapOriginY = 0; // world Y for map center (meters)
+        int m_mapZoom = 16;
+        bool m_mapEnabled = false;
+        QNetworkAccessManager* m_tileNam = nullptr;
+        int m_lastTileZoom = -1;
+        double m_lastCameraX = 0, m_lastCameraY = 0, m_lastCameraZ = 0;
 
-        // Shader for textured background quad
+        // Shader for textured tiles
         QOpenGLShaderProgram m_texturedShader;
         QOpenGLBuffer m_bgQuadVbo;
         QOpenGLVertexArrayObject m_bgQuadVao;
@@ -163,6 +179,11 @@ namespace LM
 
         void initTexturedShader();
         void drawMapBackground();
+        void requestTile(int z, int x, int y);
+        void pruneInvisibleTiles();
+        static void latLonToTile(double lat, double lon, int z, int& tx, int& ty);
+        static void tileToLatLon(int tx, int ty, int z, double& lat, double& lon);
+        static double metersPerPixel(double lat, int z);
 	};
 
 	extern MapViewGL* g_mapViewGL;

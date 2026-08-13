@@ -314,106 +314,12 @@ void MainWidget::toggleViewMode(bool checked)
 
 void MainWidget::loadMapBackground()
 {
-        // Fetch Esri World Imagery tiles and composite them into a single image
-    // for use as the OpenGL background texture.
-    // Default center: Pune, India (lat=18.52, lon=73.85) at zoom 16
-    const double lat = 18.52;
+    // Set the map center — the dynamic tile loader in MapViewGL will
+    // automatically fetch visible tiles at the appropriate zoom level.
+    const double lat = 18.52;  // Pune, India
     const double lon = 73.85;
-    const int zoom = 16;
-
-    // Convert lat/lon to tile coordinates (fractional)
-    double n = std::pow(2.0, zoom);
-    double xtile_f = (lon + 180.0) / 360.0 * n;
-    double ytile_f = (1.0 - std::log(std::tan(lat * M_PI / 180.0) +
-                 1.0 / std::cos(lat * M_PI / 180.0)) / M_PI) / 2.0 * n;
-
-    int xtile = int(xtile_f);
-    int ytile = int(ytile_f);
-
-    // Fetch a 3x3 grid of tiles around the center for a larger coverage area
-    const int gridRadius = 1; // 3x3 grid
-    const int gridSize = 2 * gridRadius + 1;
-    const int tileSize = 256;
-    const int compositeSize = gridSize * tileSize;
-
-    // Create a composite image to hold all tiles
-    auto* compositeImage = new QImage(compositeSize, compositeSize, QImage::Format_RGB32);
-    compositeImage->fill(Qt::darkGray);
-
-    auto* nam = new QNetworkAccessManager(this);
-    int tilesToLoad = gridSize * gridSize;
-    auto* tilesLoaded = new int(0);
-
-    qDebug() << "[MainWidget] Fetching" << tilesToLoad << "map tiles at zoom" << zoom;
-
-    for (int dx = -gridRadius; dx <= gridRadius; dx++)
-    {
-        for (int dy = -gridRadius; dy <= gridRadius; dy++)
-        {
-            int tx = xtile + dx;
-            int ty = ytile + dy;
-
-            // Esri tile URL: /tile/{z}/{y}/{x}
-            QString url = QString(
-                "https://server.arcgisonline.com/ArcGIS/rest/services/"
-                "World_Imagery/MapServer/tile/%1/%2/%3")
-                .arg(zoom).arg(ty).arg(tx);
-
-            QNetworkRequest request(url);
-            request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
-            auto* reply = nam->get(request);
-
-            connect(reply, &QNetworkReply::finished, this, [this, reply, nam, tilesLoaded,
-                         compositeImage, tilesToLoad, dx, dy, gridRadius, tileSize,
-                         lat, lon, zoom]() {
-                if (reply->error() == QNetworkReply::NoError)
-                {
-                    QImage tileImage;
-                    if (tileImage.loadFromData(reply->readAll()))
-                    {
-                        // Paint tile into the composite image
-                        int px = (dx + gridRadius) * tileSize;
-                        int py = (dy + gridRadius) * tileSize;
-                        QPainter painter(compositeImage);
-                        painter.drawImage(px, py, tileImage);
-                        painter.end();
-                        qDebug() << "[MainWidget] Tile loaded at" << dx << dy;
-                    }
-                    else
-                    {
-                        qWarning() << "[MainWidget] Failed to decode tile image at" << dx << dy;
-                    }
-                }
-                else
-                {
-                    qWarning() << "[MainWidget] Network error for tile at" << dx << dy << ":" << reply->errorString();
-                }
-
-                (*tilesLoaded)++;
-                reply->deleteLater();
-
-                // When all tiles are loaded, set the background
-                if (*tilesLoaded >= tilesToLoad)
-                {
-                    // Calculate meters-per-pixel at this lat/zoom
-                    const double earthCircumference = 40075016.686;
-                    double metersPerPixel = earthCircumference * std::cos(lat * M_PI / 180.0) /
-                                            std::pow(2.0, zoom);
-
-                    if (!compositeImage->isNull())
-                    {
-                        mapViewGL->SetMapBackground(*compositeImage, lat, lon, metersPerPixel);
-                        qDebug() << "[MainWidget] Map background set — composite" 
-                                 << compositeImage->width() << "x" << compositeImage->height();
-                    }
-
-                    delete compositeImage;
-                    delete tilesLoaded;
-                    nam->deleteLater();
-                }
-            });
-        }
-    }
+    mapViewGL->SetMapCenter(lat, lon);
+    qDebug() << "[MainWidget] Map center set, dynamic tile loading enabled";
 }
 
 void MainWidget::setupMapBackground()
