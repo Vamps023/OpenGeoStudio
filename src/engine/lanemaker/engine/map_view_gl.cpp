@@ -243,6 +243,7 @@ namespace LM
 
     void MapViewGL::initializeGL()
     {
+        m_painting = false;
         initializeOpenGLFunctions();
 
         // draw both sides of faces
@@ -272,11 +273,15 @@ namespace LM
 
     void MapViewGL::paintGL()
     {
+        // Prevent recursive paintGL calls (Qt 6 may trigger reinitialization)
+        if (m_painting) return;
+        m_painting = true;
+
         MainWidget::Instance()->Painted();
         // update cached world2view matrix
-        m_worldToView = m_projection * m_camera.toMatrix();// *m_transform.toMatrix();
+        m_worldToView = m_projection * m_camera.toMatrix();
 
-        const qreal retinaScale = devicePixelRatio(); // needed for Macs with retina display
+        const qreal retinaScale = devicePixelRatio();
         glViewport(0, 0, width() * retinaScale, height() * retinaScale);
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -293,13 +298,14 @@ namespace LM
         }
 
         QPainter painter(this);
-        
+
         for (auto& id_btn : sceneTiedLayovers)
         {
             auto& btn = id_btn.second;
             painter.drawPixmap(btn.renderedRect(m_worldToView), btn.icon);
         }
         painter.end();
+        m_painting = false;
     }
 
     void MapViewGL::mousePressEvent(QMouseEvent* event)

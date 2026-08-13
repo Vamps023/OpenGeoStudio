@@ -253,7 +253,7 @@ private:
     QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
-    // RoadInspector removed — LaneMaker's AppMainWindow has its own UI
+    // RoadInspector removed — LaneMaker's MainWindow has its own UI
 #if defined(HAVE_MAPLIBRE)
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
@@ -432,7 +432,7 @@ private:
         }
 #endif
 
-        // Page 2: Road Studio (LaneMaker's AppMainWindow — full road editor)
+        // Page 2: Road Studio (LaneMaker's MainWindow — full road editor)
         m_roadStudioWidget = new RoadStudioWidget();
         m_centerStack->addWidget(m_roadStudioWidget);
 
@@ -518,7 +518,7 @@ private slots:
             m_rightDock->setVisible(false);
         } else if (ws.id == "road-studio") {
             m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
-            // LaneMaker's AppMainWindow has its own toolbar, lane config, etc.
+            // LaneMaker's MainWindow has its own toolbar, lane config, etc.
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
         } else if (ws.id == "train-studio") {
@@ -732,5 +732,4 @@ int main(int argc, char* argv[]) {
 }
 
 #include "main.moc"
-
 

@@ -129,6 +129,7 @@ namespace LM
 		std::map<uint32_t, SceneTiedLayover> sceneTiedLayovers;
 
         bool ignoreNextMouseRelease; // for scene buttons
+        bool m_painting = false; // recursion guard for paintGL
 	};
 
 	extern MapViewGL* g_mapViewGL;

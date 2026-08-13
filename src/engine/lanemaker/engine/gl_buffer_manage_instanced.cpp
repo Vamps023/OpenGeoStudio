@@ -173,6 +173,7 @@ namespace LM
 
     void GLBufferManageInstanced::Draw(QMatrix4x4 worldToView)
     {
+        if (m_vertexBufferData.empty() || m_instanceCount == 0 || !m_texture) return;
         m_vao.bind();
 
         if (pendingSend)
