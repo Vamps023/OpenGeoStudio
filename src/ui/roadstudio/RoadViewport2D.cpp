@@ -751,8 +751,17 @@ void RoadOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void RoadOverlayWidget::wheelEvent(QWheelEvent* event) {
-    // Let the MapLibre widget handle zoom
-    event->ignore();
+    // Forward wheel event to the MapLibre widget for zoom
+    if (m_map && m_map->map()) {
+        // Scale zoom by wheel delta
+        const double zoomStep = event->angleDelta().y() > 0 ? 0.5 : -0.5;
+        double newZoom = m_map->map()->zoom() + zoomStep;
+        m_map->map()->setZoom(newZoom);
+        event->accept();
+    } else {
+        event->ignore();
+    }
+    update();
 }
 
 void RoadOverlayWidget::handleClick(const QPointF& pos) {

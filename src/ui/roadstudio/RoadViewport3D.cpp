@@ -23,6 +23,13 @@ void RoadViewport3D::initializeGL() {
     glCullFace(GL_BACK);
 }
 
+void RoadViewport3D::showEvent(QShowEvent* event) {
+    QOpenGLWidget::showEvent(event);
+    // Refresh meshes when the 3D viewport becomes visible
+    // (the OpenGL context may not have been ready before)
+    refreshMeshes();
+}
+
 void RoadViewport3D::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
 }
