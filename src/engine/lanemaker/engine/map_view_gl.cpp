@@ -389,13 +389,16 @@ namespace LM
         m_projection.setToIdentity();
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            // Orthographic projection for 2D top-down view
+            // Orthographic projection for 2D top-down view.
+            // The view size scales with camera Z height, so wheel zoom
+            // (which changes camera Z) actually zooms the view.
             float aspect = width / float(height ? height : 1);
-            float viewSize = 300.0f; // visible world units
+            float viewSize = m_camera.translation().z() * 0.6f; // scales with camera height
+            if (viewSize < 10.0f) viewSize = 10.0f; // clamp minimum
             m_projection.ortho(
                 -viewSize * aspect, viewSize * aspect,
                 -viewSize, viewSize,
-                -2000.0f, 2000.0f
+                -5000.0f, 5000.0f
             );
         }
         else
@@ -577,6 +580,12 @@ namespace LM
             ActionManager::Instance()->Record(g_createRoadElevationOption);
             emit(MousePerformedAction(event)); // immediately repaint cursor
         }
+        else if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // In 2D orthographic mode, zoom = move camera up/down (changes ortho view size)
+            m_camera.translate(0, 0, dir * 30.0f);
+            ActionManager::Instance()->Record(m_camera);
+        }
         else
         {
             auto delta = dir * PointerDirection(lastMousePos) * 10;
@@ -705,9 +714,15 @@ namespace LM
 
     QVector3D MapViewGL::PointerDirection(QPoint cursor) const
     {
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // In orthographic top-down mode, all rays are parallel pointing straight down
+            return QVector3D(0, 0, -1);
+        }
+
         auto halfHeight = height() / 2;
         auto halfWidth = width() / 2;
-        
+
         auto focalPlanDistance = halfHeight / std::tan(M_PI / 6); // 60 deg FOV
         auto dirY = halfHeight - cursor.y();
         auto dirX = cursor.x() - halfWidth;
@@ -719,6 +734,16 @@ namespace LM
 
     QPointF MapViewGL::PixelLocation(QVector3D globalDir) const
     {
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // In 2D orthographic mode, project world coords to screen
+            float retinaScale = devicePixelRatio();
+            QVector3D clipPos = (m_projection * m_camera.toMatrix()).mapVector(globalDir);
+            float xPixel = (clipPos.x() + 1.0f) * 0.5f * width() * retinaScale;
+            float yPixel = (1.0f - clipPos.y()) * 0.5f * height() * retinaScale;
+            return QPointF(xPixel, yPixel);
+        }
+
         QVector3D localPos = m_camera.toMatrix().mapVector(globalDir);
 
         auto halfHeight = height() / 2;
@@ -733,6 +758,39 @@ namespace LM
 
     QVector2D MapViewGL::PointerOnGround(QPoint cursor) const
     {
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // In orthographic top-down mode, unproject screen coords to world coords
+            // using the inverse of the full view-projection matrix.
+            // The ground plane is at z=0.
+            float retinaScale = devicePixelRatio();
+            float sx = cursor.x() * retinaScale;
+            float sy = cursor.y() * retinaScale;
+            float vp_h = height() * retinaScale;
+            float vp_w = width() * retinaScale;
+
+            // Normalize to NDC: [-1, 1]
+            float ndcX = (2.0f * sx) / vp_w - 1.0f;
+            float ndcY = 1.0f - (2.0f * sy) / vp_h;
+
+            // Invert the view-projection matrix
+            QMatrix4x4 viewProj = m_projection * m_camera.toMatrix();
+            QMatrix4x4 inv = viewProj.inverted();
+
+            // Unproject two points at NDC z=-1 and z=1, then intersect with z=0 plane
+            QVector3D pNear = inv.map(QVector3D(ndcX, ndcY, -1.0f));
+            QVector3D pFar  = inv.map(QVector3D(ndcX, ndcY,  1.0f));
+
+            // Intersect with z=0 plane: p = pNear + t*(pFar-pNear), solve p.z=0
+            float denom = pFar.z() - pNear.z();
+            if (std::abs(denom) < 1e-6f)
+                return QVector2D(pNear.x(), pNear.y()); // parallel — shouldn't happen in 2D
+            float t = -pNear.z() / denom;
+            QVector3D worldPos = pNear + t * (pFar - pNear);
+            return QVector2D(worldPos.x(), worldPos.y());
+        }
+
+        // Original perspective code
         QVector3D dir = PointerDirection(cursor);
         auto length = -m_camera.translation().z() / dir.z();
         return QVector2D(m_camera.translation() + length * dir);
