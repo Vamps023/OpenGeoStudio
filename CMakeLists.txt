@@ -124,59 +124,126 @@ target_link_libraries(road_engine PUBLIC nlohmann_json::nlohmann_json)
 # Alias target for namespaced access (matches existing convention)
 add_library(road_engine::core ALIAS road_engine)
 
-# ─── LaneMaker Library (optional — requires CGAL, Boost, spdlog) ──
-# LaneMaker has heavy dependencies (CGAL, GMP, MPFR, Boost, spdlog).
-# It is not needed for the initial Qt skeleton. Enable with:
-#   cmake -B build -DENABLE_LANEMAKER=ON
+# ─── LaneMaker Library (requires CGAL, Boost, spdlog, cereal, Qt6) ──
+# LaneMaker is now the authoritative road model.
+# It is always built (not optional) since the Road Studio depends on it.
 #
-option(ENABLE_LANEMAKER "Build LaneMaker library (requires CGAL, Boost, spdlog)" OFF)
+find_package(CGAL REQUIRED)
+find_package(Boost REQUIRED)
+find_package(spdlog REQUIRED)
+find_package(cereal CONFIG REQUIRED)
 
-if(ENABLE_LANEMAKER)
-    find_package(CGAL REQUIRED)
-    find_package(Boost REQUIRED)
-    find_package(spdlog REQUIRED)
+# LaneMaker XODR sources
+file(GLOB LANEMAKER_XODR_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr/*.cpp
+)
+# LaneMaker libOpenDRIVE sources
+file(GLOB LANEMAKER_LIBOPENDRIVE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/*.cpp
+)
+# LaneMaker engine sources (OpenGL rendering, buffers, camera, spatial indexer)
+file(GLOB LANEMAKER_ENGINE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/engine/*.cpp
+)
+# LaneMaker UI sources (road drawing sessions, road graphics, action manager)
+set(LANEMAKER_UI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_graphics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_drawing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/lane_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_destruction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_modification.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/road_overlaps.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/action_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/touch_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_widget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_window.cpp
+)
+# LaneMaker widget sources
+set(LANEMAKER_WIDGET_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/AnimatedPopupDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/DrawOptionDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/LaneConfigWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/replay_window.cpp
+)
+# LaneMaker util sources
+set(LANEMAKER_UTIL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util/preference.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util/stats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util/multi_segment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util/triangulation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util/label_with_link.cpp
+)
+# LaneMaker traffic sources
+set(LANEMAKER_TRAFFIC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/traffic/vehicle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/traffic/vehicle_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/traffic/signal.cpp
+)
+# LaneMaker test/validation sources
+set(LANEMAKER_TEST_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test/validation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test/junction_validation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test/road_validation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test/randomization_utils.cpp
+)
 
-    # LaneMaker sources (Codebase C from the audit)
-    file(GLOB LANEMAKER_XODR_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr/*.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr/*.h
-    )
-    file(GLOB LANEMAKER_LIBOPENDRIVE_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/src/*.cpp
-    )
-    file(GLOB LANEMAKER_STUB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/stubs/*.cpp
-    )
+# Qt resource files for LaneMaker
+qt_add_resources(LANEMAKER_QRC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/images.qrc
+)
+qt_add_resources(LANEMAKER_SHADER_QRC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/engine/shaders.qrc
+)
 
-    add_library(lanemaker STATIC
-        ${LANEMAKER_XODR_SOURCES}
-        ${LANEMAKER_LIBOPENDRIVE_SOURCES}
-        ${LANEMAKER_STUB_SOURCES}
-    )
+add_library(lanemaker STATIC
+    ${LANEMAKER_XODR_SOURCES}
+    ${LANEMAKER_LIBOPENDRIVE_SOURCES}
+    ${LANEMAKER_ENGINE_SOURCES}
+    ${LANEMAKER_UI_SOURCES}
+    ${LANEMAKER_WIDGET_SOURCES}
+    ${LANEMAKER_UTIL_SOURCES}
+    ${LANEMAKER_TRAFFIC_SOURCES}
+    ${LANEMAKER_TEST_SOURCES}
+    ${LANEMAKER_QRC_SOURCES}
+    ${LANEMAKER_SHADER_QRC_SOURCES}
+)
 
-    target_include_directories(lanemaker
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/stubs
-    )
+target_include_directories(lanemaker
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/util
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/traffic
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test
+)
 
-    # NOMINMAX to prevent Windows min/max macros conflicting with std::min/std::max
-    # G_TEST is not defined — we're not building LaneMaker's own tests
-    target_compile_definitions(lanemaker PRIVATE NOMINMAX)
-    target_compile_definitions(lanemaker PUBLIC SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
+# NOMINMAX to prevent Windows min/max macros conflicting with std::min/std::max
+# G_TEST is not defined — we're not building LaneMaker's own tests
+target_compile_definitions(lanemaker PRIVATE NOMINMAX)
+target_compile_definitions(lanemaker PUBLIC SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
 
-    target_link_libraries(lanemaker
-        PUBLIC
-            CGAL::CGAL
-            Boost::boost
-            spdlog::spdlog
-            road_engine::core
-    )
+target_link_libraries(lanemaker
+    PUBLIC
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        CGAL::CGAL
+        Boost::boost
+        spdlog::spdlog
+        cereal::cereal
+        road_engine::core
+)
 
-    add_library(lanemaker::core ALIAS lanemaker)
-endif()
+add_library(lanemaker::core ALIAS lanemaker)
 
 # ─── Plugin API (header-only, requires Qt) ───────────────────
 add_library(plugin_api INTERFACE)
