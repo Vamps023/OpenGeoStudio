@@ -1,7 +1,16 @@
 #pragma once
 #include <QFrame>
+#include <QTcpServer>
+#include <QTcpSocket>
 
 #include "action_defs.h"
+
+#ifdef HAVE_MAPLIBRE
+#include <QMapLibre/Map>
+#include <QMapLibre/Settings>
+#include <QMapLibre/Types>
+#include <QMapLibreWidgets/MapWidget>
+#endif
 
 QT_BEGIN_NAMESPACE
 class QLabel;
@@ -20,6 +29,21 @@ namespace LM
 
 class LaneConfigWidget;
 class DrawOptionDialog;
+
+// Minimal HTTP server to serve style JSON to MapLibre (same as MapViewportWidget)
+class LmStyleServer : public QObject {
+    Q_OBJECT
+public:
+    explicit LmStyleServer(const QByteArray& styleJson, QObject* parent = nullptr);
+    [[nodiscard]] QString styleUrl() const;
+private slots:
+    void onNewConnection();
+    void onReadyRead();
+private:
+    QTcpServer m_server;
+    QByteArray m_styleJson;
+    quint16 m_port = 0;
+};
 
 class MainWidget : public QFrame
 {
@@ -59,6 +83,7 @@ private slots:
     void gotoDragMode(bool c=true);
     void toggleViewMode(bool checked);
     void loadMapBackground();
+    void onMapMoved();
 
 private:
     static MainWidget* instance;
@@ -70,6 +95,9 @@ private:
 
     void elegantlyHandleException(std::exception);
 
+    void setupMapBackground();
+    void syncMapToCamera();
+
     LM::EditMode editMode = LM::Mode_None;
     RoadDrawingSession* drawingSession = nullptr;
 
@@ -80,6 +108,13 @@ private:
 
     LaneConfigWidget* laneConfig;
     DrawOptionDialog* drawOptionDialog;
+
+    // MapLibre background for 2D mode
+#ifdef HAVE_MAPLIBRE
+    QMapLibre::MapWidget* m_mapWidget = nullptr;
+    LmStyleServer* m_styleServer = nullptr;
+    bool m_2dMode = false;
+#endif
 
     unsigned int nRepaints = 0;
     qint64 lastUpdateFPSMS = 0;

@@ -423,11 +423,20 @@ namespace LM
         const qreal retinaScale = devicePixelRatio();
         glViewport(0, 0, width() * retinaScale, height() * retinaScale);
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            // In 2D mode, clear with transparent background so MapLibre shows through
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        }
+        else
+        {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
 
-        // Draw satellite map background (if loaded)
-        drawMapBackground();
+            // Draw satellite map background (if loaded) — only in 3D mode
+            drawMapBackground();
+        }
 
         glDisable(GL_DEPTH_TEST);
         backgroundBuffer->Draw(m_worldToView);

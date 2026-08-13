@@ -609,6 +609,12 @@ private slots:
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+
+    // Initialize LaneMaker's Qt resources (shaders, models, icons)
+    // Required because lanemaker is a static library — Qt doesn't auto-register
+    // resources from static libraries in Qt 6.
+    Q_INIT_RESOURCE(shaders);
+    Q_INIT_RESOURCE(images);
     app.setApplicationName(QStringLiteral("OpenGeoStudio"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
     app.setOrganizationName(QStringLiteral("OpenGeoStudio"));
@@ -732,4 +738,5 @@ int main(int argc, char* argv[]) {
 }
 
 #include "main.moc"
+
 

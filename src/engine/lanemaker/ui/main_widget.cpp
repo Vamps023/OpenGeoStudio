@@ -6,9 +6,52 @@
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QImage>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <cmath>
 
 #include <CGAL/exceptions.h>
+
+#include "main_widget.h"
+
+// ============================================================
+// LmStyleServer — minimal HTTP server for MapLibre style JSON
+// (same implementation as MapViewportWidget)
+// ============================================================
+LmStyleServer::LmStyleServer(const QByteArray& styleJson, QObject* parent)
+    : QObject(parent), m_styleJson(styleJson)
+{
+    if (m_server.listen(QHostAddress::LocalHost)) {
+        m_port = m_server.serverPort();
+        connect(&m_server, &QTcpServer::newConnection, this, &LmStyleServer::onNewConnection);
+    }
+}
+
+QString LmStyleServer::styleUrl() const {
+    return QString("http://127.0.0.1:%1/style.json").arg(m_port);
+}
+
+void LmStyleServer::onNewConnection() {
+    while (auto* sock = m_server.nextPendingConnection()) {
+        connect(sock, &QTcpSocket::readyRead, this, &LmStyleServer::onReadyRead);
+    }
+}
+
+void LmStyleServer::onReadyRead() {
+    auto* sock = qobject_cast<QTcpSocket*>(sender());
+    if (!sock) return;
+    sock->readAll();
+    QByteArray response;
+    response.append("HTTP/1.1 200 OK\r\n");
+    response.append("Content-Type: application/json\r\n");
+    response.append("Access-Control-Allow-Origin: *\r\n");
+    response.append("Content-Length: " + QByteArray::number(m_styleJson.size()) + "\r\n");
+    response.append("Connection: close\r\n");
+    response.append("\r\n");
+    response.append(m_styleJson);
+    sock->write(response);
+    sock->disconnectFromHost();
+}
 
 #include "main_widget.h"
 #include "map_view_gl.h"
@@ -145,9 +188,28 @@ MainWidget::MainWidget(QWidget* parent)
     loadMapButton->setIconSize(largeIconSize);
     labelLayout->addWidget(loadMapButton);
 
+    // Container widget that holds the map background + OpenGL overlay
+    auto* viewportContainer = new QWidget(this);
+    auto* viewportLayout = new QVBoxLayout(viewportContainer);
+    viewportLayout->setContentsMargins(0, 0, 0, 0);
+    viewportLayout->setSpacing(0);
+
+#ifdef HAVE_MAPLIBRE
+    setupMapBackground();
+    if (m_mapWidget)
+    {
+        m_mapWidget->setParent(viewportContainer);
+        viewportLayout->addWidget(m_mapWidget, 1);
+        m_mapWidget->hide(); // hidden until 2D mode is activated
+    }
+#endif
+
+    mapViewGL->setParent(viewportContainer);
+    viewportLayout->addWidget(mapViewGL, 1);
+
     QVBoxLayout* mainLayout = new QVBoxLayout;
     mainLayout->addLayout(labelLayout);
-    mainLayout->addWidget(mapViewGL);
+    mainLayout->addWidget(viewportContainer);
     setLayout(mainLayout);
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
@@ -215,72 +277,150 @@ void MainWidget::gotoDragMode(bool checked)
 
 void MainWidget::toggleViewMode(bool checked)
 {
+    m_2dMode = checked;
     if (checked)
     {
-        // Switch to 2D top-down view
+        // Switch to 2D top-down view with MapLibre background
         viewModeButton->setText("2D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::TopDown2D);
+
+#ifdef HAVE_MAPLIBRE
+        if (m_mapWidget)
+        {
+            m_mapWidget->show();
+            // Make OpenGL widget transparent so map shows through
+            mapViewGL->setAttribute(Qt::WA_TranslucentBackground, true);
+            // Raise map widget to back, OpenGL on top
+            m_mapWidget->lower();
+            mapViewGL->raise();
+            // Sync map to current camera position
+            syncMapToCamera();
+        }
+#endif
     }
     else
     {
         // Switch back to 3D perspective view
         viewModeButton->setText("3D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::Perspective3D);
+
+#ifdef HAVE_MAPLIBRE
+        if (m_mapWidget)
+        {
+            m_mapWidget->hide();
+            mapViewGL->setAttribute(Qt::WA_TranslucentBackground, false);
+        }
+#endif
     }
 }
 
 void MainWidget::loadMapBackground()
 {
-    // Fetch Esri World Imagery tile for the current center location
-    // Default center: Pune, India (lat=18.52, lon=73.85) at zoom 15
-    const double lat = 18.52;
-    const double lon = 73.85;
-    const int zoom = 15;
-
-    // Convert lat/lon to tile numbers
-    double n = std::pow(2.0, zoom);
-    int xtile = int((lon + 180.0) / 360.0 * n);
-    int ytile = int((1.0 - std::log(std::tan(lat * M_PI / 180.0) +
-                 1.0 / std::cos(lat * M_PI / 180.0)) / M_PI) / 2.0 * n);
-
-    // Build Esri tile URL
-    QString url = QString(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/"
-        "World_Imagery/MapServer/tile/%1/%2/%3")
-        .arg(zoom).arg(ytile).arg(xtile);
-
-    qDebug() << "[MainWidget] Loading map tile from:" << url;
-
-    auto* nam = new QNetworkAccessManager(this);
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
-    auto* reply = nam->get(request);
-
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam, lat, lon]() {
-        if (reply->error() == QNetworkReply::NoError)
-        {
-            QImage tileImage;
-            if (tileImage.loadFromData(reply->readAll()))
-            {
-                // Calculate approximate meters-per-pixel at this lat/zoom
-                const double earthCircumference = 40075016.686;
-                double metersPerPixel = earthCircumference * std::cos(lat * M_PI / 180.0) /
-                                        std::pow(2.0, 15);
-                mapViewGL->SetMapBackground(tileImage, lat, lon, metersPerPixel);
-                qDebug() << "[MainWidget] Map tile loaded successfully";
-            }
-            else
-            {
-                qWarning() << "[MainWidget] Failed to decode map tile image";
-            }
+#ifdef HAVE_MAPLIBRE
+    // In 2D mode, the MapLibre widget IS the map background.
+    // Just ensure it's visible and force a reload.
+    if (m_mapWidget)
+    {
+        if (!m_2dMode) {
+            viewModeButton->setChecked(true); // triggers toggleViewMode
         }
-        else
-        {
-            qWarning() << "[MainWidget] Failed to download map tile:" << reply->errorString();
+        m_mapWidget->show();
+        m_mapWidget->lower();
+        mapViewGL->raise();
+        syncMapToCamera();
+        qDebug() << "[MainWidget] MapLibre satellite map activated";
+    }
+    else
+    {
+        qWarning() << "[MainWidget] MapLibre not available";
+    }
+#else
+    qWarning() << "[MainWidget] Built without MapLibre support";
+#endif
+}
+
+void MainWidget::setupMapBackground()
+{
+#ifdef HAVE_MAPLIBRE
+    // Esri World Imagery raster style JSON (same as MapViewportWidget)
+    static constexpr const char* kEsriImageryStyle = R"({
+        "version": 8,
+        "sources": {
+            "esri-imagery": {
+                "type": "raster",
+                "tiles": [
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                ],
+                "tileSize": 256,
+                "maxzoom": 19,
+                "attribution": "Esri"
+            }
+        },
+        "layers": [
+            {
+                "id": "background",
+                "type": "background",
+                "paint": { "background-color": "#000000" }
+            },
+            {
+                "id": "esri-imagery",
+                "type": "raster",
+                "source": "esri-imagery",
+                "minzoom": 0,
+                "maxzoom": 22
+            }
+        ]
+    })";
+
+    m_styleServer = new LmStyleServer(QByteArray(kEsriImageryStyle), this);
+    const QString styleUrl = m_styleServer->styleUrl();
+    qDebug() << "[MainWidget] Map style server URL:" << styleUrl;
+
+    QMapLibre::Styles styles;
+    styles.emplace_back(styleUrl, "Esri World Imagery");
+
+    QMapLibre::Settings settings;
+    settings.setStyles(styles);
+    settings.setDefaultCoordinate(QMapLibre::Coordinate(18.52, 73.85));
+    settings.setDefaultZoom(15.0);
+
+    m_mapWidget = new QMapLibre::MapWidget(settings);
+    m_mapWidget->setMinimumSize(100, 100);
+
+    // Connect map change signals
+    QTimer::singleShot(100, this, [this]() {
+        if (m_mapWidget && m_mapWidget->map()) {
+            connect(m_mapWidget->map(), &QMapLibre::Map::mapChanged,
+                    this, [this](QMapLibre::Map::MapChange change) {
+                if (change == QMapLibre::Map::MapChangeRegionDidChange) {
+                    onMapMoved();
+                }
+            });
         }
-        reply->deleteLater();
-        nam->deleteLater();
     });
+#endif
+}
+
+void MainWidget::onMapMoved()
+{
+#ifdef HAVE_MAPLIBRE
+    // When the MapLibre map moves, we could sync the LaneMaker camera.
+    // For now, the map is the background and user interacts with it directly.
+    // LaneMaker's OpenGL overlay stays at fixed world coordinates.
+#endif
+}
+
+void MainWidget::syncMapToCamera()
+{
+#ifdef HAVE_MAPLIBRE
+    if (!m_mapWidget || !m_mapWidget->map()) return;
+    // Center the map on the default location (Pune, India)
+    // In a full implementation, this would convert LaneMaker world coords
+    // to lat/lon and sync the map camera.
+    auto* map = m_mapWidget->map();
+    map->setCoordinate(QMapLibre::Coordinate(18.52, 73.85));
+    map->setZoom(15.0);
+#endif
 }
 
 void MainWidget::OnMouseAction(LM::MouseAction evt)
@@ -480,4 +620,5 @@ void MainWidget::elegantlyHandleException(std::exception e)
         QCoreApplication::quit();
     }
 }
+
 

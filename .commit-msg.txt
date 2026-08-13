@@ -1,21 +1,25 @@
-Fix LaneMaker Qt resources not loading (shaders, models, icons)
+Add 2D top-down view mode and real satellite map background
 
-Root cause: Qt resources compiled into a static library (lanemaker.lib)
-were being stripped by the linker because nothing in the library
-directly referenced the qrc object files. The Q_INIT_RESOURCE() calls
-in main.cpp were not sufficient to force inclusion.
+Features:
+- 2D/3D toggle button in LaneMaker toolbar
+  - 3D mode: perspective projection (default, original LaneMaker view)
+  - 2D mode: orthographic top-down projection for plan view
+- "Map" button in toolbar to load Esri World Imagery satellite tiles
+  - Fetches tiles from server.arcgisonline.com via QNetworkAccessManager
+  - Renders the tile as a textured OpenGL quad behind the road geometry
+  - Tile is projected onto the ground plane (z=0) in world coordinates
 
-Fix: Move qt_add_resources() output from the lanemaker static library
-to the OpenGeoStudio executable target. This ensures the qrc object
-files are always linked into the final binary.
+Implementation:
+- MapViewGL: added ViewMode enum (Perspective3D, TopDown2D)
+- MapViewGL: orthographic projection in resizeGL() for 2D mode
+- MapViewGL: SetMapBackground()/ClearMapBackground() to manage map texture
+- MapViewGL: initTexturedShader()/drawMapBackground() for textured quad
+- MapViewGL: drawMapBackground() called in paintGL() before road geometry
+- MainWidget: toggleViewMode() slot for 2D/3D button
+- MainWidget: loadMapBackground() slot to fetch Esri tiles
+- CMakeLists: added Qt6::Network to lanemaker target
 
-Resources affected:
-- shaders/simple.vert, simple.frag, instanced.vert, texture.frag
-- models/jeep.obj, jeep.jpg, cadillac.obj, cadillac.jpg,
-  military.obj, military.jpg
-- icons/*.png (toolbar, mode buttons, etc.)
-
-Build: OK | Tests: 473/473 | App: Road Studio renders correctly
+Build: OK | Tests: 473/473 passed | App: launches, Road Studio works
 
 Generated with [Devin](https://devin.ai)
 

@@ -249,6 +249,11 @@ target_link_libraries(lanemaker
         road_engine::core
 )
 
+if(QMapLibre_FOUND)
+    target_link_libraries(lanemaker PUBLIC QMapLibre::Widgets)
+    target_compile_definitions(lanemaker PUBLIC HAVE_MAPLIBRE=1)
+endif()
+
 add_library(lanemaker::core ALIAS lanemaker)
 
 # ─── Plugin API (header-only, requires Qt) ───────────────────
