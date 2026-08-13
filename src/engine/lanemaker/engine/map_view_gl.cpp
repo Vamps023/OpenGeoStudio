@@ -114,24 +114,23 @@ namespace LM
         m_mapCenterLon = lon;
         m_mapEnabled = true;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
-        UpdateMapTiles();
+        m_lastCameraZ = -1; // force tile update on next paint
+        update();
     }
 
     void MapViewGL::ClearMapBackground()
     {
-        makeCurrent();
         m_mapTiles.clear();
         m_mapEnabled = false;
-        doneCurrent();
         update();
     }
 
     void MapViewGL::UpdateMapTiles()
     {
         if (!m_mapEnabled || m_viewMode != ViewMode::TopDown2D) return;
+        if (width() <= 0 || height() <= 0) return;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
 
-        // Determine visible world bounds from camera position and view size
         float camZ = m_camera.translation().z();
         float aspect = width() / float(height() ? height() : 1);
         float viewSize = camZ * 0.6f;
@@ -144,42 +143,40 @@ namespace LM
         double worldBottom = camY - viewSize;
         double worldTop    = camY + viewSize;
 
-        // Convert world bounds to lat/lon using the map center as origin
-        double mpp = metersPerPixel(m_mapCenterLat, m_mapZoom);
         double latPerMeter = 1.0 / 111320.0;
         double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
 
-        double minLat = m_mapCenterLat - worldTop * latPerMeter;     // world Y up = lat up
+        double minLat = m_mapCenterLat - worldTop * latPerMeter;
         double maxLat = m_mapCenterLat - worldBottom * latPerMeter;
         double minLon = m_mapCenterLon + worldLeft * lonPerMeter;
         double maxLon = m_mapCenterLon + worldRight * lonPerMeter;
 
-        // Calculate tile range for current zoom
+        minLat = std::max(-85.05, std::min(85.05, minLat));
+        maxLat = std::max(-85.05, std::min(85.05, maxLat));
+        minLon = std::max(-180.0, std::min(180.0, minLon));
+        maxLon = std::max(-180.0, std::min(180.0, maxLon));
+
         int txMin, tyMin, txMax, tyMax;
         latLonToTile(minLat, minLon, m_mapZoom, txMin, tyMin);
         latLonToTile(maxLat, maxLon, m_mapZoom, txMax, tyMax);
         if (txMin > txMax) std::swap(txMin, txMax);
         if (tyMin > tyMax) std::swap(tyMin, tyMax);
 
-        // Limit number of tiles per frame to avoid overload
-        const int MAX_TILES = 30;
+        const int MAX_TILES = 20;
         int count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
         if (count > MAX_TILES) {
-            // Zoom out — reduce zoom level
-            int newZoom = m_mapZoom;
-            while (count > MAX_TILES && newZoom > 3) {
-                newZoom--;
-                count = ((count + 3) / 4);
+            while (count > MAX_TILES && m_mapZoom > 3) {
+                m_mapZoom--;
+                txMin /= 2; txMax /= 2;
+                tyMin /= 2; tyMax /= 2;
+                count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
             }
-            if (newZoom != m_mapZoom) {
-                m_mapZoom = newZoom;
-                m_mapTiles.clear(); // clear old zoom tiles
-                UpdateMapTiles();
-                return;
-            }
+            m_mapTiles.erase(
+                std::remove_if(m_mapTiles.begin(), m_mapTiles.end(),
+                    [this](const std::unique_ptr<MapTile>& t) { return t->z != m_mapZoom; }),
+                m_mapTiles.end());
         }
 
-        // Request tiles that aren't cached
         for (int ty = tyMin; ty <= tyMax; ty++) {
             for (int tx = txMin; tx <= txMax; tx++) {
                 bool found = false;
@@ -212,15 +209,13 @@ namespace LM
         tile->y = y;
         tile->loading = true;
 
-        // Calculate world position of tile center
         double tLat, tLon;
         tileToLatLon(x, y, z, tLat, tLon);
         double mpp = metersPerPixel(m_mapCenterLat, z);
-        tile->worldSize = 256 * mpp; // 256px per tile
+        tile->worldSize = 256 * mpp;
         double latPerMeter = 1.0 / 111320.0;
         double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
-        // Tile center lat/lon → world X/Y (map center is at world origin)
-        tile->worldX = (tLon - m_mapCenterLon) / lonPerMeter + 128.0 * mpp; // center of 256px tile
+        tile->worldX = (tLon - m_mapCenterLon) / lonPerMeter + 128.0 * mpp;
         tile->worldY = (m_mapCenterLat - tLat) / latPerMeter - 128.0 * mpp;
 
         QString url = QString(
@@ -235,17 +230,14 @@ namespace LM
         MapTile* rawPtr = tile.get();
 
         connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {
-            if (reply->error() == QNetworkReply::NoError) {
+            bool tileExists = false;
+            for (auto& t : m_mapTiles) {
+                if (t.get() == rawPtr) { tileExists = true; break; }
+            }
+            if (reply->error() == QNetworkReply::NoError && tileExists) {
                 QImage img;
                 if (img.loadFromData(reply->readAll())) {
-                    img = img.convertToFormat(QImage::Format_RGB32);
-                    makeCurrent();
-                    rawPtr->texture = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
-                    rawPtr->texture->setData(img);
-                    rawPtr->texture->setMinificationFilter(QOpenGLTexture::Linear);
-                    rawPtr->texture->setMagnificationFilter(QOpenGLTexture::Linear);
-                    rawPtr->texture->setWrapMode(QOpenGLTexture::ClampToEdge);
-                    doneCurrent();
+                    rawPtr->pendingImage = img.convertToFormat(QImage::Format_RGB32);
                     rawPtr->loading = false;
                     update();
                 }
@@ -337,11 +329,22 @@ namespace LM
         if (!m_mapEnabled || m_mapTiles.empty()) return;
         initTexturedShader();
 
+        // Upload any pending images as GL textures (must be on GL thread)
+        for (auto& tile : m_mapTiles) {
+            if (!tile->pendingImage.isNull() && !tile->texture) {
+                tile->texture = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
+                tile->texture->setData(tile->pendingImage);
+                tile->texture->setMinificationFilter(QOpenGLTexture::Linear);
+                tile->texture->setMagnificationFilter(QOpenGLTexture::Linear);
+                tile->texture->setWrapMode(QOpenGLTexture::ClampToEdge);
+                tile->pendingImage = QImage(); // free the image
+            }
+        }
+
         glDisable(GL_DEPTH_TEST);
         m_texturedShader.bind();
         m_texturedShader.setUniformValue("worldToView", m_worldToView);
 
-        // Render each loaded tile as a separate quad
         for (auto& tile : m_mapTiles) {
             if (!tile->texture || tile->loading) continue;
 
@@ -349,7 +352,6 @@ namespace LM
             float cx = float(tile->worldX);
             float cy = float(tile->worldY);
             float quadVerts[] = {
-                // pos                          // texcoord
                 cx - halfSize, cy - halfSize, 0,    0, 1,
                 cx + halfSize, cy - halfSize, 0,    1, 1,
                 cx + halfSize, cy + halfSize, 0,    1, 0,

@@ -159,6 +159,7 @@ namespace LM
             double worldX, worldY; // center in world meters
             double worldSize; // size in world meters
             bool loading = false;
+            QImage pendingImage; // image waiting to be uploaded as GL texture
         };
         std::vector<std::unique_ptr<MapTile>> m_mapTiles;
         double m_mapCenterLat = 18.52;

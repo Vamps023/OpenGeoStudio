@@ -294,7 +294,7 @@ void MainWidget::gotoDragMode(bool checked)
 
 void MainWidget::toggleViewMode(bool checked)
 {
-        m_2dMode = checked;
+    m_2dMode = checked;
     if (checked)
     {
         // Switch to 2D top-down view
@@ -603,5 +603,4 @@ void MainWidget::elegantlyHandleException(std::exception e)
         QCoreApplication::quit();
     }
 }
-
 

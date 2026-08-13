@@ -1,30 +1,31 @@
-Fix 2D top-down camera, map quad size, and zoom — 3 root causes
+Replace static map texture with dynamic tile renderer
 
-Root cause 1: Camera rotation was 90° around X for 2D top-down mode.
-In LaneMaker's coordinate system (Z=up, XY=ground), the default camera
-looks down -Z. With NO rotation, camera at (0,0,500) looks straight
-down at the XY ground plane — that IS top-down. The 90° X rotation
-made the camera look along +Y (horizontal), not down. This broke
-both the map view and road drawing.
+The old approach composited a fixed 3x3 grid of tiles into a single
+768x768 texture, which was blurry and didn't cover the full screen.
 
-Fix: Set rotation to 0° in ResetCamera for 2D mode.
+New approach: dynamic tile cache that loads tiles on demand based
+on the current camera view, like QGIS/Google Maps.
 
-Root cause 2: Map texture quad was 10000×10000 world units but the
-3×3 tile grid at zoom 16 only covers ~1843 meters. The texture was
-stretched 5.4× too much, making it look extremely blurry/wrong.
+MapViewGL changes:
+- MapTile struct: stores individual tile texture + world position
+- m_mapTiles: vector of cached tiles
+- SetMapCenter(lat, lon): sets geographic center, enables map
+- UpdateMapTiles(): calculates visible world bounds, converts to
+  lat/lon, determines tile range, requests missing tiles
+- requestTile(z, x, y): downloads Esri tile, creates OpenGL texture,
+  calculates world position from tile lat/lon
+- pruneInvisibleTiles(): removes tiles outside view range
+- drawMapBackground(): renders each tile as a separate quad at
+  its correct world position
+- paintGL(): calls UpdateMapTiles when camera moves significantly
+- Geographic helpers: latLonToTile, tileToLatLon, metersPerPixel
+- Auto-zoom: reduces zoom level if too many tiles needed
 
-Fix: Store m_mapWorldExtent = imageWidth * metersPerPixel in
-SetMapBackground(). Update quad vertices dynamically in
-drawMapBackground() to match the actual tile coverage.
+MainWidget changes:
+- loadMapBackground() now just calls SetMapCenter()
+- Removed old composite image tile fetching code
 
-Root cause 3: Ortho projection was only set in resizeGL(), so wheel
-zoom (which changes camera Z) didn't actually change the view.
-
-Fix: Update ortho projection every frame in paintGL() based on
-current camera Z. Also fixed wheel zoom direction (scroll up =
-zoom in = decrease Z) with clamping.
-
-Build: OK | Tests: 473/473 passed | App: 2D mode renders map correctly
+Build: OK | Tests: 473/473 passed | App: dynamic map tiles load
 
 Generated with [Devin](https://devin.ai)
 
