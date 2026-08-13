@@ -294,7 +294,7 @@ void MainWidget::gotoDragMode(bool checked)
 
 void MainWidget::toggleViewMode(bool checked)
 {
-    m_2dMode = checked;
+        m_2dMode = checked;
     if (checked)
     {
         // Switch to 2D top-down view
@@ -314,7 +314,7 @@ void MainWidget::toggleViewMode(bool checked)
 
 void MainWidget::loadMapBackground()
 {
-    // Fetch Esri World Imagery tiles and composite them into a single image
+        // Fetch Esri World Imagery tiles and composite them into a single image
     // for use as the OpenGL background texture.
     // Default center: Pune, India (lat=18.52, lon=73.85) at zoom 16
     const double lat = 18.52;
@@ -379,6 +379,14 @@ void MainWidget::loadMapBackground()
                         painter.end();
                         qDebug() << "[MainWidget] Tile loaded at" << dx << dy;
                     }
+                    else
+                    {
+                        qWarning() << "[MainWidget] Failed to decode tile image at" << dx << dy;
+                    }
+                }
+                else
+                {
+                    qWarning() << "[MainWidget] Network error for tile at" << dx << dy << ":" << reply->errorString();
                 }
 
                 (*tilesLoaded)++;

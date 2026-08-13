@@ -74,6 +74,7 @@ public slots:
     void toggleAntialiasing(bool);
     void OnMouseAction(LM::MouseAction);
     void OnKeyPress(LM::KeyPressAction);
+    void loadMapBackground();
 
 private slots:
     void gotoCreateRoadMode(bool);
@@ -82,7 +83,6 @@ private slots:
     void gotoModifyMode(bool);
     void gotoDragMode(bool c=true);
     void toggleViewMode(bool checked);
-    void loadMapBackground();
     void onMapMoved();
 
 private:

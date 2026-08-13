@@ -761,9 +761,10 @@ namespace LM
     {
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            // In orthographic top-down mode, unproject screen coords to world coords
-            // using the inverse of the full view-projection matrix.
-            // The ground plane is at z=0.
+            // In orthographic top-down mode, unproject screen coords to world coords.
+            // Camera is at (0,0,H) rotated 90° around X — looking straight down at z=0 plane.
+            // In ortho projection, all rays are parallel, so we can directly unproject
+            // using the inverse view-projection matrix and then project onto z=0.
             float retinaScale = devicePixelRatio();
             float sx = cursor.x() * retinaScale;
             float sy = cursor.y() * retinaScale;
@@ -774,20 +775,19 @@ namespace LM
             float ndcX = (2.0f * sx) / vp_w - 1.0f;
             float ndcY = 1.0f - (2.0f * sy) / vp_h;
 
-            // Invert the view-projection matrix
+            // Build the full view-projection matrix and invert it
             QMatrix4x4 viewProj = m_projection * m_camera.toMatrix();
             QMatrix4x4 inv = viewProj.inverted();
 
-            // Unproject two points at NDC z=-1 and z=1, then intersect with z=0 plane
-            QVector3D pNear = inv.map(QVector3D(ndcX, ndcY, -1.0f));
-            QVector3D pFar  = inv.map(QVector3D(ndcX, ndcY,  1.0f));
+            // Unproject two points at different NDC z values to get a ray
+            QVector3D p0 = inv.map(QVector3D(ndcX, ndcY, -1.0f));
+            QVector3D p1 = inv.map(QVector3D(ndcX, ndcY,  1.0f));
 
-            // Intersect with z=0 plane: p = pNear + t*(pFar-pNear), solve p.z=0
-            float denom = pFar.z() - pNear.z();
-            if (std::abs(denom) < 1e-6f)
-                return QVector2D(pNear.x(), pNear.y()); // parallel — shouldn't happen in 2D
-            float t = -pNear.z() / denom;
-            QVector3D worldPos = pNear + t * (pFar - pNear);
+            // Intersect ray with z=0 plane: p = p0 + t*(p1-p0), solve p.z=0
+            float denom = p1.z() - p0.z();
+            float t = (std::abs(denom) > 1e-6f) ? (-p0.z() / denom) : 0.0f;
+            QVector3D worldPos = p0 + t * (p1 - p0);
+
             return QVector2D(worldPos.x(), worldPos.y());
         }
 
