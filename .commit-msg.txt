@@ -1,33 +1,12 @@
-Fix crash and black screen in dynamic tile renderer — 3 critical bugs
+Switch satellite tiles to Google Maps XYZ projection
 
-Bug 1: Crash — makeCurrent() called from network callback
-  requestTile() created OpenGL textures in the QNetworkReply::finished
-  callback, which runs on the network thread, not the GL thread.
-  Calling makeCurrent() there crashes Qt's OpenGL context.
-  Fix: Store downloaded image as pendingImage in the tile struct.
-  Upload as GL texture in drawMapBackground() (GL thread) instead.
+Replace Esri World Imagery tiles with Google Maps satellite tiles:
+  https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}
 
-Bug 2: Crash — dangling pointer to pruned tile
-  If pruneInvisibleTiles() removed a tile while its network reply
-  was in-flight, the rawPtr in the lambda became dangling.
-  Fix: Check if tile still exists in m_mapTiles before using it
-  in the network callback.
+Google uses standard XYZ tile ordering (x=column, y=row, z=zoom)
+which matches our latLonToTile/tileToLatLon coordinate conversion.
 
-Bug 3: Black screen — UpdateMapTiles called before widget visible
-  SetMapCenter() called UpdateMapTiles() during construction when
-  width()/height() were 0, causing division by zero and no tiles.
-  Fix: Don't call UpdateMapTiles from SetMapCenter. Set m_lastCameraZ
-  = -1 to force tile update on next paintGL when widget is visible.
-  Added width/height guard in UpdateMapTiles.
-
-Bug 4: Infinite recursion in UpdateMapTiles
-  When zoom level changed, UpdateMapTiles called itself recursively.
-  Fix: Inline the zoom reduction logic without recursion.
-
-Also: ClearMapBackground no longer calls makeCurrent (just clears
-the vector, unique_ptr handles texture cleanup).
-
-Build: OK | Tests: 473/473 passed | App: no crash, tiles load
+Build: OK | Tests: 473/473 passed | App: runs
 
 Generated with [Devin](https://devin.ai)
 

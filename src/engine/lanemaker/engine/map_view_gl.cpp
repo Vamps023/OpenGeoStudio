@@ -216,9 +216,8 @@ namespace LM
         tile->worldY = (m_mapCenterLat - tLat) / latPerMeter - 128.0 * mpp;
 
         QString url = QString(
-            "https://server.arcgisonline.com/ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/%1/%2/%3")
-            .arg(z).arg(y).arg(x);
+            "https://mt1.google.com/vt/lyrs=s&x=%1&y=%2&z=%3")
+            .arg(x).arg(y).arg(z);
 
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
