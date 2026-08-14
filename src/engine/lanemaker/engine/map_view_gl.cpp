@@ -128,7 +128,8 @@ namespace LM
     }
 
     void MapViewGL::UpdateMapTiles()
-    {        if (!m_mapEnabled || m_viewMode != ViewMode::TopDown2D) return;
+    {
+        if (!m_mapEnabled || m_viewMode != ViewMode::TopDown2D) return;
         if (width() <= 0 || height() <= 0) return;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
 
@@ -159,16 +160,16 @@ namespace LM
         maxLon = std::max(-180.0, std::min(180.0, maxLon));
 
         // Calculate the ideal tile zoom level based on the view scale.
-        // We want roughly 256px per tile to match screen pixels.
-        // mpp = meters per pixel at current zoom
-        // tileMeters = 256 * mpp = size of one tile in meters
-        // We want tileMeters ~= viewSize so ~2-4 tiles cover the screen
-        double targetTileMeters = viewSize * 0.5; // each tile covers half the view
-        // tileMeters = earthCircumference * cos(lat) / (2^z * 256)
-        // => 2^z = earthCircumference * cos(lat) / (targetTileMeters * 256)
+        // We want each tile to roughly match the screen size so we get
+        // enough detail without too many tiles.
+        // At zoom z, one tile covers: earthCirc * cos(lat) / (2^z) meters
+        // We want tileMeters ~= viewSize (so ~2x2 tiles cover the screen)
         double earthCirc = 40075016.686;
+        double targetTileMeters = viewSize; // each tile covers the full view
+        // tileMeters = earthCircumference * cos(lat) / (2^z)
+        // => 2^z = earthCircumference * cos(lat) / targetTileMeters
         double idealZoom = std::log2(earthCirc * std::cos(m_mapCenterLat * M_PI / 180.0)
-                                      / (targetTileMeters * 256.0));
+                                      / targetTileMeters);
         int newZoom = std::max(2, std::min(19, (int)std::round(idealZoom)));
 
         if (newZoom != m_mapZoom) {
@@ -214,7 +215,7 @@ namespace LM
             }
         }
 
-        pruneInvisibleTiles();        m_lastTileZoom = m_mapZoom;
+        pruneInvisibleTiles();
         m_lastCameraX = camX;
         m_lastCameraY = camY;
         m_lastCameraZ = camZ;
@@ -257,8 +258,9 @@ namespace LM
                 if (t.get() == rawPtr) { tileExists = true; break; }
             }
             if (reply->error() == QNetworkReply::NoError && tileExists) {
+                QByteArray data = reply->readAll();
                 QImage img;
-                if (img.loadFromData(reply->readAll())) {
+                if (img.loadFromData(data)) {
                     rawPtr->image = img.convertToFormat(QImage::Format_RGB32);
                     rawPtr->loading = false;
                     m_mapCompositeDirty = true;
@@ -273,25 +275,36 @@ namespace LM
 
     void MapViewGL::pruneInvisibleTiles()
     {
-        // Remove tiles that are too far from the current view.
-        // maxDist must account for tile size at the current zoom level,
-        // since low-zoom tiles can be very large (e.g. zoom 9 = ~78km per tile).
+        // Use AABB overlap test: keep tile if its bounding box overlaps
+        // the visible area. This is more correct than distance-from-center
+        // because a large tile may have its center far away but still
+        // overlap the visible region.
         float camX = m_camera.translation().x();
         float camY = m_camera.translation().y();
         float camZ = m_camera.translation().z();
-        float viewRadius = camZ * 0.6f + 1000.0f; // visible area radius
+        float aspect = width() / float(height() ? height() : 1);
+        float viewSize = camZ * 0.6f;
+        if (viewSize < 10.0f) viewSize = 10.0f;
+
+        // Visible area bounds in world coordinates
+        float viewLeft   = camX - viewSize * aspect;
+        float viewRight  = camX + viewSize * aspect;
+        float viewBottom = camY - viewSize;
+        float viewTop    = camY + viewSize;
 
         m_mapTiles.erase(
             std::remove_if(m_mapTiles.begin(), m_mapTiles.end(),
-                [camX, camY, viewRadius, this](const std::unique_ptr<MapTile>& t) {
+                [viewLeft, viewRight, viewBottom, viewTop, this](const std::unique_ptr<MapTile>& t) {
                     if (t->z != m_mapZoom) return true; // wrong zoom level
-                    // Keep tile if any part of it overlaps the visible area
-                    float dx = t->worldX - camX;
-                    float dy = t->worldY - camY;
-                    float dist = std::sqrt(dx*dx + dy*dy);
-                    float tileHalf = float(t->worldSize) * 0.5f;
-                    // Tile is visible if distance < viewRadius + tileHalf
-                    return dist > (viewRadius + tileHalf);
+                    float half = float(t->worldSize) * 0.5f;
+                    float tileLeft   = float(t->worldX) - half;
+                    float tileRight  = float(t->worldX) + half;
+                    float tileBottom = float(t->worldY) - half;
+                    float tileTop    = float(t->worldY) + half;
+                    // AABB overlap: keep if tiles intersects visible area
+                    bool overlaps = !(tileRight < viewLeft || tileLeft > viewRight ||
+                                      tileTop < viewBottom || tileBottom > viewTop);
+                    return !overlaps;
                 }),
             m_mapTiles.end());
     }
@@ -355,11 +368,8 @@ namespace LM
 
     void MapViewGL::compositeMapImage()
     {
-        // QGIS-style: composite all tile QImages into a single QImage using QPainter.
-        // This avoids per-tile OpenGL texture management entirely.
         if (m_mapTiles.empty()) return;
 
-        // Find the bounding box of all tiles in world coordinates
         double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
         int tilesWithImage = 0;
         for (auto& tile : m_mapTiles) {
@@ -411,7 +421,6 @@ namespace LM
         }
         painter.end();
 
-        // Store the world bounds for drawing
         m_mapCompositeWorldMinX = minX;
         m_mapCompositeWorldMinY = minY;
         m_mapCompositeWorldMaxX = maxX;
@@ -423,7 +432,6 @@ namespace LM
     {
         if (!m_mapEnabled || m_mapTiles.empty()) return;
 
-        // Check if any tiles have images
         bool hasImages = false;
         for (auto& tile : m_mapTiles) {
             if (!tile->image.isNull() && !tile->loading) { hasImages = true; break; }
@@ -432,12 +440,10 @@ namespace LM
 
         initTexturedShader();
 
-        // Composite tiles into a single image if needed (QGIS-style)
         if (m_mapCompositeDirty) {
             compositeMapImage();
             if (m_mapCompositeImage.isNull()) return;
 
-            // Upload composite as single OpenGL texture
             m_mapTexture = std::make_unique<QOpenGLTexture>(m_mapCompositeImage);
             m_mapTexture->setMinificationFilter(QOpenGLTexture::Linear);
             m_mapTexture->setMagnificationFilter(QOpenGLTexture::Linear);

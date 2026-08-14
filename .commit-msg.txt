@@ -1,22 +1,35 @@
-Add app icon from original Electron version
+Rewrite map rendering to QGIS-style composite approach
 
-Converted the original logo.png (512x512) from the Electron
-repo (D:/git/OpenGeoStudio/assets/logo/logo.png) to:
-  - resources/app.ico  (multi-size: 16,32,48,64,128,256)
-  - resources/app.png  (512x512 for window icon)
+Studied QGIS's map rendering architecture (qgstiledownloadmanager.cpp,
+qgstilecache.cpp, qgsmapcanvas.cpp) and adopted their simpler approach:
 
-Added:
-  - resources/app.rc — Windows resource file embedding the ICO
-    in the executable metadata (shows in taskbar, file explorer)
-  - resources/app_icons.qrc — Qt resource for runtime window icon
-  - CMakeLists.txt — compiles RC file on Windows + adds QRC
-  - main.cpp — sets app.setWindowIcon(QIcon(":/icons/app.png"))
+OLD (broken):
+  - Per-tile OpenGL textures created in drawMapBackground
+  - Multiple texture objects, multiple draw calls
+  - Per-tile VBO updates per frame
+  - Fragile texture lifetime management
+  - Tiles pruned incorrectly, textures lost
 
-The icon now appears in:
-  - Windows taskbar
-  - Window title bar
-  - File explorer (.exe icon)
-  - Alt+Tab switcher
+NEW (QGIS-inspired):
+  - Download tiles as QImage (network thread) — same as before
+  - Composite ALL tiles into a single QImage using QPainter
+    (like QGIS composites layers into QgsMapCanvasMap image)
+  - Upload that single QImage as ONE OpenGL texture
+  - Draw ONE quad with that texture
+  - Only recomposite when tiles change (dirty flag)
+
+This eliminates:
+  - Per-tile OpenGL texture creation/management
+  - Per-tile VBO updates
+  - Multiple draw calls
+  - Texture lifetime issues
+  - Pruning-related texture loss
+
+Files changed:
+  - map_view_gl.h — removed per-tile texture, added composite
+    texture + composite image + world bounds
+  - map_view_gl.cpp — rewrote drawMapBackground to composite
+    and draw single texture; added compositeMapImage()
 
 Build: OK | Tests: 473/473 passed | App: runs
 
