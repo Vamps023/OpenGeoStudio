@@ -1,35 +1,32 @@
-Rewrite map rendering to QGIS-style composite approach
+Fix map not visible: AABB prune + correct zoom calculation
 
-Studied QGIS's map rendering architecture (qgstiledownloadmanager.cpp,
-qgstilecache.cpp, qgsmapcanvas.cpp) and adopted their simpler approach:
+Two bugs fixed:
 
-OLD (broken):
-  - Per-tile OpenGL textures created in drawMapBackground
-  - Multiple texture objects, multiple draw calls
-  - Per-tile VBO updates per frame
-  - Fragile texture lifetime management
-  - Tiles pruned incorrectly, textures lost
+1. Tiles pruned immediately (AABB fix)
+   The distance-based prune check was too aggressive. At zoom 9,
+   the tile center was ~39000m from camera but viewRadius+tileHalf
+   was only ~38592m — so the tile was pruned even though it
+   covered the visible area.
 
-NEW (QGIS-inspired):
-  - Download tiles as QImage (network thread) — same as before
-  - Composite ALL tiles into a single QImage using QPainter
-    (like QGIS composites layers into QgsMapCanvasMap image)
-  - Upload that single QImage as ONE OpenGL texture
-  - Draw ONE quad with that texture
-  - Only recomposite when tiles change (dirty flag)
+   Fix: Replaced distance-from-center check with proper AABB
+   (axis-aligned bounding box) overlap test. A tile is kept if
+   its bounding box intersects the visible area rectangle.
 
-This eliminates:
-  - Per-tile OpenGL texture creation/management
-  - Per-tile VBO updates
-  - Multiple draw calls
-  - Texture lifetime issues
-  - Pruning-related texture loss
+2. Wrong zoom level (too low detail)
+   The zoom calculation used targetTileMeters = viewSize * 0.5
+   which resulted in zoom 9 (one 74km tile for a 600m view).
+   This made the map extremely blurry.
 
-Files changed:
-  - map_view_gl.h — removed per-tile texture, added composite
-    texture + composite image + world bounds
-  - map_view_gl.cpp — rewrote drawMapBackground to composite
-    and draw single texture; added compositeMapImage()
+   Fix: Changed to targetTileMeters = viewSize, which gives
+   zoom 16 (appropriate detail for a 600m view, ~12 tiles).
+
+Debug logging was added to trace the issue, then removed.
+
+Verified working:
+  - Zoom 16, 12 tiles requested (4x3 grid)
+  - Tiles downloaded (256x256 each, ~20KB)
+  - Composite image created and uploaded as single texture
+  - Quad drawn successfully
 
 Build: OK | Tests: 473/473 passed | App: runs
 

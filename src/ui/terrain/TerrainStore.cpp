@@ -9,7 +9,9 @@ TerrainStore::TerrainStore(EventBus* bus, QObject* parent)
 
 void TerrainStore::setBounds(const terrain::GeoBounds& bounds) {
     m_bounds = bounds;
-    m_bounds.makeSquare();
+    // Note: do NOT call makeSquare() — the Electron version doesn't modify
+    // bounds after drag selection. The screen-square constraint already
+    // produces approximately square geographic bounds.
     computeTileGrid();
     emit boundsChanged(m_bounds);
 }
@@ -146,22 +148,31 @@ void TerrainStore::computeTileGrid() {
     const double tileSizeDegLat = m_tileSizeKm / kmPerDegLat;
     const double tileSizeDegLon = m_tileSizeKm / kmPerDegLon;
 
-    const int rows = static_cast<int>(std::ceil(m_bounds.heightDeg() / tileSizeDegLat));
-    const int cols = static_cast<int>(std::ceil(m_bounds.widthDeg() / tileSizeDegLon));
+    // Compute required rows/cols, then force square grid (matching Electron)
+    const int requiredRows = static_cast<int>(std::ceil(m_bounds.heightDeg() / tileSizeDegLat));
+    const int requiredCols = static_cast<int>(std::ceil(m_bounds.widthDeg() / tileSizeDegLon));
+    const int tilesNeeded = std::max(requiredRows, requiredCols);
+    const int rows = tilesNeeded;
+    const int cols = tilesNeeded;
 
     m_tileGrid.rows = rows;
     m_tileGrid.cols = cols;
     m_tileGrid.tileSizeDeg = tileSizeDegLat;
+
+    // Actual tile dimensions in degrees (divides bounds evenly)
+    const double actualTileWidth = m_bounds.widthDeg() / cols;
+    const double actualTileHeight = m_bounds.heightDeg() / rows;
 
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
             terrain::Tile tile;
             tile.row = r;
             tile.col = c;
-            tile.bounds.north = m_bounds.north - r * tileSizeDegLat;
-            tile.bounds.south = m_bounds.north - (r + 1) * tileSizeDegLat;
-            tile.bounds.west = m_bounds.west + c * tileSizeDegLon;
-            tile.bounds.east = m_bounds.west + (c + 1) * tileSizeDegLon;
+            // Tiles grow south-to-north (row 0 at south, matching Electron)
+            tile.bounds.south = m_bounds.south + r * actualTileHeight;
+            tile.bounds.north = (r == rows - 1) ? m_bounds.north : m_bounds.south + (r + 1) * actualTileHeight;
+            tile.bounds.west = m_bounds.west + c * actualTileWidth;
+            tile.bounds.east = (c == cols - 1) ? m_bounds.east : m_bounds.west + (c + 1) * actualTileWidth;
             m_tileGrid.tiles.append(tile);
         }
     }
