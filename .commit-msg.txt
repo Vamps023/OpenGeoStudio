@@ -1,10 +1,30 @@
-Switch satellite tiles to Google Maps XYZ projection
+Fix map Y-coordinate inversion + redesign Road Studio UI
 
-Replace Esri World Imagery tiles with Google Maps satellite tiles:
-  https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}
+Map fix:
+  The tile Y-coordinate mapping was inverted. The code treated +Y as
+  south, but OpenGL's ortho projection has +Y = up = north. This made
+  tiles appear vertically flipped and in wrong positions.
 
-Google uses standard XYZ tile ordering (x=column, y=row, z=zoom)
-which matches our latLonToTile/tileToLatLon coordinate conversion.
+  Fixed UpdateMapTiles: lat = centerLat + worldY * latPerMeter
+  (was: centerLat - worldY * latPerMeter)
+  Fixed requestTile: worldY = (tLat - centerLat) / latPerMeter
+  (was: (centerLat - tLat) / latPerMeter)
+
+  Also removed leftover debug qDebug line in drawMapBackground.
+
+UI rework — modern dark panel (QGIS/Blender style):
+  - Left sidebar (52px wide) with vertical tool buttons:
+    Road, Lane, Modify, Destroy, View modes
+    Checked state shows cyan border accent
+  - Top toolbar (44px) with file ops, undo/redo, draw options,
+    2D/3D toggle, Satellite toggle
+    Separators between button groups
+  - Status bar restyled as dark panel (26px) at bottom
+  - LaneConfigWidget moved to bottom of sidebar
+  - Satellite map button is now toggle (checkable)
+  - 2D/3D toggle auto-syncs satellite button state
+  - Consistent dark theme: #161b22 panels, #30363d borders,
+    #06b6d cyan accent, #e6edf3 text
 
 Build: OK | Tests: 473/473 passed | App: runs
 

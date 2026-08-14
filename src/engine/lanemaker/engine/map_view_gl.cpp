@@ -72,8 +72,9 @@ namespace LM
         }
         else
         {
-            m_camera.setTranslation(0, -200, 250);
-            m_camera.setRotation(30, QVector3D(1, 0, 0));
+            // 3D perspective: camera at an angle looking down at the ground plane
+            m_camera.setTranslation(0, -300, 350);
+            m_camera.setRotation(35, QVector3D(1, 0, 0));
         }
     }
 
@@ -628,6 +629,11 @@ namespace LM
         }
         else
         {
+            // 3D perspective mode — update projection every frame (in case of resize)
+            float aspect = width() / float(height() ? height() : 1);
+            m_projection.setToIdentity();
+            m_projection.perspective(60.0f, aspect, 5.0f, 5000.0f);
+
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
         }
@@ -659,9 +665,67 @@ namespace LM
         m_painting = false;
     }
 
+    void MapViewGL::blenderOrbit(QPoint delta)
+    {
+        // Blender-style orbit: rotate around the target point on the ground
+        // Left/right mouse movement = azimuth (rotate around Z axis)
+        // Up/down mouse movement = elevation (rotate around horizontal axis)
+        float sensitivity = 0.3f;
+        float yawDeg = -delta.x() * sensitivity;
+        float pitchDeg = -delta.y() * sensitivity;
+
+        // Get the point the camera is looking at (on ground plane z=0)
+        QVector3D camPos = m_camera.translation();
+        QVector3D fwd = m_camera.forward();
+        float t = (std::abs(fwd.z()) > 1e-6f) ? (-camPos.z() / fwd.z()) : 0.0f;
+        QVector3D target = camPos + t * fwd;
+
+        // Yaw: rotate around world Z
+        QQuaternion yawRot = QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), yawDeg);
+        // Pitch: rotate around camera's right vector (clamped to avoid flip)
+        QVector3D right = m_camera.right();
+        QQuaternion pitchRot = QQuaternion::fromAxisAndAngle(right, pitchDeg);
+
+        // Apply rotation: rotate camera position around target, then rotate camera orientation
+        QVector3D offset = camPos - target;
+        offset = yawRot.rotatedVector(offset);
+        offset = pitchRot.rotatedVector(offset);
+        m_camera.setTranslation(target + offset);
+
+        // Update camera rotation
+        QQuaternion newRot = yawRot * pitchRot * m_camera.rotation();
+        m_camera.setRotation(newRot);
+    }
+
+    void MapViewGL::blenderPan(QPoint delta)
+    {
+        // Blender-style pan: move camera and target together along screen plane
+        float sensitivity = m_camera.translation().z() * 0.0015f;
+        QVector3D right = m_camera.right();
+        QVector3D up = m_camera.up();
+        QVector3D move = right * (-delta.x() * sensitivity) + up * (delta.y() * sensitivity);
+        m_camera.translate(move);
+    }
+
     void MapViewGL::mousePressEvent(QMouseEvent* event)
     {
         bool ctrlPressed = event->modifiers() & Qt::CTRL;
+
+        // Blender-style: middle mouse = orbit, shift+middle = pan (in 3D mode)
+        if (event->button() == Qt::MiddleButton && m_viewMode == ViewMode::Perspective3D)
+        {
+            if (event->modifiers() & Qt::SHIFT)
+            {
+                m_blenderNav = BlenderNavMode::Pan;
+            }
+            else
+            {
+                m_blenderNav = BlenderNavMode::Orbit;
+            }
+            m_blenderLastPos = event->pos();
+            return;
+        }
+
         if (event->button() == Qt::RightButton && !ctrlPressed)
         {
             lastMousePos = event->pos();
@@ -711,7 +775,22 @@ namespace LM
     void MapViewGL::mouseMoveEvent(QMouseEvent* event)
     {
         UpdateRayHit(event->pos());
-        
+
+        // Blender-style navigation (3D mode only)
+        if (m_blenderNav != BlenderNavMode::None)
+        {
+            QPoint delta = event->pos() - m_blenderLastPos;
+            if (m_blenderNav == BlenderNavMode::Orbit)
+                blenderOrbit(delta);
+            else
+                blenderPan(delta);
+            m_blenderLastPos = event->pos();
+            ActionManager::Instance()->Record(m_camera);
+            update();
+            lastMousePos = event->pos();
+            return;
+        }
+
         bool changeViewPoint = true;
         if (freeRotateSession.has_value())
         {
@@ -748,6 +827,11 @@ namespace LM
 
     void MapViewGL::mouseReleaseEvent(QMouseEvent* event)
     {
+        if (m_blenderNav != BlenderNavMode::None)
+        {
+            m_blenderNav = BlenderNavMode::None;
+            return;
+        }
         if (freeRotateSession.has_value())
         {
             freeRotateSession.reset();
@@ -792,8 +876,13 @@ namespace LM
         }
         else
         {
-            auto delta = dir * PointerDirection(lastMousePos) * 10;
-            m_camera.translate(delta);
+            // Blender-style zoom in 3D: dolly toward the point under the cursor
+            // Scale the step by current distance for smooth zoom at any scale
+            float camDist = m_camera.translation().length();
+            float step = dir * camDist * 0.1f;
+            QVector3D fwd = m_camera.forward();
+            fwd.normalize();
+            m_camera.translate(fwd * step);
             ActionManager::Instance()->Record(m_camera);
         }
 

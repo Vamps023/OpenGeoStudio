@@ -117,6 +117,13 @@ namespace LM
 		std::optional<TouchController> touchSession;
 		std::optional<int> touchSessionType;
 
+		// Blender-style 3D viewport controls
+		enum class BlenderNavMode { None, Orbit, Pan };
+		BlenderNavMode m_blenderNav = BlenderNavMode::None;
+		QPoint m_blenderLastPos;
+		void blenderOrbit(QPoint delta);
+		void blenderPan(QPoint delta);
+
 		QVector3D PointerDirection(QPoint cursor) const;
 
 		QPointF PixelLocation(QVector3D globalDir) const;
