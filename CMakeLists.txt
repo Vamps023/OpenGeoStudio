@@ -294,11 +294,24 @@ if(QMapLibre_FOUND)
     )
 endif()
 
+# Application icon resources (window icon + Windows executable icon)
+qt_add_resources(APP_ICON_QRC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/app_icons.qrc
+)
+
 add_executable(OpenGeoStudio
     ${APP_SOURCES}
     ${LANEMAKER_QRC_SOURCES}
     ${LANEMAKER_SHADER_QRC_SOURCES}
+    ${APP_ICON_QRC_SOURCES}
 )
+
+# Embed the icon in the Windows executable (.exe) metadata
+if(WIN32)
+    target_sources(OpenGeoStudio PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc
+    )
+endif()
 
 target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

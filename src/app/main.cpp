@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QMainWindow>
+#include <QIcon>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QToolBar>
@@ -609,6 +610,9 @@ private slots:
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+
+    // Set application icon (from original Electron app assets)
+    app.setWindowIcon(QIcon(":/icons/app.png"));
 
     // Initialize LaneMaker's Qt resources (shaders, models, icons)
     // Required because lanemaker is a static library — Qt doesn't auto-register
