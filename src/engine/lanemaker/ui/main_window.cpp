@@ -28,13 +28,14 @@ extern UserPreference g_preference;
 
 MainWindow::MainWindow(QWidget* parent): QWidget(parent)
 {
-    setWindowTitle(tr("Lane Maker"));
+    setWindowTitle(tr("Road Studio"));
     setMinimumWidth(MinWidth);
     setMinimumHeight(MinHeight);
     resize(PreferredSize());
 
     g_mainWindow = this;
 
+    // Menu bar — kept for functionality but styled to match dark theme
     QMenuBar* menu = new QMenuBar;
     QMenu* file = new QMenu("&File");
     auto newAction = file->addAction("New");
@@ -43,11 +44,11 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     auto preferenceAction = file->addAction("Preference");
     menu->addMenu(file);
 
-    QMenu* edit = new QMenu("&Edit");
-    auto undoAction = edit->addAction("Undo");
-    auto redoAction = edit->addAction("Redo");
-    auto verifyAction = edit->addAction("Verify Now");
-    menu->addMenu(edit);
+    QMenu* editMenu = new QMenu("&Edit");
+    auto undoAction = editMenu->addAction("Undo");
+    auto redoAction = editMenu->addAction("Redo");
+    auto verifyAction = editMenu->addAction("Verify Now");
+    menu->addMenu(editMenu);
 
     QMenu* replay = new QMenu("&Replay");
     auto saveReplayAction = replay->addAction("Save");
@@ -66,7 +67,6 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     menu->addMenu(simulation);
 
 #ifdef __linux__
-    // In linux, this dialog completely blocks main mainwindow if spawned as child
     replayWindow = std::make_unique<ReplayWindow>();
 #else
     replayWindow = std::make_unique<ReplayWindow>(this);
@@ -78,17 +78,32 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     mainWidget = std::make_unique<MainWidget>();
     mainWidget->toggleAntialiasing(g_preference.antiAlias);
 
+    // Status bar — styled dark panel at bottom
+    auto* statusBar = new QWidget;
+    statusBar->setObjectName("roadStatusBar");
+    statusBar->setFixedHeight(26);
+    statusBar->setStyleSheet(
+        "QWidget#roadStatusBar { background-color: #161b22; border-top: 1px solid #30363d; }"
+        "QStatusBar { background: transparent; color: #7d8590; font-size: 11px; }"
+        "QStatusBar QLabel { color: #7d8590; padding: 0 8px; }");
+    auto* statusLayout = new QHBoxLayout(statusBar);
+    statusLayout->setContentsMargins(0, 0, 0, 0);
+    statusLayout->setSpacing(0);
+
+    hintStatus = std::make_unique<QStatusBar>();
+    hintStatus->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    fpsStatus = std::make_unique<QStatusBar>();
+    fpsStatus->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    statusLayout->addWidget(hintStatus.get());
+    statusLayout->addStretch();
+    statusLayout->addWidget(fpsStatus.get());
+
     auto mainLayout = new QVBoxLayout;
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
     mainLayout->addWidget(menu);
     mainLayout->addWidget(mainWidget.get());
-
-    auto bottomLayout = new QHBoxLayout;
-    hintStatus = std::make_unique<QStatusBar>();
-    bottomLayout->addWidget(hintStatus.get());
-    fpsStatus = std::make_unique<QStatusBar>();
-    bottomLayout->addStretch();
-    bottomLayout->addWidget(fpsStatus.get());
-    mainLayout->addLayout(bottomLayout);
+    mainLayout->addWidget(statusBar);
 
     setLayout(mainLayout);
 
@@ -114,7 +129,7 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
 
     if (g_preference.showWelcome)
         preferenceWindow->open();
-    srand(std::time(0)); // traffic simulation
+    srand(std::time(0));
 }
 
 MainWindow::~MainWindow() = default;

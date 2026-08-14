@@ -145,8 +145,9 @@ namespace LM
         double latPerMeter = 1.0 / 111320.0;
         double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
 
-        double minLat = m_mapCenterLat - worldTop * latPerMeter;
-        double maxLat = m_mapCenterLat - worldBottom * latPerMeter;
+        // OpenGL ortho: +Y = up = north (higher latitude), +X = right = east
+        double minLat = m_mapCenterLat + worldBottom * latPerMeter;
+        double maxLat = m_mapCenterLat + worldTop * latPerMeter;
         double minLon = m_mapCenterLon + worldLeft * lonPerMeter;
         double maxLon = m_mapCenterLon + worldRight * lonPerMeter;
 
@@ -212,8 +213,11 @@ namespace LM
         tile->worldSize = 256 * mpp;
         double latPerMeter = 1.0 / 111320.0;
         double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
+        // OpenGL: +X = east, +Y = north (up on screen)
+        // tileToLatLon gives the NW (top-left) corner of the tile
+        // Tile center is half a tile east and half a tile south of NW corner
         tile->worldX = (tLon - m_mapCenterLon) / lonPerMeter + 128.0 * mpp;
-        tile->worldY = (m_mapCenterLat - tLat) / latPerMeter - 128.0 * mpp;
+        tile->worldY = (tLat - m_mapCenterLat) / latPerMeter - 128.0 * mpp;
 
         QString url = QString(
             "https://mt1.google.com/vt/lyrs=s&x=%1&y=%2&z=%3")
@@ -319,7 +323,6 @@ namespace LM
 
     void MapViewGL::drawMapBackground()
     {
-        qDebug() << "[drawMapBg] enter, enabled=" << m_mapEnabled << "tiles=" << m_mapTiles.size();
         if (!m_mapEnabled || m_mapTiles.empty()) return;
         initTexturedShader();
         

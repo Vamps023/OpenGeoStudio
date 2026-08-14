@@ -66,11 +66,11 @@ void LmStyleServer::onReadyRead() {
 MainWidget* MainWidget::instance = nullptr;
 
 MainWidget::MainWidget(QWidget* parent)
-    : QFrame(parent), laneConfig(new LaneConfigWidget), 
+    : QFrame(parent), laneConfig(new LaneConfigWidget),
     drawOptionDialog(new DrawOptionDialog(g_mainWindow))
 {
     instance = this;
-    setFrameStyle(Sunken | StyledPanel);
+    setFrameStyle(NoFrame | Plain);
 
     QSurfaceFormat format;
     format.setRenderableType(QSurfaceFormat::OpenGL);
@@ -87,36 +87,54 @@ MainWidget::MainWidget(QWidget* parent)
 
     int size = style()->pixelMetric(QStyle::PM_ToolBarIconSize);
     QSize iconSize(size, size);
-
-    // Label layout
     QSize largeIconSize = iconSize * 1.75;
-    QHBoxLayout* labelLayout = new QHBoxLayout;
+
+    // === Left sidebar — vertical tool buttons (mode selectors) ===
+    auto* sidebar = new QWidget(this);
+    sidebar->setObjectName("roadSidebar");
+    sidebar->setFixedWidth(52);
+    sidebar->setStyleSheet(
+        "QWidget#roadSidebar { background-color: #161b22; border-right: 1px solid #30363d; }"
+        "QToolButton { background: transparent; border: none; border-radius: 6px; "
+        "  padding: 6px; margin: 2px; }"
+        "QToolButton:hover { background-color: #30363d; }"
+        "QToolButton:checked { background-color: #0d1117; border: 2px solid #06b6d4; "
+        "  border-radius: 6px; }");
+    auto* sidebarLayout = new QVBoxLayout(sidebar);
+    sidebarLayout->setContentsMargins(4, 6, 4, 6);
+    sidebarLayout->setSpacing(4);
+    sidebarLayout->setAlignment(Qt::AlignTop);
+
     createModeButton = new QToolButton;
-    createModeButton->setToolTip(tr("Road Mode"));
+    createModeButton->setToolTip(tr("Road Mode — Draw new roads"));
     createModeButton->setIcon(QPixmap(":/icons/road_mode.png"));
     createModeButton->setIconSize(largeIconSize);
     createModeButton->setCheckable(true);
     createModeButton->setChecked(false);
+
     createLaneModeButton = new QToolButton;
-    createLaneModeButton->setToolTip(tr("Lane Mode"));
+    createLaneModeButton->setToolTip(tr("Lane Mode — Add/modify lanes"));
     createLaneModeButton->setIcon(QPixmap(":/icons/lane_mode.png"));
     createLaneModeButton->setIconSize(largeIconSize);
     createLaneModeButton->setCheckable(true);
     createLaneModeButton->setChecked(false);
-    destroyModeButton = new QToolButton;
-    destroyModeButton->setToolTip(tr("Destroy Mode"));
-    destroyModeButton->setIcon(QPixmap(":/icons/destroy_mode.png"));
-    destroyModeButton->setIconSize(largeIconSize);
-    destroyModeButton->setCheckable(true);
-    destroyModeButton->setChecked(false);
+
     modifyModeButton = new QToolButton;
-    modifyModeButton->setToolTip(tr("Modify Mode"));
+    modifyModeButton->setToolTip(tr("Modify Mode — Edit road geometry"));
     modifyModeButton->setIcon(QPixmap(":/icons/modify_mode.PNG"));
     modifyModeButton->setIconSize(largeIconSize);
     modifyModeButton->setCheckable(true);
     modifyModeButton->setChecked(false);
+
+    destroyModeButton = new QToolButton;
+    destroyModeButton->setToolTip(tr("Destroy Mode — Delete roads"));
+    destroyModeButton->setIcon(QPixmap(":/icons/destroy_mode.png"));
+    destroyModeButton->setIconSize(largeIconSize);
+    destroyModeButton->setCheckable(true);
+    destroyModeButton->setChecked(false);
+
     dragModeButton = new QToolButton;
-    dragModeButton->setToolTip(tr("Drag Mode"));
+    dragModeButton->setToolTip(tr("View Mode — Pan and zoom"));
     dragModeButton->setIcon(QPixmap(":/icons/view_mode.png"));
     dragModeButton->setIconSize(largeIconSize);
     dragModeButton->setCheckable(true);
@@ -130,67 +148,87 @@ MainWidget::MainWidget(QWidget* parent)
     pointerModeGroup->addButton(destroyModeButton);
     pointerModeGroup->addButton(dragModeButton);
 
-    labelLayout->addWidget(laneConfig);
+    sidebarLayout->addWidget(createModeButton);
+    sidebarLayout->addWidget(createLaneModeButton);
+    sidebarLayout->addWidget(modifyModeButton);
+    sidebarLayout->addWidget(destroyModeButton);
+    sidebarLayout->addWidget(dragModeButton);
+    sidebarLayout->addStretch();
+
+    // LaneConfigWidget — placed at bottom of sidebar
     QSizePolicy sp_retain = laneConfig->sizePolicy();
     sp_retain.setRetainSizeWhenHidden(true);
     laneConfig->setSizePolicy(sp_retain);
     laneConfig->hide();
     g_laneConfig = laneConfig;
-    labelLayout->addSpacing(2 * size);
-    labelLayout->addWidget(createModeButton);
-    labelLayout->addWidget(createLaneModeButton);
-    labelLayout->addWidget(modifyModeButton);
-    labelLayout->addWidget(destroyModeButton);
-    labelLayout->addWidget(dragModeButton);
-    labelLayout->addStretch();
+    sidebarLayout->addWidget(laneConfig);
 
-    auto loadButton = new QToolButton(this);
-    loadButton->setIcon(QPixmap(":/icons/open.png"));
-    loadButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(loadButton);
-    auto saveButton = new QToolButton(this);
-    saveButton->setIcon(QPixmap(":/icons/save.png"));
-    saveButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(saveButton);
+    // === Top toolbar — file ops, undo/redo, draw options, view mode, map ===
+    auto* topBar = new QWidget(this);
+    topBar->setObjectName("roadTopBar");
+    topBar->setFixedHeight(44);
+    topBar->setStyleSheet(
+        "QWidget#roadTopBar { background-color: #161b22; border-bottom: 1px solid #30363d; }"
+        "QToolButton { background: transparent; border: none; border-radius: 4px; "
+        "  padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
+        "QToolButton:hover { background-color: #30363d; }"
+        "QToolButton:checked { background-color: #0d1117; border: 1px solid #06b6d4; }"
+        "QLabel { color: #7d8590; font-size: 11px; padding: 0 4px; }");
+    auto* topBarLayout = new QHBoxLayout(topBar);
+    topBarLayout->setContentsMargins(8, 4, 8, 4);
+    topBarLayout->setSpacing(4);
 
-    labelLayout->addSpacing(size);
+    auto makeToolbarBtn = [&](const QString& icon, const QString& tip) {
+        auto* btn = new QToolButton;
+        btn->setIcon(QPixmap(icon));
+        btn->setIconSize(iconSize);
+        btn->setToolTip(tip);
+        return btn;
+    };
 
-    auto undoButton = new QToolButton(this);
-    undoButton->setIcon(QPixmap(":/icons/undo.png"));
-    undoButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(undoButton);
+    auto* loadButton = makeToolbarBtn(":/icons/open.png", tr("Open file"));
+    auto* saveButton = makeToolbarBtn(":/icons/save.png", tr("Save file"));
+    topBarLayout->addWidget(loadButton);
+    topBarLayout->addWidget(saveButton);
 
-    auto redoButton = new QToolButton(this);
-    redoButton->setIcon(QPixmap(":/icons/redo.png"));
-    redoButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(redoButton);
+    auto* sep1 = new QFrame;
+    sep1->setFrameShape(QFrame::VLine);
+    sep1->setStyleSheet("color: #30363d;");
+    topBarLayout->addWidget(sep1);
 
-    labelLayout->addSpacing(size);
+    auto* undoButton = makeToolbarBtn(":/icons/undo.png", tr("Undo"));
+    auto* redoButton = makeToolbarBtn(":/icons/redo.png", tr("Redo"));
+    topBarLayout->addWidget(undoButton);
+    topBarLayout->addWidget(redoButton);
 
-    auto drawOptionButton = new QToolButton(this);
-    drawOptionButton->setIcon(QPixmap(":/icons/draw_option.png"));
-    drawOptionButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(drawOptionButton);
+    auto* sep2 = new QFrame;
+    sep2->setFrameShape(QFrame::VLine);
+    sep2->setStyleSheet("color: #30363d;");
+    topBarLayout->addWidget(sep2);
 
-    labelLayout->addSpacing(size);
+    auto* drawOptionButton = makeToolbarBtn(":/icons/draw_option.png", tr("Draw options"));
+    topBarLayout->addWidget(drawOptionButton);
 
-    // 2D/3D view mode toggle button
+    topBarLayout->addStretch();
+
+    // 2D/3D view mode toggle
     viewModeButton = new QToolButton(this);
     viewModeButton->setText("3D");
     viewModeButton->setToolTip(tr("Toggle 2D/3D view"));
     viewModeButton->setCheckable(true);
     viewModeButton->setChecked(false);
-    viewModeButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(viewModeButton);
+    viewModeButton->setMinimumWidth(50);
+    topBarLayout->addWidget(viewModeButton);
 
-    // Load map background button
+    // Map toggle button
     loadMapButton = new QToolButton(this);
-    loadMapButton->setText("Map");
-    loadMapButton->setToolTip(tr("Load satellite map background"));
-    loadMapButton->setIconSize(largeIconSize);
-    labelLayout->addWidget(loadMapButton);
+    loadMapButton->setText("Satellite");
+    loadMapButton->setToolTip(tr("Toggle satellite map background"));
+    loadMapButton->setCheckable(true);
+    loadMapButton->setMinimumWidth(70);
+    topBarLayout->addWidget(loadMapButton);
 
-    // Container widget — just the OpenGL widget (map tiles rendered inside OpenGL)
+    // === Viewport container — OpenGL widget ===
     auto* viewportContainer = new QWidget(this);
     viewportContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* containerLayout = new QVBoxLayout(viewportContainer);
@@ -201,8 +239,6 @@ MainWidget::MainWidget(QWidget* parent)
     setupMapBackground();
     if (m_mapWidget)
     {
-        // MapLibre widget is kept for potential future use but hidden.
-        // Map tiles are now rendered directly inside the OpenGL widget.
         m_mapWidget->setParent(viewportContainer);
         m_mapWidget->hide();
     }
@@ -212,9 +248,18 @@ MainWidget::MainWidget(QWidget* parent)
     mapViewGL->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     containerLayout->addWidget(mapViewGL);
 
+    // === Main layout: top bar + (sidebar | viewport) ===
+    auto* contentLayout = new QHBoxLayout;
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
+    contentLayout->addWidget(sidebar);
+    contentLayout->addWidget(viewportContainer);
+
     QVBoxLayout* mainLayout = new QVBoxLayout;
-    mainLayout->addLayout(labelLayout);
-    mainLayout->addWidget(viewportContainer);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+    mainLayout->addWidget(topBar);
+    mainLayout->addLayout(contentLayout);
     setLayout(mainLayout);
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
@@ -231,7 +276,13 @@ MainWidget::MainWidget(QWidget* parent)
     connect(redoButton, &QAbstractButton::clicked, g_mainWindow, &MainWindow::redo);
     connect(drawOptionButton, &QAbstractButton::clicked, drawOptionDialog, &QDialog::open);
     connect(viewModeButton, &QAbstractButton::toggled, this, &MainWidget::toggleViewMode);
-    connect(loadMapButton, &QAbstractButton::clicked, this, &MainWidget::loadMapBackground);
+    connect(loadMapButton, &QAbstractButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            loadMapBackground();
+        } else {
+            mapViewGL->ClearMapBackground();
+        }
+    });
     Reset();
 }
 
@@ -300,7 +351,8 @@ void MainWidget::toggleViewMode(bool checked)
         // Switch to 2D top-down view
         viewModeButton->setText("2D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::TopDown2D);
-        // Auto-load map tiles for the 2D background
+        // Auto-load satellite map for 2D mode
+        loadMapButton->setChecked(true);
         loadMapBackground();
     }
     else
@@ -308,6 +360,7 @@ void MainWidget::toggleViewMode(bool checked)
         // Switch back to 3D perspective view
         viewModeButton->setText("3D");
         mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::Perspective3D);
+        loadMapButton->setChecked(false);
         mapViewGL->ClearMapBackground();
     }
 }
