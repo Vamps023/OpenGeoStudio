@@ -109,8 +109,7 @@ namespace LM
     }
 
     void MapViewGL::SetMapCenter(double lat, double lon)
-    {
-        m_mapCenterLat = lat;
+    {        m_mapCenterLat = lat;
         m_mapCenterLon = lon;
         m_mapEnabled = true;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
@@ -208,8 +207,7 @@ namespace LM
             }
         }
 
-        pruneInvisibleTiles();
-        m_lastTileZoom = m_mapZoom;
+        pruneInvisibleTiles();        m_lastTileZoom = m_mapZoom;
         m_lastCameraX = camX;
         m_lastCameraY = camY;
         m_lastCameraZ = camZ;
@@ -255,7 +253,7 @@ namespace LM
                 if (img.loadFromData(reply->readAll())) {                    rawPtr->pendingImage = img.convertToFormat(QImage::Format_RGB32);
                     rawPtr->loading = false;
                     update();
-                }
+                } else {                }
             }
             reply->deleteLater();
         });
@@ -264,19 +262,25 @@ namespace LM
 
     void MapViewGL::pruneInvisibleTiles()
     {
-        // Remove tiles that are too far from the current view
+        // Remove tiles that are too far from the current view.
+        // maxDist must account for tile size at the current zoom level,
+        // since low-zoom tiles can be very large (e.g. zoom 9 = ~78km per tile).
         float camX = m_camera.translation().x();
         float camY = m_camera.translation().y();
         float camZ = m_camera.translation().z();
-        float maxDist = camZ * 2.0f + 2000.0f;
+        float viewRadius = camZ * 0.6f + 1000.0f; // visible area radius
 
         m_mapTiles.erase(
             std::remove_if(m_mapTiles.begin(), m_mapTiles.end(),
-                [camX, camY, maxDist, this](const std::unique_ptr<MapTile>& t) {
+                [camX, camY, viewRadius, this](const std::unique_ptr<MapTile>& t) {
                     if (t->z != m_mapZoom) return true; // wrong zoom level
+                    // Keep tile if any part of it overlaps the visible area
                     float dx = t->worldX - camX;
                     float dy = t->worldY - camY;
-                    return std::sqrt(dx*dx + dy*dy) > maxDist;
+                    float dist = std::sqrt(dx*dx + dy*dy);
+                    float tileHalf = float(t->worldSize) * 0.5f;
+                    // Tile is visible if distance < viewRadius + tileHalf
+                    return dist > (viewRadius + tileHalf);
                 }),
             m_mapTiles.end());
     }
@@ -342,7 +346,7 @@ namespace LM
     {
         if (!m_mapEnabled || m_mapTiles.empty()) return;
         initTexturedShader();
-        
+                
 
         // Upload any pending images as GL textures (must be on GL thread)
         for (auto& tile : m_mapTiles) {
@@ -642,6 +646,7 @@ namespace LM
             {
                 UpdateMapTiles();
             }
+            
         }
         else
         {

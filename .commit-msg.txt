@@ -1,27 +1,57 @@
-Fix blue background + zoom range + adaptive tile zoom in 2D mode
+Bring Terrain mode to feature parity with Electron version
 
-Issues fixed:
-  1. Blue background showing through unloaded tiles
-     - Changed glClearColor from (0.05, 0.05, 0.08) to neutral
-       dark gray (0.09, 0.09, 0.11) so gaps are less jarring
+Expanded all API options to match the Electron version:
 
-  2. Can't zoom out enough
-     - Max Z increased from 2000 to 50000 (city/region level)
-     - Min Z decreased from 50 to 20 (street level)
-     - Changed zoom step from fixed 30 to proportional 15% of
-       current Z, giving smooth zoom at any scale
+DEM Sources (6 → 13):
+  - AWS Terrarium (~30m, free, no key)
+  - Mapzen Terrarium (~30m, free, no key)
+  - Mapbox Terrain-RGB (HD 0.1m, token)
+  - NASA EarthData Copernicus GLO-30 (free, no key)
+  - OpenTopo Copernicus GLO-30 (API key)
+  - OpenTopo NASADEM (API key)
+  - OpenTopo SRTM GL1 (API key)
+  - OpenTopo SRTM GL3 (API key)
+  - OpenTopo ALOS AW3D30 (API key)
+  - OpenTopo USGS 3DEP (~10m, USA only, API key)
+  - GPXZ LiDAR (5m, API key)
+  - GLAD SRTM (free, no key)
+  - Import GeoTIFF DEM from file
 
-  3. Tile zoom level not adapting to view scale
-     - Was fixed at zoom=16, only reduced when too many tiles
-     - Now calculates ideal zoom from view size:
-       2^z = earthCirc * cos(lat) / (targetTileMeters * 256)
-     - Tiles automatically get more detailed when zooming in
-       and less detailed when zooming out
-     - Zoom range clamped to [2, 19]
-     - Max tiles increased from 20 to 30
+Imagery Sources (3 → 6):
+  - Google Satellite (free)
+  - ArcGIS World Imagery (free)
+  - Mapbox Satellite (token)
+  - MapTiler Satellite (token)
+  - GLAD ARD Landsat (free, 30m)
+  - Import imagery from file
 
-  4. Default 2D camera Z raised from 500 to 1000 for better
-     initial overview
+CRS Options (3 → 8):
+  - Auto (UTM from bounds centroid)
+  - EPSG:4326 (WGS84)
+  - EPSG:3857 (Web Mercator)
+  - EPSG:32633/32634/32635 (UTM zones)
+  - EPSG:25832/25833 (ETRS89 UTM zones)
+
+API Keys (2 → 5):
+  - OpenTopography, Mapbox, MapTiler, GPXZ, Stadia
+
+New features:
+  - "None" heightmap format (albedo-only export)
+  - Resolution presets with pixel-size labels (512-8192)
+  - Manual imagery zoom level (Auto + 10-22)
+  - GLAD ARD interval input (shown when GLAD ARD selected)
+  - Local file import for DEM and imagery
+  - API key validation warnings
+  - 16km tile size option
+  - Scrollable export panel for all options
+  - Dynamic show/hide of GLAD interval and local file import
+
+Files changed:
+  - TerrainTypes.hpp — expanded all enums + helper methods
+  - TerrainStore.hpp/cpp — new setters for all options
+  - ExportPanel.hpp/cpp — complete UI rewrite with all options
+  - ExportEngine.cpp — new DEM/imagery URL handlers
+  - TerrainStudioWidget.hpp — 16km tile size
 
 Build: OK | Tests: 473/473 passed | App: runs
 
