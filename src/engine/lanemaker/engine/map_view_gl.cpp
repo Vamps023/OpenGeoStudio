@@ -66,8 +66,7 @@ namespace LM
         if (m_viewMode == ViewMode::TopDown2D)
         {
             // Top-down: camera directly above XY ground plane, looking straight down -Z.
-            // NO rotation — default camera looks down -Z, which is straight down at XY plane.
-            m_camera.setTranslation(0, 0, 500);
+            m_camera.setTranslation(0, 0, 1000);
             m_camera.setRotation(0, QVector3D(1, 0, 0));
         }
         else
@@ -157,25 +156,41 @@ namespace LM
         minLon = std::max(-180.0, std::min(180.0, minLon));
         maxLon = std::max(-180.0, std::min(180.0, maxLon));
 
+        // Calculate the ideal tile zoom level based on the view scale.
+        // We want roughly 256px per tile to match screen pixels.
+        // mpp = meters per pixel at current zoom
+        // tileMeters = 256 * mpp = size of one tile in meters
+        // We want tileMeters ~= viewSize so ~2-4 tiles cover the screen
+        double targetTileMeters = viewSize * 0.5; // each tile covers half the view
+        // tileMeters = earthCircumference * cos(lat) / (2^z * 256)
+        // => 2^z = earthCircumference * cos(lat) / (targetTileMeters * 256)
+        double earthCirc = 40075016.686;
+        double idealZoom = std::log2(earthCirc * std::cos(m_mapCenterLat * M_PI / 180.0)
+                                      / (targetTileMeters * 256.0));
+        int newZoom = std::max(2, std::min(19, (int)std::round(idealZoom)));
+
+        if (newZoom != m_mapZoom) {
+            m_mapTiles.clear(); // clear old zoom-level tiles
+            m_mapZoom = newZoom;
+        }
+
         int txMin, tyMin, txMax, tyMax;
         latLonToTile(minLat, minLon, m_mapZoom, txMin, tyMin);
         latLonToTile(maxLat, maxLon, m_mapZoom, txMax, tyMax);
         if (txMin > txMax) std::swap(txMin, txMax);
         if (tyMin > tyMax) std::swap(tyMin, tyMax);
 
-        const int MAX_TILES = 20;
+        // Safety cap on tile count
+        const int MAX_TILES = 30;
         int count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
         if (count > MAX_TILES) {
-            while (count > MAX_TILES && m_mapZoom > 3) {
+            while (count > MAX_TILES && m_mapZoom > 2) {
                 m_mapZoom--;
                 txMin /= 2; txMax /= 2;
                 tyMin /= 2; tyMax /= 2;
                 count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
             }
-            m_mapTiles.erase(
-                std::remove_if(m_mapTiles.begin(), m_mapTiles.end(),
-                    [this](const std::unique_ptr<MapTile>& t) { return t->z != m_mapZoom; }),
-                m_mapTiles.end());
+            m_mapTiles.clear();
         }
 
         for (int ty = tyMin; ty <= tyMax; ty++) {
@@ -193,7 +208,8 @@ namespace LM
             }
         }
 
-        pruneInvisibleTiles();        m_lastTileZoom = m_mapZoom;
+        pruneInvisibleTiles();
+        m_lastTileZoom = m_mapZoom;
         m_lastCameraX = camX;
         m_lastCameraY = camY;
         m_lastCameraZ = camZ;
@@ -611,7 +627,7 @@ namespace LM
                 -5000.0f, 5000.0f
             );
 
-            glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+            glClearColor(0.09f, 0.09f, 0.11f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             // Check if camera moved enough to need new tiles
@@ -865,10 +881,11 @@ namespace LM
         {
             // In 2D orthographic mode, zoom = move camera Z.
             // Scroll up (dir=1) should zoom IN = decrease Z = smaller view size.
-            // Clamp Z to keep a reasonable range.
-            float newZ = m_camera.translation().z() - dir * 30.0f;
-            if (newZ < 50.0f) newZ = 50.0f;
-            if (newZ > 2000.0f) newZ = 2000.0f;
+            // Use proportional zoom step for smooth zoom at any scale.
+            float curZ = m_camera.translation().z();
+            float newZ = curZ * (1.0f - dir * 0.15f);
+            if (newZ < 20.0f) newZ = 20.0f;    // max zoom in
+            if (newZ > 50000.0f) newZ = 50000.0f; // max zoom out (city/region level)
             m_camera.setTranslation(m_camera.translation().x(),
                                     m_camera.translation().y(),
                                     newZ);
