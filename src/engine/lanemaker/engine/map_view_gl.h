@@ -160,26 +160,32 @@ namespace LM
         ViewMode m_viewMode = ViewMode::Perspective3D;
 
         // Dynamic tile cache for satellite map
+        // QGIS-inspired approach: download tiles as QImage, composite into
+        // a single image, upload as one OpenGL texture, draw as one quad.
         struct MapTile {
             int z, x, y; // tile coordinates
-            std::unique_ptr<QOpenGLTexture> texture;
             double worldX, worldY; // center in world meters
             double worldSize; // size in world meters
             bool loading = false;
-            QImage pendingImage; // image waiting to be uploaded as GL texture
+            QImage image; // downloaded tile image
         };
         std::vector<std::unique_ptr<MapTile>> m_mapTiles;
         double m_mapCenterLat = 18.52;
         double m_mapCenterLon = 73.85;
-        double m_mapOriginX = 0; // world X for map center (meters)
-        double m_mapOriginY = 0; // world Y for map center (meters)
         int m_mapZoom = 16;
         bool m_mapEnabled = false;
         QNetworkAccessManager* m_tileNam = nullptr;
         int m_lastTileZoom = -1;
         double m_lastCameraX = 0, m_lastCameraY = 0, m_lastCameraZ = 0;
 
-        // Shader for textured tiles
+        // Single composite texture for the entire map (QGIS-style)
+        std::unique_ptr<QOpenGLTexture> m_mapTexture;
+        QImage m_mapCompositeImage;
+        bool m_mapCompositeDirty = true;
+        double m_mapCompositeWorldMinX = 0, m_mapCompositeWorldMinY = 0;
+        double m_mapCompositeWorldMaxX = 0, m_mapCompositeWorldMaxY = 0;
+
+        // Shader for textured quad
         QOpenGLShaderProgram m_texturedShader;
         QOpenGLBuffer m_bgQuadVbo;
         QOpenGLVertexArrayObject m_bgQuadVao;
@@ -189,6 +195,7 @@ namespace LM
         void drawMapBackground();
         void requestTile(int z, int x, int y);
         void pruneInvisibleTiles();
+        void compositeMapImage();
         static void latLonToTile(double lat, double lon, int z, int& tx, int& ty);
         static void tileToLatLon(int tx, int ty, int z, double& lat, double& lon);
         static double metersPerPixel(double lat, int z);

@@ -120,6 +120,9 @@ namespace LM
     void MapViewGL::ClearMapBackground()
     {
         m_mapTiles.clear();
+        m_mapTexture.reset();
+        m_mapCompositeImage = QImage();
+        m_mapCompositeDirty = true;
         m_mapEnabled = false;
         update();
     }
@@ -171,6 +174,8 @@ namespace LM
         if (newZoom != m_mapZoom) {
             m_mapTiles.clear(); // clear old zoom-level tiles
             m_mapZoom = newZoom;
+            m_mapCompositeDirty = true;
+            m_mapTexture.reset();
         }
 
         int txMin, tyMin, txMax, tyMax;
@@ -190,6 +195,8 @@ namespace LM
                 count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
             }
             m_mapTiles.clear();
+            m_mapCompositeDirty = true;
+            m_mapTexture.reset();
         }
 
         for (int ty = tyMin; ty <= tyMax; ty++) {
@@ -244,21 +251,25 @@ namespace LM
         auto* reply = m_tileNam->get(request);
         MapTile* rawPtr = tile.get();
 
-        connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {            bool tileExists = false;
+        connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {
+            bool tileExists = false;
             for (auto& t : m_mapTiles) {
                 if (t.get() == rawPtr) { tileExists = true; break; }
             }
             if (reply->error() == QNetworkReply::NoError && tileExists) {
                 QImage img;
-                if (img.loadFromData(reply->readAll())) {                    rawPtr->pendingImage = img.convertToFormat(QImage::Format_RGB32);
+                if (img.loadFromData(reply->readAll())) {
+                    rawPtr->image = img.convertToFormat(QImage::Format_RGB32);
                     rawPtr->loading = false;
+                    m_mapCompositeDirty = true;
                     update();
-                } else {                }
+                }
             }
             reply->deleteLater();
         });
 
-        m_mapTiles.push_back(std::move(tile));    }
+        m_mapTiles.push_back(std::move(tile));
+    }
 
     void MapViewGL::pruneInvisibleTiles()
     {
@@ -342,54 +353,128 @@ namespace LM
         m_bgQuadVao.release();
     }
 
+    void MapViewGL::compositeMapImage()
+    {
+        // QGIS-style: composite all tile QImages into a single QImage using QPainter.
+        // This avoids per-tile OpenGL texture management entirely.
+        if (m_mapTiles.empty()) return;
+
+        // Find the bounding box of all tiles in world coordinates
+        double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
+        int tilesWithImage = 0;
+        for (auto& tile : m_mapTiles) {
+            if (tile->image.isNull() || tile->loading) continue;
+            tilesWithImage++;
+            double half = tile->worldSize * 0.5;
+            minX = std::min(minX, tile->worldX - half);
+            minY = std::min(minY, tile->worldY - half);
+            maxX = std::max(maxX, tile->worldX + half);
+            maxY = std::max(maxY, tile->worldY + half);
+        }
+        if (tilesWithImage == 0) return;
+
+        // Create composite image at tile resolution (256px per tile)
+        double worldWidth = maxX - minX;
+        double worldHeight = maxY - minY;
+        double tileSizeWorld = m_mapTiles[0]->worldSize;
+        int tilesX = std::max(1, (int)std::ceil(worldWidth / tileSizeWorld));
+        int tilesY = std::max(1, (int)std::ceil(worldHeight / tileSizeWorld));
+        int imgW = tilesX * 256;
+        int imgH = tilesY * 256;
+
+        // Cap composite image size to avoid excessive memory
+        const int MAX_COMPOSITE = 4096;
+        if (imgW > MAX_COMPOSITE) imgW = MAX_COMPOSITE;
+        if (imgH > MAX_COMPOSITE) imgH = MAX_COMPOSITE;
+
+        m_mapCompositeImage = QImage(imgW, imgH, QImage::Format_RGB32);
+        m_mapCompositeImage.fill(QColor(13, 17, 23)); // dark background
+
+        QPainter painter(&m_mapCompositeImage);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+        for (auto& tile : m_mapTiles) {
+            if (tile->image.isNull() || tile->loading) continue;
+
+            // Map tile world position to composite image pixels
+            double half = tile->worldSize * 0.5;
+            double tileMinX = tile->worldX - half;
+            double tileMinY = tile->worldY - half; // bottom in world coords
+            // In world coords, +Y = north = up. In image coords, +Y = down.
+            // So we need to flip Y.
+            int dstX = (int)((tileMinX - minX) / worldWidth * imgW);
+            int dstY = (int)((maxY - (tile->worldY + half)) / worldHeight * imgH); // flip Y
+            int dstW = (int)(tile->worldSize / worldWidth * imgW);
+            int dstH = (int)(tile->worldSize / worldHeight * imgH);
+
+            painter.drawImage(QRect(dstX, dstY, dstW, dstH), tile->image);
+        }
+        painter.end();
+
+        // Store the world bounds for drawing
+        m_mapCompositeWorldMinX = minX;
+        m_mapCompositeWorldMinY = minY;
+        m_mapCompositeWorldMaxX = maxX;
+        m_mapCompositeWorldMaxY = maxY;
+        m_mapCompositeDirty = false;
+    }
+
     void MapViewGL::drawMapBackground()
     {
         if (!m_mapEnabled || m_mapTiles.empty()) return;
-        initTexturedShader();
-                
 
-        // Upload any pending images as GL textures (must be on GL thread)
+        // Check if any tiles have images
+        bool hasImages = false;
         for (auto& tile : m_mapTiles) {
-            if (!tile->pendingImage.isNull() && !tile->texture) {
-                tile->texture = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target2D);
-                tile->texture->setData(tile->pendingImage);
-                tile->texture->setMinificationFilter(QOpenGLTexture::Linear);
-                tile->texture->setMagnificationFilter(QOpenGLTexture::Linear);
-                tile->texture->setWrapMode(QOpenGLTexture::ClampToEdge);
-                tile->pendingImage = QImage(); // free the image
-            }
+            if (!tile->image.isNull() && !tile->loading) { hasImages = true; break; }
         }
+        if (!hasImages) return;
+
+        initTexturedShader();
+
+        // Composite tiles into a single image if needed (QGIS-style)
+        if (m_mapCompositeDirty) {
+            compositeMapImage();
+            if (m_mapCompositeImage.isNull()) return;
+
+            // Upload composite as single OpenGL texture
+            m_mapTexture = std::make_unique<QOpenGLTexture>(m_mapCompositeImage);
+            m_mapTexture->setMinificationFilter(QOpenGLTexture::Linear);
+            m_mapTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+            m_mapTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+        }
+
+        if (!m_mapTexture) return;
+
+        // Draw one quad covering the composite area in world coordinates
+        float cx = (float)((m_mapCompositeWorldMinX + m_mapCompositeWorldMaxX) * 0.5);
+        float cy = (float)((m_mapCompositeWorldMinY + m_mapCompositeWorldMaxY) * 0.5);
+        float halfW = (float)((m_mapCompositeWorldMaxX - m_mapCompositeWorldMinX) * 0.5);
+        float halfH = (float)((m_mapCompositeWorldMaxY - m_mapCompositeWorldMinY) * 0.5);
+
+        float quadVerts[] = {
+            // pos                          // texcoord (V=0 at top/north)
+            cx - halfW, cy - halfH, 0,     0, 1,
+            cx + halfW, cy - halfH, 0,     1, 1,
+            cx + halfW, cy + halfH, 0,     1, 0,
+            cx - halfW, cy - halfH, 0,     0, 1,
+            cx + halfW, cy + halfH, 0,     1, 0,
+            cx - halfW, cy + halfH, 0,     0, 0,
+        };
+
+        m_bgQuadVbo.bind();
+        m_bgQuadVbo.write(0, quadVerts, sizeof(quadVerts));
+        m_bgQuadVbo.release();
 
         glDisable(GL_DEPTH_TEST);
         m_texturedShader.bind();
         m_texturedShader.setUniformValue("worldToView", m_worldToView);
+        m_mapTexture->bind(0);
+        m_texturedShader.setUniformValue("tex", 0);
 
-        for (auto& tile : m_mapTiles) {
-            if (!tile->texture || tile->loading) continue;
-
-            float halfSize = float(tile->worldSize) * 0.5f;
-            float cx = float(tile->worldX);
-            float cy = float(tile->worldY);
-            float quadVerts[] = {
-                cx - halfSize, cy - halfSize, 0,    0, 1,
-                cx + halfSize, cy - halfSize, 0,    1, 1,
-                cx + halfSize, cy + halfSize, 0,    1, 0,
-                cx - halfSize, cy - halfSize, 0,    0, 1,
-                cx + halfSize, cy + halfSize, 0,    1, 0,
-                cx - halfSize, cy + halfSize, 0,    0, 0,
-            };
-
-            m_bgQuadVbo.bind();
-            m_bgQuadVbo.write(0, quadVerts, sizeof(quadVerts));
-            m_bgQuadVbo.release();
-
-            tile->texture->bind(0);
-            m_texturedShader.setUniformValue("tex", 0);
-
-            m_bgQuadVao.bind();
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-            m_bgQuadVao.release();
-        }
+        m_bgQuadVao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        m_bgQuadVao.release();
 
         m_texturedShader.release();
         glEnable(GL_DEPTH_TEST);

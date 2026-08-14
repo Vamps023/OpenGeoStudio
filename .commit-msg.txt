@@ -1,23 +1,22 @@
-Fix map tiles pruned immediately at low zoom levels
+Add app icon from original Electron version
 
-Root cause: pruneInvisibleTiles used a fixed maxDist of
-  camZ * 2.0 + 2000 (e.g. 4000m at camZ=1000).
+Converted the original logo.png (512x512) from the Electron
+repo (D:/git/OpenGeoStudio/assets/logo/logo.png) to:
+  - resources/app.ico  (multi-size: 16,32,48,64,128,256)
+  - resources/app.png  (512x512 for window icon)
 
-At low zoom levels (e.g. zoom 9), each tile covers ~78km.
-The tile center is at ~39000m from the map center, which is
-way beyond maxDist=4000. So every tile was pruned immediately
-after being requested, causing an infinite loop of:
-  request → reply → prune → request → ...
+Added:
+  - resources/app.rc — Windows resource file embedding the ICO
+    in the executable metadata (shows in taskbar, file explorer)
+  - resources/app_icons.qrc — Qt resource for runtime window icon
+  - CMakeLists.txt — compiles RC file on Windows + adds QRC
+  - main.cpp — sets app.setWindowIcon(QIcon(":/icons/app.png"))
 
-Fix: Changed prune logic to account for tile size.
-  A tile is kept if: distance < viewRadius + tileHalfSize
-  where viewRadius = camZ * 0.6 + 1000 (the visible area)
-  and tileHalfSize = worldSize / 2
-
-This ensures tiles that overlap the visible area are kept,
-regardless of how large they are at low zoom levels.
-
-Also removed all debug logging added during diagnosis.
+The icon now appears in:
+  - Windows taskbar
+  - Window title bar
+  - File explorer (.exe icon)
+  - Alt+Tab switcher
 
 Build: OK | Tests: 473/473 passed | App: runs
 
