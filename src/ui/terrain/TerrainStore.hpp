@@ -45,8 +45,16 @@ public:
     void setAlbedoFormat(terrain::AlbedoFormat fmt);
     void setDemSource(terrain::DemSource src);
     void setImagerySource(terrain::ImagerySource src);
+    void setCrsSource(terrain::CrsSource src);
     void setOpenTopoApiKey(const QString& key);
     void setMapboxToken(const QString& key);
+    void setMaptilerToken(const QString& key);
+    void setGpxzApiKey(const QString& key);
+    void setStadiaApiKey(const QString& key);
+    void setImageryZoomLevel(int level);
+    void setGladArdInterval(int interval);
+    void setLocalDemFilePath(const QString& path);
+    void setLocalImageryFilePath(const QString& path);
 
     // Compute tile grid from bounds
     void computeTileGrid();

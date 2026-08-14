@@ -232,15 +232,20 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
     double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
     double centerLon = (tile.bounds.east + tile.bounds.west) / 2.0;
 
-    // Compute zoom level based on tile size
-    // Approximate: tile covers m_tileSizeKm at the equator
-    double tileSizeKm = m_store->tileSizeKm();
-    int zoom = 12; // default
-    // Adjust zoom based on tile size
-    if (tileSizeKm <= 1) zoom = 15;
-    else if (tileSizeKm <= 2) zoom = 14;
-    else if (tileSizeKm <= 4) zoom = 13;
-    else zoom = 12;
+    // Compute zoom level — use manual override if set, otherwise auto-calculate
+    int manualZoom = m_store->exportSettings().imageryZoomLevel;
+    int zoom;
+    if (manualZoom > 0) {
+        zoom = manualZoom;
+    } else {
+        // Auto-calculate based on tile size
+        double tileSizeKm = m_store->tileSizeKm();
+        if (tileSizeKm <= 1) zoom = 15;
+        else if (tileSizeKm <= 2) zoom = 14;
+        else if (tileSizeKm <= 4) zoom = 13;
+        else if (tileSizeKm <= 8) zoom = 12;
+        else zoom = 11; // 16km tiles
+    }
 
     // Compute tile X/Y from lat/lon at the given zoom
     double n = std::pow(2.0, zoom);
@@ -309,23 +314,46 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
 QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     const auto& settings = m_store->exportSettings();
 
-    // OpenTopography API URL format:
-    // https://portal.opentopography.org/API/globaldem?demtype=SRTMGL1&south=...&north=...&west=...&east=...&outputFormat=AAIGrid&API_Key=...
     QString demType;
     switch (settings.demSource) {
+    // Tiled DEM sources (no API key needed)
+    case terrain::DemSource::AWS_Terrarium:
+        return QString("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%1/%2/%3.png")
+            .arg(15).arg(tile.col).arg(tile.row); // approx zoom 15
+    case terrain::DemSource::Mapzen_Terrarium:
+        return QString("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%1/%2/%3.png")
+            .arg(15).arg(tile.col).arg(tile.row);
+    case terrain::DemSource::Mapbox_TerrainRGB:
+        if (settings.mapboxToken.isEmpty()) return {};
+        return QString("https://api.mapbox.com/v4/mapbox.terrain-rgb/%1/%2/%3.png?access_token=%4")
+            .arg(15).arg(tile.col).arg(tile.row).arg(settings.mapboxToken);
+    case terrain::DemSource::NASA_EarthData_Copernicus:
+        // Copernicus DEM GLO-30 via NASA EarthData (free, no key)
+        return QString("https://copernicus-dem-30m.s3.amazonaws.com/data/"
+                       "Copernicus_DSM_COG_10_N%1_00_E%2_00_DEM.tif")
+            .arg(static_cast<int>(tile.bounds.north), 2, 10, QChar('0'))
+            .arg(static_cast<int>(tile.bounds.east), 3, 10, QChar('0'));
+    // OpenTopography API sources
     case terrain::DemSource::OpenTopo_SRTM_GL1: demType = "SRTMGL1"; break;
     case terrain::DemSource::OpenTopo_SRTM_GL3: demType = "SRTMGL3"; break;
     case terrain::DemSource::OpenTopo_ALOS_AW3D30: demType = "AW3D30"; break;
     case terrain::DemSource::OpenTopo_Copernicus_GLO30: demType = "COP30"; break;
     case terrain::DemSource::OpenTopo_NASADEM: demType = "NASADEM"; break;
+    case terrain::DemSource::OpenTopo_USGS_3DEP: demType = "USGS10m"; break;
+    case terrain::DemSource::GPXZ_LiDAR:
+        if (settings.gpxzApiKey.isEmpty()) return {};
+        return QString("https://data.gpxz.co/api/v1/raster?south=%1&north=%2&west=%3&east=%4&key=%5")
+            .arg(tile.bounds.south).arg(tile.bounds.north)
+            .arg(tile.bounds.west).arg(tile.bounds.east)
+            .arg(settings.gpxzApiKey);
     case terrain::DemSource::GLAD_SRTM:
-        // GLAD SRTM uses a different URL pattern
         return QString("https://glad.umd.edu/dataset/srtm-90m/%1/%2")
             .arg(tile.bounds.south, 0, 'f', 4).arg(tile.bounds.west, 0, 'f', 4);
+    case terrain::DemSource::Local_File:
+        return {}; // handled separately via local file path
     }
 
     if (settings.openTopoApiKey.isEmpty()) {
-        // No API key — return empty to generate placeholder
         return {};
     }
 
@@ -345,16 +373,25 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
 QString ExportEngine::imageryTileUrl(int z, int x, int y) const {
     const auto& settings = m_store->exportSettings();
     switch (settings.imagerySource) {
-    case terrain::ImagerySource::ArcGIS_World_Imagery:
-        return QString("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")
-            .arg(z).arg(y).arg(x);
     case terrain::ImagerySource::Google_Satellite:
         return QString("https://mt1.google.com/vt/lyrs=s&x=%1&y=%2&z=%3")
             .arg(x).arg(y).arg(z);
+    case terrain::ImagerySource::ArcGIS_World_Imagery:
+        return QString("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")
+            .arg(z).arg(y).arg(x);
     case terrain::ImagerySource::Mapbox_Satellite:
         if (settings.mapboxToken.isEmpty()) return {};
         return QString("https://api.mapbox.com/v4/mapbox.satellite/%1/%2/%3.png?access_token=%4")
             .arg(z).arg(x).arg(y).arg(settings.mapboxToken);
+    case terrain::ImagerySource::MapTiler_Satellite:
+        if (settings.maptilerToken.isEmpty()) return {};
+        return QString("https://api.maptiler.com/tiles/satellite/%1/%2/%3.jpg?key=%4")
+            .arg(z).arg(x).arg(y).arg(settings.maptilerToken);
+    case terrain::ImagerySource::GLAD_ARD_Landsat:
+        // GLAD ARD uses a different tile scheme — return empty for now, placeholder will be used
+        return {};
+    case terrain::ImagerySource::Local_File:
+        return {};
     }
     return {};
 }

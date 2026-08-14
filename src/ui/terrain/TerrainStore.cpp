@@ -24,8 +24,8 @@ void TerrainStore::clearBounds() {
 }
 
 void TerrainStore::setTileSizeKm(double km) {
-    // Valid tile sizes: 1, 2, 4, 8 km
-    if (km != 1 && km != 2 && km != 4 && km != 8) km = 2;
+    // Valid tile sizes: 1, 2, 4, 8, 16 km
+    if (km != 1 && km != 2 && km != 4 && km != 8 && km != 16) km = 2;
     m_tileSizeKm = km;
     computeTileGrid();
     emit tileGridChanged(m_tileGrid);
@@ -84,12 +84,49 @@ void TerrainStore::setImagerySource(terrain::ImagerySource src) {
     emit exportSettingsChanged();
 }
 
+void TerrainStore::setCrsSource(terrain::CrsSource src) {
+    m_exportSettings.crsSource = src;
+    emit exportSettingsChanged();
+}
+
 void TerrainStore::setOpenTopoApiKey(const QString& key) {
     m_exportSettings.openTopoApiKey = key;
 }
 
 void TerrainStore::setMapboxToken(const QString& key) {
     m_exportSettings.mapboxToken = key;
+}
+
+void TerrainStore::setMaptilerToken(const QString& key) {
+    m_exportSettings.maptilerToken = key;
+}
+
+void TerrainStore::setGpxzApiKey(const QString& key) {
+    m_exportSettings.gpxzApiKey = key;
+}
+
+void TerrainStore::setStadiaApiKey(const QString& key) {
+    m_exportSettings.stadiaApiKey = key;
+}
+
+void TerrainStore::setImageryZoomLevel(int level) {
+    m_exportSettings.imageryZoomLevel = level;
+    emit exportSettingsChanged();
+}
+
+void TerrainStore::setGladArdInterval(int interval) {
+    m_exportSettings.gladArdInterval = interval;
+    emit exportSettingsChanged();
+}
+
+void TerrainStore::setLocalDemFilePath(const QString& path) {
+    m_exportSettings.localDemFilePath = path;
+    emit exportSettingsChanged();
+}
+
+void TerrainStore::setLocalImageryFilePath(const QString& path) {
+    m_exportSettings.localImageryFilePath = path;
+    emit exportSettingsChanged();
 }
 
 void TerrainStore::computeTileGrid() {

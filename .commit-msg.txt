@@ -1,31 +1,27 @@
-Fix roads invisible in 3D + add Blender-style viewport controls
+Fix blue background + zoom range + adaptive tile zoom in 2D mode
 
-Bug: Roads drawn in 2D were invisible in 3D mode
-  Root cause: paintGL only set the perspective projection in
-  resizeGL, which is NOT called when switching view modes. So
-  switching from 2D to 3D left the projection as ortho, making
-  roads appear invisible or distorted in 3D.
+Issues fixed:
+  1. Blue background showing through unloaded tiles
+     - Changed glClearColor from (0.05, 0.05, 0.08) to neutral
+       dark gray (0.09, 0.09, 0.11) so gaps are less jarring
 
-  Fix: Set perspective projection every frame in paintGL's 3D
-  branch (matching how 2D sets ortho every frame).
+  2. Can't zoom out enough
+     - Max Z increased from 2000 to 50000 (city/region level)
+     - Min Z decreased from 50 to 20 (street level)
+     - Changed zoom step from fixed 30 to proportional 15% of
+       current Z, giving smooth zoom at any scale
 
-  Also improved the default 3D camera angle (35 deg pitch, higher
-  altitude) for a better overview of the ground plane.
+  3. Tile zoom level not adapting to view scale
+     - Was fixed at zoom=16, only reduced when too many tiles
+     - Now calculates ideal zoom from view size:
+       2^z = earthCirc * cos(lat) / (targetTileMeters * 256)
+     - Tiles automatically get more detailed when zooming in
+       and less detailed when zooming out
+     - Zoom range clamped to [2, 19]
+     - Max tiles increased from 20 to 30
 
-Blender-style 3D viewport controls:
-  - Middle mouse drag = orbit (rotate around target point on ground)
-    Yaw = horizontal mouse, pitch = vertical mouse
-  - Shift + Middle mouse drag = pan (move along screen plane)
-  - Scroll wheel = dolly zoom toward view direction
-    (scaled by camera distance for smooth zoom at any scale)
-
-  The orbit rotates the camera position around the ground point
-  the camera is looking at, giving intuitive Blender-like behavior.
-
-  Existing controls still work:
-  - Right mouse = free rotate (LaneMaker original)
-  - WASD = pan, Q/E = rotate Z
-  - 2D mode: scroll = zoom in/out, middle = pan
+  4. Default 2D camera Z raised from 500 to 1000 for better
+     initial overview
 
 Build: OK | Tests: 473/473 passed | App: runs
 

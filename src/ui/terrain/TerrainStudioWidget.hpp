@@ -69,7 +69,7 @@ private:
         m_toolbar->addWidget(tileLabel);
 
         auto* tileSpin = new QDoubleSpinBox();
-        tileSpin->setRange(1, 8);
+        tileSpin->setRange(1, 16);
         tileSpin->setSingleStep(1);
         tileSpin->setValue(2);
         tileSpin->setSuffix(" km");
