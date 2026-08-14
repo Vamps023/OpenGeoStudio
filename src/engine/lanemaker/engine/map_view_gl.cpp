@@ -8,6 +8,8 @@
 #include <QImage>
 #include <QTimer>
 
+#include "MapSubsystem.hpp"
+
 #include "main_widget.h"
 #include "id_generator.h"
 #include "spatial_indexer.h"
@@ -140,68 +142,71 @@ namespace LM
 
         float camX = m_camera.translation().x();
         float camY = m_camera.translation().y();
+
+        // Use the new map subsystem for proper coordinate conversion.
+        // The camera world position (camX, camY) is an offset in meters
+        // from the map center. Convert the visible world extent to
+        // lat/lon using CoordinateTransform (EPSG:4326 ↔ EPSG:3857).
         double worldLeft   = camX - viewSize * aspect;
         double worldRight  = camX + viewSize * aspect;
         double worldBottom = camY - viewSize;
         double worldTop    = camY + viewSize;
 
-        double latPerMeter = 1.0 / 111320.0;
-        double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
+        // Map center in Web Mercator (EPSG:3857)
+        auto centerMerc = map::CoordinateTransform::lonLatToMercator(m_mapCenterLon, m_mapCenterLat);
 
-        // OpenGL ortho: +Y = up = north (higher latitude), +X = right = east
-        double minLat = m_mapCenterLat + worldBottom * latPerMeter;
-        double maxLat = m_mapCenterLat + worldTop * latPerMeter;
-        double minLon = m_mapCenterLon + worldLeft * lonPerMeter;
-        double maxLon = m_mapCenterLon + worldRight * lonPerMeter;
+        // Visible extent in Web Mercator (world coords are meter offsets from center)
+        map::MapRectangle mercExtent(
+            centerMerc.x + worldLeft,
+            centerMerc.y + worldBottom,
+            centerMerc.x + worldRight,
+            centerMerc.y + worldTop
+        );
 
-        minLat = std::max(-85.05, std::min(85.05, minLat));
-        maxLat = std::max(-85.05, std::min(85.05, maxLat));
-        minLon = std::max(-180.0, std::min(180.0, minLon));
-        maxLon = std::max(-180.0, std::min(180.0, maxLon));
+        // Convert to lat/lon for tile selection
+        map::CoordinateTransform toLatLon(map::CRSId::EPSG_3857, map::CRSId::EPSG_4326);
+        auto lonLatExtent = toLatLon.transform(mercExtent);
 
-        // Calculate the ideal tile zoom level based on the view scale.
-        // We want each tile to roughly match the screen size so we get
-        // enough detail without too many tiles.
-        // At zoom z, one tile covers: earthCirc * cos(lat) / (2^z) meters
-        // We want tileMeters ~= viewSize (so ~2x2 tiles cover the screen)
-        double earthCirc = 40075016.686;
-        double targetTileMeters = viewSize; // each tile covers the full view
-        // tileMeters = earthCircumference * cos(lat) / (2^z)
-        // => 2^z = earthCircumference * cos(lat) / targetTileMeters
-        double idealZoom = std::log2(earthCirc * std::cos(m_mapCenterLat * M_PI / 180.0)
-                                      / targetTileMeters);
-        int newZoom = std::max(2, std::min(19, (int)std::round(idealZoom)));
+        // Calculate zoom level using TileMatrixSet
+        static map::TileMatrixSet tms;
+        int newZoom = tms.zoomLevelForExtent(lonLatExtent, width(), height(), 2, 19);
 
         if (newZoom != m_mapZoom) {
-            m_mapTiles.clear(); // clear old zoom-level tiles
+            m_mapTiles.clear();
             m_mapZoom = newZoom;
             m_mapCompositeDirty = true;
             m_mapTexture.reset();
         }
 
-        int txMin, tyMin, txMax, tyMax;
-        latLonToTile(minLat, minLon, m_mapZoom, txMin, tyMin);
-        latLonToTile(maxLat, maxLon, m_mapZoom, txMax, tyMax);
-        if (txMin > txMax) std::swap(txMin, txMax);
-        if (tyMin > tyMax) std::swap(tyMin, tyMax);
+        // Use TileMatrix for proper tile range calculation
+        auto tileMatrix = map::TileMatrix::fromWebMercator(m_mapZoom);
+        auto tileRange = tileMatrix.tileRangeFromExtent(mercExtent);
+
+        if (!tileRange.isValid()) {
+            pruneInvisibleTiles();
+            m_lastCameraX = camX;
+            m_lastCameraY = camY;
+            m_lastCameraZ = camZ;
+            return;
+        }
 
         // Safety cap on tile count
         const int MAX_TILES = 30;
-        int count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
+        int count = tileRange.count();
         if (count > MAX_TILES) {
             while (count > MAX_TILES && m_mapZoom > 2) {
                 m_mapZoom--;
-                txMin /= 2; txMax /= 2;
-                tyMin /= 2; tyMax /= 2;
-                count = (txMax - txMin + 1) * (tyMax - tyMin + 1);
+                tileMatrix = map::TileMatrix::fromWebMercator(m_mapZoom);
+                tileRange = tileMatrix.tileRangeFromExtent(mercExtent);
+                count = tileRange.count();
             }
             m_mapTiles.clear();
             m_mapCompositeDirty = true;
             m_mapTexture.reset();
         }
 
-        for (int ty = tyMin; ty <= tyMax; ty++) {
-            for (int tx = txMin; tx <= txMax; tx++) {
+        for (int ty = tileRange.startRow; ty <= tileRange.endRow; ty++) {
+            for (int tx = tileRange.startCol; tx <= tileRange.endCol; tx++) {
                 bool found = false;
                 for (auto& t : m_mapTiles) {
                     if (t->z == m_mapZoom && t->x == tx && t->y == ty) {
@@ -222,7 +227,8 @@ namespace LM
     }
 
     void MapViewGL::requestTile(int z, int x, int y)
-    {        if (!m_tileNam) return;
+    {
+        if (!m_tileNam) return;
 
         auto tile = std::make_unique<MapTile>();
         tile->z = z;
@@ -230,17 +236,17 @@ namespace LM
         tile->y = y;
         tile->loading = true;
 
-        double tLat, tLon;
-        tileToLatLon(x, y, z, tLat, tLon);
-        double mpp = metersPerPixel(m_mapCenterLat, z);
-        tile->worldSize = 256 * mpp;
-        double latPerMeter = 1.0 / 111320.0;
-        double lonPerMeter = 1.0 / (111320.0 * std::cos(m_mapCenterLat * M_PI / 180.0));
-        // OpenGL: +X = east, +Y = north (up on screen)
-        // tileToLatLon gives the NW (top-left) corner of the tile
-        // Tile center is half a tile east and half a tile south of NW corner
-        tile->worldX = (tLon - m_mapCenterLon) / lonPerMeter + 128.0 * mpp;
-        tile->worldY = (tLat - m_mapCenterLat) / latPerMeter - 128.0 * mpp;
+        // Use TileMatrix for proper tile extent in Web Mercator
+        auto tileMatrix = map::TileMatrix::fromWebMercator(z);
+        auto tileExtent = tileMatrix.tileExtent(map::TileXYZ(x, y, z));
+
+        // Map center in Web Mercator
+        auto centerMerc = map::CoordinateTransform::lonLatToMercator(m_mapCenterLon, m_mapCenterLat);
+
+        // World position = tile center relative to map center (in meters)
+        tile->worldX = tileExtent.centerX() - centerMerc.x;
+        tile->worldY = tileExtent.centerY() - centerMerc.y;
+        tile->worldSize = tileExtent.width();  // square tiles
 
         QString url = QString(
             "https://mt1.google.com/vt/lyrs=s&x=%1&y=%2&z=%3")

@@ -1,6 +1,7 @@
 // TerrainStore — State management implementation
 
 #include "TerrainStore.hpp"
+#include "CoordinateTransform.hpp"
 #include <cmath>
 
 TerrainStore::TerrainStore(EventBus* bus, QObject* parent)
@@ -141,10 +142,18 @@ void TerrainStore::computeTileGrid() {
         return;
     }
 
-    // Convert tile size from km to degrees (approximate at mid-latitude)
+    // Convert tile size from km to degrees using proper CoordinateTransform
+    // (EPSG:4326 ↔ EPSG:3857 Web Mercator) instead of ad-hoc cos(lat) formula
     const double midLat = (m_bounds.north + m_bounds.south) / 2.0;
-    const double kmPerDegLat = 111.32;
-    const double kmPerDegLon = 111.32 * std::cos(midLat * M_PI / 180.0);
+    const double midLon = (m_bounds.east + m_bounds.west) / 2.0;
+    // Convert center to Web Mercator to get accurate meters-per-degree
+    auto centerMerc = map::CoordinateTransform::lonLatToMercator(midLon, midLat);
+    // Convert center + 1 degree to get meters per degree
+    auto oneDegMerc = map::CoordinateTransform::lonLatToMercator(midLon + 1.0, midLat + 1.0);
+    double metersPerDegLat = oneDegMerc.y - centerMerc.y;
+    double metersPerDegLon = oneDegMerc.x - centerMerc.x;
+    const double kmPerDegLat = metersPerDegLat / 1000.0;
+    const double kmPerDegLon = metersPerDegLon / 1000.0;
     const double tileSizeDegLat = m_tileSizeKm / kmPerDegLat;
     const double tileSizeDegLon = m_tileSizeKm / kmPerDegLon;
 

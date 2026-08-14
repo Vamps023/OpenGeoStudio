@@ -1,27 +1,52 @@
-Fix terrain tile selection to match Electron version
+Add QGIS-inspired map subsystem (CRS, tile math, transforms)
 
-Three bugs fixed in TerrainStore::computeTileGrid():
+Studied QGIS source code (D:/git/QGIS) and ported key map
+subsystem patterns to create a proper coordinate/tile
+infrastructure. No PROJ dependency — uses built-in formulas
+for the common EPSG:4326 ↔ EPSG:3857 transforms.
 
-1. Tile row direction was inverted
-   Qt: row 0 at north (growing north-to-south)
-   Electron: row 0 at south (growing south-to-north)
-   Fix: Changed to south-to-north growth matching Electron
+New files in src/core/map/:
 
-2. makeSquare() distorted geographic bounds
-   Qt called makeSquare() which forces bounds to be square in
-   geographic DEGREES. At high latitudes, longitude degrees
-   represent less distance than latitude degrees, so this
-   significantly expanded the selected area.
-   Electron does NOT modify bounds after drag selection.
-   Fix: Removed makeSquare() call
+1. MapRectangle.hpp — Geographic extent class
+   Inspired by QgsRectangle. Supports normalize, scale, grow,
+   intersect, contains, combineWith.
 
-3. Tile grid was not forced to be square
-   Qt used actual computed rows/cols (could be 3x5 rectangular)
-   Electron forces square grid: rows = cols = max(required)
-   Fix: Force square grid with actualTileWidth/actualTileHeight
-   dividing bounds evenly, with last row/col edge case handling
+2. CoordinateReferenceSystem.hpp — CRS representation
+   Inspired by QgsCoordinateReferenceSystem. Supports
+   EPSG:4326 (WGS84 lat/lon) and EPSG:3857 (Web Mercator).
 
-Build: OK | Tests: 473/473 passed | App: runs
+3. CoordinateTransform.hpp — CRS transformations
+   Inspired by QgsCoordinateTransform. Built-in formulas for
+   EPSG:4326 ↔ EPSG:3857 (lonLatToMercator, mercatorToLonLat).
+   No PROJ library dependency needed.
+
+4. TileMatrix.hpp — Standard XYZ tile scheme
+   Inspired by QgsTileMatrix/QgsTileMatrixSet from qgstiles.cpp.
+   Web Mercator tile math: tileExtent, tileRangeFromExtent,
+   mapToTileCoordinates, scaleToZoomLevel, zoomLevelForExtent.
+
+5. MapToPixel.hpp — Screen ↔ World conversion
+   Inspired by QgsMapToPixel. Uses QTransform matrix for
+   world→screen and screen→world conversion with Y-axis flip.
+
+6. TileCache.hpp — In-memory LRU tile cache
+   Inspired by QgsTileCache. Thread-safe QCache<QUrl, QImage>
+   with 256 tile limit.
+
+7. XyzTileProvider.hpp — XYZ tile URL template + download
+   Inspired by QGIS formatXYZUrlTemplate() and QgsWmsProvider
+   XYZ mode. Supports {x}, {y}, {-y} (TMS), {z} placeholders.
+   Integrates with TileCache for cached requests.
+
+8. MapSubsystem.hpp — Umbrella header
+
+9. map_tests.cpp — 31 doctest tests covering all classes
+
+CMakeLists.txt: Added map tests to geometry_segment_tests,
+added src/core/map to include dirs, linked Qt6::Gui/Network.
+
+Tests: 504/504 passed (473 original + 31 new map tests)
+App: runs
 
 Generated with [Devin](https://devin.ai)
 
