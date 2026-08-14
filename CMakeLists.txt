@@ -328,6 +328,7 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/editor
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
@@ -418,10 +419,16 @@ if(BUILD_TESTS)
 
     add_executable(geometry_segment_tests
         src/engine/road/geometry_segment_tests.cpp
+        src/core/map/map_tests.cpp
     )
+
+    set_target_properties(geometry_segment_tests PROPERTIES AUTOMOC ON)
 
     target_link_libraries(geometry_segment_tests PRIVATE
         road_engine::core
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Network
     )
 
     # MSVC needs /EHa for structured exception handling (LaneMaker SEH guard)

@@ -1,32 +1,25 @@
-Fix map not visible: AABB prune + correct zoom calculation
+Fix terrain tile selection to match Electron version
 
-Two bugs fixed:
+Three bugs fixed in TerrainStore::computeTileGrid():
 
-1. Tiles pruned immediately (AABB fix)
-   The distance-based prune check was too aggressive. At zoom 9,
-   the tile center was ~39000m from camera but viewRadius+tileHalf
-   was only ~38592m — so the tile was pruned even though it
-   covered the visible area.
+1. Tile row direction was inverted
+   Qt: row 0 at north (growing north-to-south)
+   Electron: row 0 at south (growing south-to-north)
+   Fix: Changed to south-to-north growth matching Electron
 
-   Fix: Replaced distance-from-center check with proper AABB
-   (axis-aligned bounding box) overlap test. A tile is kept if
-   its bounding box intersects the visible area rectangle.
+2. makeSquare() distorted geographic bounds
+   Qt called makeSquare() which forces bounds to be square in
+   geographic DEGREES. At high latitudes, longitude degrees
+   represent less distance than latitude degrees, so this
+   significantly expanded the selected area.
+   Electron does NOT modify bounds after drag selection.
+   Fix: Removed makeSquare() call
 
-2. Wrong zoom level (too low detail)
-   The zoom calculation used targetTileMeters = viewSize * 0.5
-   which resulted in zoom 9 (one 74km tile for a 600m view).
-   This made the map extremely blurry.
-
-   Fix: Changed to targetTileMeters = viewSize, which gives
-   zoom 16 (appropriate detail for a 600m view, ~12 tiles).
-
-Debug logging was added to trace the issue, then removed.
-
-Verified working:
-  - Zoom 16, 12 tiles requested (4x3 grid)
-  - Tiles downloaded (256x256 each, ~20KB)
-  - Composite image created and uploaded as single texture
-  - Quad drawn successfully
+3. Tile grid was not forced to be square
+   Qt used actual computed rows/cols (could be 3x5 rectangular)
+   Electron forces square grid: rows = cols = max(required)
+   Fix: Force square grid with actualTileWidth/actualTileHeight
+   dividing bounds evenly, with last row/col edge case handling
 
 Build: OK | Tests: 473/473 passed | App: runs
 
