@@ -105,7 +105,7 @@ namespace LM
     double MapViewGL::metersPerPixel(double lat, int z)
     {
         const double earthCircumference = 40075016.686;
-        return earthCircumference * std::cos(lat * M_PI / 180.0) / std::pow(2.0, z);
+        return earthCircumference * std::cos(lat * M_PI / 180.0) / (std::pow(2.0, z) * 256.0);
     }
 
     void MapViewGL::SetMapCenter(double lat, double lon)
@@ -126,8 +126,7 @@ namespace LM
     }
 
     void MapViewGL::UpdateMapTiles()
-    {
-        if (!m_mapEnabled || m_viewMode != ViewMode::TopDown2D) return;
+    {        if (!m_mapEnabled || m_viewMode != ViewMode::TopDown2D) return;
         if (width() <= 0 || height() <= 0) return;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
 
@@ -192,16 +191,14 @@ namespace LM
             }
         }
 
-        pruneInvisibleTiles();
-        m_lastTileZoom = m_mapZoom;
+        pruneInvisibleTiles();        m_lastTileZoom = m_mapZoom;
         m_lastCameraX = camX;
         m_lastCameraY = camY;
         m_lastCameraZ = camZ;
     }
 
     void MapViewGL::requestTile(int z, int x, int y)
-    {
-        if (!m_tileNam) return;
+    {        if (!m_tileNam) return;
 
         auto tile = std::make_unique<MapTile>();
         tile->z = z;
@@ -229,15 +226,13 @@ namespace LM
         auto* reply = m_tileNam->get(request);
         MapTile* rawPtr = tile.get();
 
-        connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {
-            bool tileExists = false;
+        connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {            bool tileExists = false;
             for (auto& t : m_mapTiles) {
                 if (t.get() == rawPtr) { tileExists = true; break; }
             }
             if (reply->error() == QNetworkReply::NoError && tileExists) {
                 QImage img;
-                if (img.loadFromData(reply->readAll())) {
-                    rawPtr->pendingImage = img.convertToFormat(QImage::Format_RGB32);
+                if (img.loadFromData(reply->readAll())) {                    rawPtr->pendingImage = img.convertToFormat(QImage::Format_RGB32);
                     rawPtr->loading = false;
                     update();
                 }
@@ -245,8 +240,7 @@ namespace LM
             reply->deleteLater();
         });
 
-        m_mapTiles.push_back(std::move(tile));
-    }
+        m_mapTiles.push_back(std::move(tile));    }
 
     void MapViewGL::pruneInvisibleTiles()
     {
@@ -326,8 +320,10 @@ namespace LM
 
     void MapViewGL::drawMapBackground()
     {
+        qDebug() << "[drawMapBg] enter, enabled=" << m_mapEnabled << "tiles=" << m_mapTiles.size();
         if (!m_mapEnabled || m_mapTiles.empty()) return;
         initTexturedShader();
+        
 
         // Upload any pending images as GL textures (must be on GL thread)
         for (auto& tile : m_mapTiles) {
@@ -618,8 +614,7 @@ namespace LM
             // Check if camera moved enough to need new tiles
             float camX = m_camera.translation().x();
             float camY = m_camera.translation().y();
-            float camZ = m_camera.translation().z();
-            float moveThreshold = camZ * 0.3f;
+            float camZ = m_camera.translation().z();            float moveThreshold = camZ * 0.3f;
             if (m_mapEnabled &&
                 (std::abs(camX - m_lastCameraX) > moveThreshold ||
                  std::abs(camY - m_lastCameraY) > moveThreshold ||

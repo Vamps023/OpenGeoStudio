@@ -318,9 +318,7 @@ void MainWidget::loadMapBackground()
     // automatically fetch visible tiles at the appropriate zoom level.
     const double lat = 18.52;  // Pune, India
     const double lon = 73.85;
-    mapViewGL->SetMapCenter(lat, lon);
-    qDebug() << "[MainWidget] Map center set, dynamic tile loading enabled";
-}
+    mapViewGL->SetMapCenter(lat, lon);}
 
 void MainWidget::setupMapBackground()
 {
