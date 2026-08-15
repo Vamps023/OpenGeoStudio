@@ -990,6 +990,7 @@ int main(int argc, char* argv[]) {
 
 
 
+
     qDebug() << "OpenGeoStudio started ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Road Engine v"
              << QString::fromLatin1(road_engine::versionString());
 

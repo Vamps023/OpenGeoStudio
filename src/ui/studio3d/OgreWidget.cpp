@@ -29,6 +29,7 @@
 #include "OgreTextureGpuManager.h"
 #include "OgreTextureGpu.h"
 #include "OgreStagingTexture.h"
+#include "OgreImage2.h"
 #include "OgreResourceGroupManager.h"
 
 // Math
@@ -327,9 +328,39 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     // Load albedo texture if available
     if (!albedoPath.isEmpty() && QFile::exists(albedoPath)) {
         qDebug() << "  Loading albedo:" << albedoPath;
-        // Use setTexture with filename — OGRE will load it via TextureGpuManager
-        Ogre::String texName = albedoPath.toStdString();
-        datablock->setTexture(0, texName);
+        QImage albImg(albedoPath);
+        if (!albImg.isNull()) {
+            albImg = albImg.convertToFormat(QImage::Format_RGBA8888);
+            int texW = albImg.width();
+            int texH = albImg.height();
+            qDebug() << "  Albedo image:" << texW << "x" << texH;
+
+            // Create a manual OGRE texture and upload the image data
+            Ogre::TextureGpuManager* texMgr = m_root->getRenderSystem()->getTextureGpuManager();
+            Ogre::String texName = "TerrainAlbedo_" + Ogre::StringConverter::toString((size_t)this);
+            Ogre::TextureGpu* tex = texMgr->createOrRetrieveTexture(
+                texName, texName, Ogre::GpuPageOutStrategy::Discard,
+                Ogre::TextureFlags::AutomaticBatching | Ogre::TextureFlags::ManualTexture,
+                Ogre::TextureTypes::Type2D);
+            tex->setResolution(texW, texH);
+            tex->setNumMipmaps(1);
+            tex->setPixelFormat(Ogre::PFG_RGBA8_UNORM_SRGB);
+            tex->scheduleTransitionTo(Ogre::GpuResidency::Resident);
+
+            // Upload pixel data via Ogre::Image2
+            Ogre::Image2 ogreImage;
+            const uint8_t* pixelData = albImg.constBits();
+            ogreImage.loadDynamicImage(
+                const_cast<uint8_t*>(pixelData), texW, texH, 1u,
+                Ogre::TextureTypes::Type2D, Ogre::PFG_RGBA8_UNORM_SRGB, false);
+            ogreImage.uploadTo(tex, 0, 0);
+
+            datablock->setTexture(0, tex);
+            qDebug() << "  Albedo texture uploaded to GPU";
+        } else {
+            qWarning() << "  Failed to load albedo image, using fallback color";
+            datablock->setColour(Ogre::ColourValue(0.3f, 0.4f, 0.25f, 1.0f));
+        }
     } else {
         datablock->setColour(Ogre::ColourValue(0.3f, 0.4f, 0.25f, 1.0f));
     }
