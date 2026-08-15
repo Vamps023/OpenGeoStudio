@@ -1,15 +1,23 @@
-Auto-create projects in default directory — no folder picker
+Fix Unicode path crash in GeoTIFF export (OneDrive/Chinese folders)
 
-Project creation no longer asks the user to select a folder.
-Just enter the project name and it's created automatically.
+libtiff's TIFFOpen uses fopen() on Windows, which cannot handle
+Unicode paths (e.g. Chinese characters in OneDrive folder names
+like Documents/文档/OpenGeoStudio/...).
 
-Default location: Documents/OpenGeoStudio/Projects/{name}
+Fix: new PathHelper utility converts Unicode paths to Windows 8.3
+short paths (GetShortPathNameW) before passing to TIFFOpen.
+Short paths are ASCII-safe and work with fopen().
 
-Flow:
-  1. Click "Terrain" or "Road Studio" or "Train Studio" card
-  2. Enter project name (dialog)
-  3. Project created automatically — no folder selection
-  4. Switches to Terrain workspace
+Example:
+  Input:  C:\Users\nares\OneDrive\文档\OpenGeoStudio\Projects\Test\Terrain\...
+  Output: C:\Users\nares\OneDrive\73EC~1\OPENGE~1\Projects\Test\Terrain\...
 
-Safety: if a project with the same name already exists, shows
-a warning and asks for a different name.
+Files fixed (all TIFFOpen calls):
+  - RasterWriter.cpp (2 calls — main GeoTIFF writer)
+  - ExportEngine.cpp (3 calls — legacy GeoTIFF writer)
+  - DemDecoder.hpp (1 call — reading downloaded DEM tiles)
+
+PathHelper.hpp:
+  - NOMINMAX defined to prevent windows.h min/max macro conflict
+  - toTiffPath(QString) → short path on Windows, UTF-8 on other platforms
+  - toTiffString(QString) → std::string version

@@ -25,6 +25,7 @@
 #include <QTemporaryFile>
 #include <QDir>
 #include <tiffio.h>
+#include "../../core/PathHelper.hpp"
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -227,7 +228,7 @@ public:
         tempFileKeeper->close();
 
         QString filePath = tempFileKeeper->fileName();
-        TIFF* tif = TIFFOpen(filePath.toUtf8().constData(), "r");
+        TIFF* tif = TIFFOpen(PathHelper::toTiffPath(filePath).toUtf8().constData(), "r");
         if (!tif) {
             delete tempFileKeeper;
             return tile;

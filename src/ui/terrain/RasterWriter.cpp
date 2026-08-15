@@ -1,6 +1,7 @@
 // RasterWriter — QGIS-inspired GeoTIFF/PNG raster writer implementation
 
 #include "RasterWriter.hpp"
+#include "../../core/PathHelper.hpp"
 
 #include <tiffio.h>
 #include <QFile>
@@ -363,7 +364,7 @@ bool RasterWriter::writeGeoTiffBand(
     double nodataValue,
     terrain::Compression compression)
 {
-    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
     if (!tif) return false;
 
     // Register GeoTIFF tags so TIFFSetField doesn't silently fail
@@ -509,7 +510,7 @@ bool RasterWriter::writeRgbGeoTiff(
     const terrain::RasterExtent& extent,
     terrain::Compression compression)
 {
-    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
     if (!tif) return false;
 
     // Register GeoTIFF tags so TIFFSetField doesn't silently fail

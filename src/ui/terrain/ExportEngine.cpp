@@ -2,6 +2,7 @@
 
 #include "ExportEngine.hpp"
 #include "RasterWriter.hpp"
+#include "../../core/PathHelper.hpp"
 #include "DemDecoder.hpp"
 
 #include <QNetworkReply>
@@ -480,7 +481,7 @@ void ExportEngine::writeGeoTiff(const QString& path, const QImage& heightmap,
     const int width = heightmap.width();
     const int height = heightmap.height();
 
-    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
     if (!tif) return;
 
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
@@ -880,7 +881,7 @@ void ExportEngine::writeManifest(const QString& dir) {
 
 bool ExportEngine::writeGeoTiffHeightmap(const QString& path, const QImage& img,
                                           double north, double south, double east, double west) {
-    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
     if (!tif) return false;
 
     int width = img.width();
@@ -924,7 +925,7 @@ bool ExportEngine::writeGeoTiffHeightmap(const QString& path, const QImage& img,
 
 bool ExportEngine::writeGeoTiffRgb(const QString& path, const QImage& img,
                                     double north, double south, double east, double west) {
-    TIFF* tif = TIFFOpen(path.toUtf8().constData(), "w");
+    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
     if (!tif) return false;
 
     int width = img.width();
