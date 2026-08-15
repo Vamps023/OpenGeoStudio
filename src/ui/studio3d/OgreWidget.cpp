@@ -448,6 +448,349 @@ void OgreWidget::clearRoads()
     }
 }
 
+// ============================================================
+// SceneObject JSON serialization
+// ============================================================
+QJsonObject SceneObject::toJson() const
+{
+    QJsonObject j;
+    j["id"] = id;
+    j["type"] = type;
+    j["name"] = name;
+    j["posX"] = posX;
+    j["posY"] = posY;
+    j["posZ"] = posZ;
+    j["rotY"] = rotY;
+    j["scaleX"] = scaleX;
+    j["scaleY"] = scaleY;
+    j["scaleZ"] = scaleZ;
+    j["colorR"] = colorR;
+    j["colorG"] = colorG;
+    j["colorB"] = colorB;
+    return j;
+}
+
+SceneObject SceneObject::fromJson(const QJsonObject& j)
+{
+    SceneObject o;
+    o.id = j["id"].toString();
+    o.type = j["type"].toString();
+    o.name = j["name"].toString();
+    o.posX = static_cast<float>(j["posX"].toDouble());
+    o.posY = static_cast<float>(j["posY"].toDouble());
+    o.posZ = static_cast<float>(j["posZ"].toDouble());
+    o.rotY = static_cast<float>(j["rotY"].toDouble());
+    o.scaleX = static_cast<float>(j["scaleX"].toDouble(1.0));
+    o.scaleY = static_cast<float>(j["scaleY"].toDouble(1.0));
+    o.scaleZ = static_cast<float>(j["scaleZ"].toDouble(1.0));
+    o.colorR = static_cast<float>(j["colorR"].toDouble(0.8));
+    o.colorG = static_cast<float>(j["colorG"].toDouble(0.8));
+    o.colorB = static_cast<float>(j["colorB"].toDouble(0.8));
+    return o;
+}
+
+// ============================================================
+// Object placement
+// ============================================================
+QString OgreWidget::addObject(const QString& type, float x, float y, float z,
+                              float rotY, float sx, float sy, float sz)
+{
+    if (!m_initialized || !m_sceneManager) return QString();
+
+    // Generate unique ID
+    QString id = type + "_" + QString::number(m_objects.size() + 1);
+    int suffix = 1;
+    while (m_objects.count(id)) {
+        suffix++;
+        id = type + "_" + QString::number(m_objects.size() + suffix);
+    }
+
+    SceneObject obj;
+    obj.id = id;
+    obj.type = type;
+    obj.name = type + " " + QString::number(m_objects.size() + 1);
+    obj.posX = x;
+    obj.posY = y;
+    obj.posZ = z;
+    obj.rotY = rotY;
+    obj.scaleX = sx;
+    obj.scaleY = sy;
+    obj.scaleZ = sz;
+
+    // Set color based on type
+    if (type == "building") {
+        obj.colorR = 0.6f; obj.colorG = 0.5f; obj.colorB = 0.4f;
+    } else if (type == "tree") {
+        obj.colorR = 0.2f; obj.colorG = 0.5f; obj.colorB = 0.2f;
+    } else {
+        obj.colorR = 0.8f; obj.colorG = 0.8f; obj.colorB = 0.8f;
+    }
+
+    rebuildObject(obj);
+    return id;
+}
+
+void OgreWidget::rebuildObject(const SceneObject& obj)
+{
+    if (!m_sceneManager) return;
+
+    // Remove existing entry if present
+    auto it = m_objects.find(obj.id);
+    if (it != m_objects.end()) {
+        if (it->second.node) {
+            it->second.node->detachObject(it->second.item);
+            m_sceneManager->destroySceneNode(it->second.node);
+        }
+        if (it->second.item) {
+            m_sceneManager->destroyItem(it->second.item);
+        }
+    }
+
+    // Create a manual mesh for the object (a box)
+    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
+    Ogre::String moName = "Obj_" + obj.id.toStdString();
+    manual->setName(moName);
+
+    // Create datablock with object color
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::String dblockName = "ObjDb_" + obj.id.toStdString();
+    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+    if (!dbBase) {
+        dbBase = hlmsUnlit->createDatablock(
+            Ogre::IdString(dblockName), dblockName,
+            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    }
+    Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
+    datablock->setColour(Ogre::ColourValue(obj.colorR, obj.colorG, obj.colorB, 1.0f));
+
+    // Build a unit cube centered at origin
+    manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+
+    // 8 vertices of a unit cube (-0.5 to 0.5)
+    // Front face
+    manual->position(-0.5f, -0.5f, 0.5f);  manual->normal(0, 0, 1);  manual->textureCoord(0, 0);
+    manual->position(0.5f, -0.5f, 0.5f);   manual->normal(0, 0, 1);  manual->textureCoord(1, 0);
+    manual->position(0.5f, 0.5f, 0.5f);    manual->normal(0, 0, 1);  manual->textureCoord(1, 1);
+    manual->position(-0.5f, 0.5f, 0.5f);   manual->normal(0, 0, 1);  manual->textureCoord(0, 1);
+    // Back face
+    manual->position(-0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1); manual->textureCoord(0, 0);
+    manual->position(0.5f, -0.5f, -0.5f);  manual->normal(0, 0, -1); manual->textureCoord(1, 0);
+    manual->position(0.5f, 0.5f, -0.5f);   manual->normal(0, 0, -1); manual->textureCoord(1, 1);
+    manual->position(-0.5f, 0.5f, -0.5f);  manual->normal(0, 0, -1); manual->textureCoord(0, 1);
+
+    // Front face triangles (0,1,2) (0,2,3)
+    manual->index(0); manual->index(1); manual->index(2);
+    manual->index(0); manual->index(2); manual->index(3);
+    // Back face triangles (5,4,7) (5,7,6)
+    manual->index(5); manual->index(4); manual->index(7);
+    manual->index(5); manual->index(7); manual->index(6);
+    // Left face triangles (4,0,3) (4,3,7)
+    manual->index(4); manual->index(0); manual->index(3);
+    manual->index(4); manual->index(3); manual->index(7);
+    // Right face triangles (1,5,6) (1,6,2)
+    manual->index(1); manual->index(5); manual->index(6);
+    manual->index(1); manual->index(6); manual->index(2);
+    // Top face triangles (3,2,6) (3,6,7)
+    manual->index(3); manual->index(2); manual->index(6);
+    manual->index(3); manual->index(6); manual->index(7);
+    // Bottom face triangles (4,5,1) (4,1,0)
+    manual->index(4); manual->index(5); manual->index(1);
+    manual->index(4); manual->index(1); manual->index(0);
+
+    manual->end();
+
+    // Convert to mesh
+    Ogre::String meshName = "ObjMesh_" + obj.id.toStdString();
+    Ogre::MeshPtr mesh = manual->convertToMesh(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    Ogre::Item* item = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
+    Ogre::SceneNode* node = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(item);
+
+    // Set position, rotation, scale
+    node->setPosition(Ogre::Vector3(obj.posX, obj.posY, obj.posZ));
+    float rotRad = obj.rotY * 3.14159265358979f / 180.0f;
+    node->setOrientation(Ogre::Quaternion(Ogre::Radian(rotRad), Ogre::Vector3::UNIT_Y));
+    node->setScale(Ogre::Vector3(obj.scaleX, obj.scaleY, obj.scaleZ));
+
+    m_sceneManager->destroyManualObject(manual);
+
+    // Store in map
+    ObjectEntry entry;
+    entry.data = obj;
+    entry.item = item;
+    entry.node = node;
+    m_objects[obj.id] = entry;
+}
+
+void OgreWidget::removeObject(const QString& id)
+{
+    auto it = m_objects.find(id);
+    if (it == m_objects.end()) return;
+
+    if (it->second.node) {
+        it->second.node->detachObject(it->second.item);
+        m_sceneManager->destroySceneNode(it->second.node);
+    }
+    if (it->second.item) {
+        m_sceneManager->destroyItem(it->second.item);
+    }
+    m_objects.erase(it);
+}
+
+void OgreWidget::clearObjects()
+{
+    for (auto& pair : m_objects) {
+        if (pair.second.node) {
+            pair.second.node->detachObject(pair.second.item);
+            m_sceneManager->destroySceneNode(pair.second.node);
+        }
+        if (pair.second.item) {
+            m_sceneManager->destroyItem(pair.second.item);
+        }
+    }
+    m_objects.clear();
+}
+
+void OgreWidget::updateObjectTransform(const QString& id, float x, float y, float z,
+                                       float rotY, float sx, float sy, float sz)
+{
+    auto it = m_objects.find(id);
+    if (it == m_objects.end()) return;
+
+    it->second.data.posX = x;
+    it->second.data.posY = y;
+    it->second.data.posZ = z;
+    it->second.data.rotY = rotY;
+    it->second.data.scaleX = sx;
+    it->second.data.scaleY = sy;
+    it->second.data.scaleZ = sz;
+
+    if (it->second.node) {
+        it->second.node->setPosition(Ogre::Vector3(x, y, z));
+        float rotRad = rotY * 3.14159265358979f / 180.0f;
+        it->second.node->setOrientation(Ogre::Quaternion(Ogre::Radian(rotRad), Ogre::Vector3::UNIT_Y));
+        it->second.node->setScale(Ogre::Vector3(sx, sy, sz));
+    }
+}
+
+SceneObject OgreWidget::getObject(const QString& id) const
+{
+    auto it = m_objects.find(id);
+    if (it != m_objects.end()) return it->second.data;
+    return SceneObject();
+}
+
+std::vector<SceneObject> OgreWidget::getObjects() const
+{
+    std::vector<SceneObject> result;
+    for (const auto& pair : m_objects) {
+        result.push_back(pair.second.data);
+    }
+    return result;
+}
+
+// ============================================================
+// Scene serialization
+// ============================================================
+QJsonObject OgreWidget::saveScene() const
+{
+    QJsonObject scene;
+
+    // Terrain state
+    QJsonObject terrain;
+    terrain["heightmapPath"] = m_heightmapPath;
+    terrain["albedoPath"] = m_albedoPath;
+    terrain["terrainSize"] = static_cast<double>(m_terrainSize);
+    terrain["heightScale"] = static_cast<double>(m_heightScale);
+    scene["terrain"] = terrain;
+
+    // Road state
+    scene["xodrPath"] = m_xodrPath;
+
+    // Camera state
+    QJsonObject camera;
+    camera["yaw"] = static_cast<double>(m_camYaw);
+    camera["pitch"] = static_cast<double>(m_camPitch);
+    camera["dist"] = static_cast<double>(m_camDist);
+    camera["targetX"] = static_cast<double>(m_camTargetX);
+    camera["targetY"] = static_cast<double>(m_camTargetY);
+    camera["targetZ"] = static_cast<double>(m_camTargetZ);
+    scene["camera"] = camera;
+
+    // Objects
+    QJsonArray objArray;
+    for (const auto& pair : m_objects) {
+        objArray.append(pair.second.data.toJson());
+    }
+    scene["objects"] = objArray;
+
+    return scene;
+}
+
+void OgreWidget::loadScene(const QJsonObject& scene)
+{
+    if (!m_initialized) {
+        qDebug() << "OGRE not initialized, scene will load after init";
+        return;
+    }
+
+    // Clear current scene
+    clearObjects();
+    clearRoads();
+    clearTerrain();
+
+    // Load terrain
+    QJsonObject terrain = scene["terrain"].toObject();
+    if (terrain.contains("heightmapPath")) {
+        QString hmPath = terrain["heightmapPath"].toString();
+        QString albPath = terrain["albedoPath"].toString();
+        float tSize = static_cast<float>(terrain["terrainSize"].toDouble(4000.0));
+        float hScale = static_cast<float>(terrain["heightScale"].toDouble(100.0));
+        if (!hmPath.isEmpty() && QFile::exists(hmPath)) {
+            loadTerrain(hmPath, albPath, tSize, hScale);
+        }
+    }
+
+    // Load roads
+    QString xodr = scene["xodrPath"].toString();
+    if (!xodr.isEmpty() && QFile::exists(xodr)) {
+        loadRoads(xodr);
+    }
+
+    // Load objects
+    QJsonArray objArray = scene["objects"].toArray();
+    for (const auto& val : objArray) {
+        SceneObject obj = SceneObject::fromJson(val.toObject());
+        if (!obj.id.isEmpty()) {
+            rebuildObject(obj);
+        }
+    }
+
+    // Restore camera
+    QJsonObject camera = scene["camera"].toObject();
+    if (camera.contains("yaw")) {
+        m_camYaw = static_cast<float>(camera["yaw"].toDouble());
+        m_camPitch = static_cast<float>(camera["pitch"].toDouble());
+        m_camDist = static_cast<float>(camera["dist"].toDouble());
+        m_camTargetX = static_cast<float>(camera["targetX"].toDouble());
+        m_camTargetY = static_cast<float>(camera["targetY"].toDouble());
+        m_camTargetZ = static_cast<float>(camera["targetZ"].toDouble());
+        // Apply camera state
+        if (m_camera) {
+            float yawRad = m_camYaw * 3.14159265358979f / 180.0f;
+            float pitchRad = m_camPitch * 3.14159265358979f / 180.0f;
+            float x = m_camTargetX + m_camDist * cos(pitchRad) * sin(yawRad);
+            float y = m_camTargetY + m_camDist * sin(-pitchRad);
+            float z = m_camTargetZ + m_camDist * cos(pitchRad) * cos(yawRad);
+            m_camera->setPosition(Ogre::Vector3(x, y, z));
+            m_camera->lookAt(Ogre::Vector3(m_camTargetX, m_camTargetY, m_camTargetZ));
+        }
+    }
+}
+
 void OgreWidget::render()
 {
     if (m_root && m_renderWindow) {
@@ -480,8 +823,8 @@ void OgreWidget::resetCamera()
     m_camTargetZ = 0;
 
     if (m_camera) {
-        float yawRad = Ogre::Degree(m_camYaw).valueRadians();
-        float pitchRad = Ogre::Degree(m_camPitch).valueRadians();
+        float yawRad = m_camYaw * 3.14159265358979f / 180.0f;
+        float pitchRad = m_camPitch * 3.14159265358979f / 180.0f;
 
         float x = m_camTargetX + m_camDist * cos(pitchRad) * sin(yawRad);
         float y = m_camTargetY + m_camDist * sin(-pitchRad);

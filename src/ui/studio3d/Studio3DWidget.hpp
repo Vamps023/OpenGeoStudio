@@ -42,6 +42,17 @@ private slots:
     void onExportTerrain();
     void onExportRoads();
     void onHeightScaleChanged(int value);
+    void onAddBuilding();
+    void onAddTree();
+    void onAddBox();
+    void onClearObjects();
+    void onSaveScene();
+    void onLoadScene();
+
+public:
+    // Called by main window when project is opened/closed
+    void onProjectOpened();
+    void onProjectClosed();
 
 private:
     void setupUI();
@@ -49,6 +60,7 @@ private:
     QString findHeightmapInProject();
     QString findAlbedoInProject();
     QString findXodrInProject();
+    QString sceneFilePath() const;
 
     ApplicationContext* m_ctx;
 
@@ -62,6 +74,12 @@ private:
     QPushButton* m_resetCameraBtn = nullptr;
     QPushButton* m_exportTerrainBtn = nullptr;
     QPushButton* m_exportRoadsBtn = nullptr;
+    QPushButton* m_addBuildingBtn = nullptr;
+    QPushButton* m_addTreeBtn = nullptr;
+    QPushButton* m_addBoxBtn = nullptr;
+    QPushButton* m_clearObjectsBtn = nullptr;
+    QPushButton* m_saveSceneBtn = nullptr;
+    QPushButton* m_loadSceneBtn = nullptr;
     QSlider* m_heightScaleSlider = nullptr;
     QLabel* m_heightScaleLabel = nullptr;
 

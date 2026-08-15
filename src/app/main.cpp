@@ -677,6 +677,8 @@ private slots:
         m_ctx->workspaces().activate("terrain");
         // Restore terrain and road state from the project file
         loadProjectState();
+        // Notify 3D Studio to auto-load saved scene
+        if (m_studio3DWidget) m_studio3DWidget->onProjectOpened();
         updateStatusBar();
     }
 

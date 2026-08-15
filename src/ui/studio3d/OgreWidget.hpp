@@ -3,6 +3,9 @@
 #include <QWidget>
 #include <QWindow>
 #include <QString>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <map>
 
 // OGRE-Next forward declarations (avoid pulling in headers here)
 namespace Ogre {
@@ -15,6 +18,20 @@ namespace Ogre {
     class HlmsPbs;
     class HlmsUnlit;
 }
+
+// A placed 3D object in the scene
+struct SceneObject {
+    QString id;          // unique identifier
+    QString type;        // "building", "tree", "box", etc.
+    QString name;        // display name
+    float posX = 0, posY = 0, posZ = 0;
+    float rotY = 0;      // rotation around Y axis (degrees)
+    float scaleX = 1, scaleY = 1, scaleZ = 1;
+    float colorR = 0.8f, colorG = 0.8f, colorB = 0.8f;
+
+    QJsonObject toJson() const;
+    static SceneObject fromJson(const QJsonObject& j);
+};
 
 class OgreWidget : public QWindow {
     Q_OBJECT
@@ -31,6 +48,20 @@ public:
     // Road loading
     void loadRoads(const QString& xodrPath);
     void clearRoads();
+
+    // Object placement
+    QString addObject(const QString& type, float x, float y, float z,
+                      float rotY = 0, float sx = 1, float sy = 1, float sz = 1);
+    void removeObject(const QString& id);
+    void clearObjects();
+    void updateObjectTransform(const QString& id, float x, float y, float z,
+                               float rotY, float sx, float sy, float sz);
+    SceneObject getObject(const QString& id) const;
+    std::vector<SceneObject> getObjects() const;
+
+    // Scene serialization
+    QJsonObject saveScene() const;
+    void loadScene(const QJsonObject& scene);
 
     // Camera controls
     void resetCamera();
@@ -56,6 +87,7 @@ private:
     void setupScene();
     void setupTerra();
     void render();
+    void rebuildObject(const SceneObject& obj);
 
     QWidget* m_container = nullptr;
     bool m_initialized = false;
@@ -79,6 +111,14 @@ private:
     Ogre::Item* m_roadItem = nullptr;
     Ogre::SceneNode* m_roadNode = nullptr;
     QString m_xodrPath;
+
+    // Objects — each object has its own Item + SceneNode
+    struct ObjectEntry {
+        SceneObject data;
+        Ogre::Item* item = nullptr;
+        Ogre::SceneNode* node = nullptr;
+    };
+    std::map<QString, ObjectEntry> m_objects;
 
     // Camera state
     float m_camYaw = 0.0f;

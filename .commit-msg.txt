@@ -1,28 +1,32 @@
-Implement terrain rendering + road visualization in 3D Studio
+Implement 3D object placement + scene serialization + project persistence
 
-Terrain rendering:
-- OgreWidget::loadTerrain() now creates a real OGRE mesh from a
-  heightmap image (PNG/TIFF) with elevation and albedo texture
-- Uses ManualObject to build a grid mesh (up to 256x256 vertices)
-  sampled from the heightmap, with UV coordinates for albedo
-- Albedo texture loaded via TextureGpuManager and applied to an
-  Unlit datablock
-- Camera auto-frames based on terrain size and height scale
-- Terrain size derived from project bounds (4km for Houston-scale)
+3D Object Placement:
+- Added SceneObject struct with id, type, name, position, rotation,
+  scale, and color
+- OgreWidget::addObject() creates a cube mesh for each placed object
+  with per-object color (buildings=beige, trees=green, boxes=grey)
+- OgreWidget::removeObject(), clearObjects(), updateObjectTransform()
+  for full CRUD lifecycle
+- Each object has its own OGRE Item + SceneNode
 
-Road visualization:
-- OgreWidget::loadRoads() loads XODR via libOpenDRIVE
-- Samples each road's reference line at 1m intervals
-- Calculates road width from lane widths
-- Generates a triangle strip mesh for the road surface
-- Roads placed slightly above terrain (2m offset) to avoid z-fighting
+Scene Serialization:
+- OgreWidget::saveScene() serializes terrain paths, road path,
+  camera state, and all placed objects to JSON
+- OgreWidget::loadScene() restores the complete scene from JSON
+- Scene saved to {project}/Scene/scene3d.json
+
+Project Persistence:
+- Studio3DWidget::onProjectOpened() auto-loads saved scene when
+  project is opened (or auto-loads terrain + roads if no scene file)
+- Studio3DWidget::onProjectClosed() clears the 3D scene
+- main.cpp calls onProjectOpened() when a project is loaded
 
 UI:
-- Added "Load Roads from Project" button in 3D Studio
-- Finds XODR files in project's Roads/ folder
+- Added "3D Objects" panel with Building/Tree/Box placement buttons
+- Added "Scene" panel with Save/Load buttons
+- Objects placed at random positions near terrain center
 
-Verified: App launches, 3D Studio opens without crash, OGRE
-initializes successfully.
+Verified: App launches and runs without crash.
 
 Generated with [Devin](https://devin.ai)
 

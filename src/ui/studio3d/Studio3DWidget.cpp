@@ -16,6 +16,11 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTimer>
+#include <cmath>
+#include <cstdlib>
 
 Studio3DWidget::Studio3DWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx)
@@ -117,6 +122,57 @@ void Studio3DWidget::setupUI()
     exportLayout->addWidget(m_exportRoadsBtn);
 
     sideLayout->addWidget(exportGroup);
+
+    // ─── Objects ───
+    auto* objGroup = new QGroupBox("3D Objects", sidePanel);
+    auto* objLayout = new QVBoxLayout(objGroup);
+
+    auto* objHint = new QLabel("Click an object type to place it at the terrain center:", objGroup);
+    objHint->setWordWrap(true);
+    objHint->setStyleSheet("QLabel { color: #888; font-size: 10px; }");
+    objLayout->addWidget(objHint);
+
+    auto* objBtnRow1 = new QHBoxLayout();
+    m_addBuildingBtn = new QPushButton("Building", objGroup);
+    m_addBuildingBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addBuildingBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddBuilding);
+    objBtnRow1->addWidget(m_addBuildingBtn);
+
+    m_addTreeBtn = new QPushButton("Tree", objGroup);
+    m_addTreeBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addTreeBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddTree);
+    objBtnRow1->addWidget(m_addTreeBtn);
+    objLayout->addLayout(objBtnRow1);
+
+    m_addBoxBtn = new QPushButton("Box", objGroup);
+    m_addBoxBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addBoxBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddBox);
+    objLayout->addWidget(m_addBoxBtn);
+
+    m_clearObjectsBtn = new QPushButton("Clear All Objects", objGroup);
+    m_clearObjectsBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_clearObjectsBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearObjects);
+    objLayout->addWidget(m_clearObjectsBtn);
+
+    sideLayout->addWidget(objGroup);
+
+    // ─── Scene ───
+    auto* sceneGroup = new QGroupBox("Scene", sidePanel);
+    auto* sceneLayout = new QVBoxLayout(sceneGroup);
+
+    m_saveSceneBtn = new QPushButton("Save Scene", sceneGroup);
+    m_saveSceneBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    m_saveSceneBtn->setToolTip("Save the current 3D scene (terrain, roads, objects, camera) to the project");
+    connect(m_saveSceneBtn, &QPushButton::clicked, this, &Studio3DWidget::onSaveScene);
+    sceneLayout->addWidget(m_saveSceneBtn);
+
+    m_loadSceneBtn = new QPushButton("Load Scene", sceneGroup);
+    m_loadSceneBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    m_loadSceneBtn->setToolTip("Load the saved 3D scene from the project");
+    connect(m_loadSceneBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadScene);
+    sceneLayout->addWidget(m_loadSceneBtn);
+
+    sideLayout->addWidget(sceneGroup);
 
     // ─── Status ───
     auto* statusGroup = new QGroupBox("Status", sidePanel);
@@ -291,6 +347,180 @@ void Studio3DWidget::onLoadRoads()
 
     m_statusLabel->setText("Roads loaded");
     appendLog("Roads loaded successfully.");
+}
+
+void Studio3DWidget::onAddBuilding()
+{
+    // Place a building at a random position near terrain center
+    float x = (rand() % 200 - 100);
+    float z = (rand() % 200 - 100);
+    float y = m_heightScaleSlider->value() * 0.3f;
+    QString id = m_ogreWidget->addObject("building", x, y, z, 0,
+                                          10.0f, 15.0f, 10.0f);
+    appendLog("Added building: " + id);
+    m_statusLabel->setText("Building added");
+}
+
+void Studio3DWidget::onAddTree()
+{
+    float x = (rand() % 400 - 200);
+    float z = (rand() % 400 - 200);
+    float y = m_heightScaleSlider->value() * 0.3f;
+    QString id = m_ogreWidget->addObject("tree", x, y, z, 0,
+                                          3.0f, 8.0f, 3.0f);
+    appendLog("Added tree: " + id);
+    m_statusLabel->setText("Tree added");
+}
+
+void Studio3DWidget::onAddBox()
+{
+    float x = (rand() % 200 - 100);
+    float z = (rand() % 200 - 100);
+    float y = m_heightScaleSlider->value() * 0.3f;
+    QString id = m_ogreWidget->addObject("box", x, y, z, 0,
+                                          5.0f, 5.0f, 5.0f);
+    appendLog("Added box: " + id);
+    m_statusLabel->setText("Box added");
+}
+
+void Studio3DWidget::onClearObjects()
+{
+    m_ogreWidget->clearObjects();
+    appendLog("All objects cleared.");
+    m_statusLabel->setText("Objects cleared");
+}
+
+QString Studio3DWidget::sceneFilePath() const
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
+    return m_ctx->projects().current().basePath + "/Scene/scene3d.json";
+}
+
+void Studio3DWidget::onSaveScene()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString path = sceneFilePath();
+    if (path.isEmpty()) return;
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+
+    QJsonObject scene = m_ogreWidget->saveScene();
+    QJsonDocument doc(scene);
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, "Save Failed",
+            QString("Could not write to:\n%1").arg(path));
+        return;
+    }
+    file.write(doc.toJson(QJsonDocument::Indented));
+    file.close();
+
+    appendLog("Scene saved to: " + path);
+    m_statusLabel->setText("Scene saved");
+    QMessageBox::information(this, "Scene Saved",
+        QString("3D scene saved to:\n%1").arg(path));
+}
+
+void Studio3DWidget::onLoadScene()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString path = sceneFilePath();
+    if (!QFile::exists(path)) {
+        QMessageBox::warning(this, "No Scene",
+            "No saved 3D scene found.\nSave the scene first.");
+        return;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Load Failed",
+            QString("Could not read:\n%1").arg(path));
+        return;
+    }
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    if (err.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, "Load Failed",
+            QString("JSON parse error: %1").arg(err.errorString()));
+        return;
+    }
+
+    m_ogreWidget->loadScene(doc.object());
+    appendLog("Scene loaded from: " + path);
+    m_statusLabel->setText("Scene loaded");
+}
+
+void Studio3DWidget::onProjectOpened()
+{
+    // Auto-load the saved scene if it exists
+    if (!m_ctx || !m_ctx->projects().hasProject()) return;
+
+    QString path = sceneFilePath();
+    if (QFile::exists(path)) {
+        appendLog("Auto-loading saved scene...");
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly)) {
+            QByteArray data = file.readAll();
+            file.close();
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            if (!doc.isNull()) {
+                // Defer to allow OGRE to initialize first
+                QTimer::singleShot(500, this, [this, doc]() {
+                    m_ogreWidget->loadScene(doc.object());
+                    appendLog("Scene auto-loaded from project.");
+                });
+            }
+        }
+    } else {
+        // No saved scene — try auto-loading terrain + roads individually
+        QTimer::singleShot(500, this, [this]() {
+            QString hmPath = findHeightmapInProject();
+            if (!hmPath.isEmpty()) {
+                QString albPath = findAlbedoInProject();
+                float heightScale = static_cast<float>(m_heightScaleSlider->value());
+                float terrainSize = 4000.0f;
+                if (m_ctx && m_ctx->projects().hasProject() &&
+                    m_ctx->projects().current().bounds.valid) {
+                    auto& b = m_ctx->projects().current().bounds;
+                    double latMid = (b.minLat + b.maxLat) / 2.0;
+                    double latM = (b.maxLat - b.minLat) * 111320.0;
+                    double lonM = (b.maxLon - b.minLon) * 111320.0 *
+                        cos(latMid * 3.14159265358979 / 180.0);
+                    terrainSize = static_cast<float>(std::max(latM, lonM));
+                    if (terrainSize < 10.0f) terrainSize = 4000.0f;
+                }
+                m_ogreWidget->loadTerrain(hmPath, albPath, terrainSize, heightScale);
+                appendLog("Terrain auto-loaded from project.");
+            }
+
+            QString xodrPath = findXodrInProject();
+            if (!xodrPath.isEmpty()) {
+                m_ogreWidget->loadRoads(xodrPath);
+                appendLog("Roads auto-loaded from project.");
+            }
+        });
+    }
+}
+
+void Studio3DWidget::onProjectClosed()
+{
+    m_ogreWidget->clearObjects();
+    m_ogreWidget->clearRoads();
+    m_ogreWidget->clearTerrain();
+    appendLog("Project closed — 3D scene cleared.");
+    m_statusLabel->setText("Ready");
 }
 
 void Studio3DWidget::onResetCamera()
