@@ -3,6 +3,8 @@
 #include "ProjectManager.hpp"
 
 #include <QDir>
+#include <QFileInfo>
+#include <QFile>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -233,6 +235,57 @@ void ProjectManager::togglePin(const QString& filePath) {
     }
     saveRecent();
     emit recentChanged();
+}
+
+bool ProjectManager::deleteProject(const QString& filePath, bool deleteFolder) {
+    // Find the project in recent to get its basePath
+    QString basePath;
+    for (const auto& e : m_recent) {
+        if (e.filePath == filePath) {
+            basePath = QFileInfo(filePath).absolutePath();
+            break;
+        }
+    }
+    if (basePath.isEmpty()) {
+        basePath = QFileInfo(filePath).absolutePath();
+    }
+
+    // If this is the current project, close it first
+    if (m_current.filePath == filePath) {
+        close();
+    }
+
+    // Remove from recent list
+    removeRecent(filePath);
+
+    // Delete from disk
+    bool ok = true;
+    if (QFile::exists(filePath)) {
+        ok = QFile::remove(filePath);
+        if (!ok) {
+            m_log.error("Failed to delete project file:", filePath);
+        }
+    }
+
+    if (deleteFolder && QDir(basePath).exists()) {
+        // Only delete the folder if it contains a .ogproj (safety check)
+        QDir dir(basePath);
+        QStringList ogprojFiles = dir.entryList(QStringList() << "*.ogproj", QDir::Files);
+        if (ogprojFiles.isEmpty()) {
+            // No .ogproj found — the folder was already cleaned
+            m_log.info("Skipping folder deletion — no .ogproj found in:", basePath);
+        } else {
+            if (!dir.removeRecursively()) {
+                m_log.error("Failed to delete project folder:", basePath);
+                ok = false;
+            } else {
+                m_log.info("Project folder deleted:", basePath);
+            }
+        }
+    }
+
+    m_bus->publish("project:deleted", {{"filePath", filePath}});
+    return ok;
 }
 
 // --- Autosave ---

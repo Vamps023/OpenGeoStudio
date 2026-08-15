@@ -76,6 +76,10 @@ public:
     void clearRecent();
     void togglePin(const QString& filePath);
 
+    // Delete a project: removes from recent list and deletes the project
+    // folder + .ogproj file from disk. Returns true if disk deletion succeeded.
+    bool deleteProject(const QString& filePath, bool deleteFolder = true);
+
     // --- Autosave ---
 
     void setAutosaveInterval(int seconds); // 0 = disabled

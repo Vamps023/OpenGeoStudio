@@ -13,6 +13,7 @@
 #include <QScrollArea>
 #include <QToolButton>
 #include <QListWidgetItem>
+#include <QMessageBox>
 
 HomeWidget::HomeWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx) {
@@ -177,6 +178,25 @@ void HomeWidget::refreshRecent(const QString& filter) {
         auto* infoLabel = new QLabel(infoText, rowWidget);
         infoLabel->setStyleSheet("color: #e6edf3; font-size: 13px;");
         rowLayout->addWidget(infoLabel, 1);
+
+        // Remove button (delete project from disk + recent list)
+        auto* removeBtn = new QToolButton(rowWidget);
+        removeBtn->setText("✕");
+        removeBtn->setFixedSize(24, 24);
+        removeBtn->setToolTip("Remove this project (deletes from disk)");
+        removeBtn->setStyleSheet(
+            "QToolButton { border: none; font-size: 14px; color: #f85149; }"
+            "QToolButton:hover { color: #ff6b6b; background: #21262d; border-radius: 4px; }");
+        connect(removeBtn, &QToolButton::clicked, this, [this, filePath = entry.filePath, name = entry.name]() {
+            auto ret = QMessageBox::question(this, "Delete Project",
+                QString("Delete project \"%1\"?\n\n%2\n\nThis will permanently delete the project folder and all its contents.")
+                    .arg(name, filePath),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (ret == QMessageBox::Yes) {
+                m_ctx->projects().deleteProject(filePath, true);
+            }
+        });
+        rowLayout->addWidget(removeBtn);
 
         auto* item = new QListWidgetItem(m_recentList);
         item->setData(Qt::UserRole, entry.filePath);

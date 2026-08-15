@@ -1,19 +1,26 @@
-Fix crash when opening recent project with road data
+Add project delete, fix workspace switch on project open
 
-The crash happened because loadFromPath() was called during
-project open, before LaneMaker's OpenGL context was initialized
-(the Road Studio page wasn't visible yet).
+Three changes:
 
-Fix: defer road file loading until Road Studio workspace is
-actually activated. The project open stores the .xodr path in
-m_pendingRoadFile, and when the user switches to Road Studio,
-the file is loaded via QTimer::singleShot(100ms) to ensure the
-OpenGL context is ready.
+1. Open project → Terrain workspace
+   After opening a project, the app now switches to the Terrain
+   workspace instead of the project's saved workspaceId. This
+   gives immediate access to the map for area selection.
 
-Additional safety:
-  - Check for empty files before loading
-  - Null-check g_mapViewGL before calling update()
-  - If Road Studio is already active when project opens, load
-    immediately (context is ready)
+2. Remove/Delete project from Home screen
+   Each recent project row now has a red ✕ button. Clicking it
+   shows a confirmation dialog and then:
+   - Removes the project from the recent list
+   - Deletes the .ogproj file from disk
+   - Deletes the entire project folder (with safety check:
+     only deletes if a .ogproj file exists in the folder)
+   - Closes the project if it's currently open
 
-Build: SUCCESS
+3. ProjectManager::deleteProject() new API
+   bool deleteProject(filePath, deleteFolder=true)
+   - Removes from recent list
+   - Closes current project if it matches
+   - Deletes .ogproj file
+   - Deletes project folder if deleteFolder=true
+   - Safety: only deletes folder if it contains a .ogproj
+   - Publishes "project:deleted" event

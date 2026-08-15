@@ -673,8 +673,8 @@ private slots:
     }
 
     void onProjectOpened(const Project& p) {
-        // Switch to the project's workspace
-        m_ctx->workspaces().activate(p.workspaceId);
+        // Always switch to Terrain workspace after opening a project
+        m_ctx->workspaces().activate("terrain");
         // Restore terrain and road state from the project file
         loadProjectState();
         updateStatusBar();
