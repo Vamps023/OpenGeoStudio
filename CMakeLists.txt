@@ -290,8 +290,9 @@ set(APP_SOURCES
     src/ui/terrain/LayerStack.cpp
     src/ui/terrain/SearchBar.cpp
     src/ui/terrain/TerrainStudioWidget.cpp
-    # UI - 3D Studio (O3DE integration)
+    # UI - 3D Studio (OGRE-Next embedded)
     src/ui/studio3d/Studio3DWidget.cpp
+    src/ui/studio3d/OgreWidget.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -363,6 +364,50 @@ endif()
 
 # LaneMaker is always built and linked
 target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
+
+# ─── OGRE-Next integration ───
+# OGRE-Next is embedded directly in the Qt app (no external process)
+set(OGRE_NEXT_DIR "D:/git/ogre-next" CACHE PATH "Path to OGRE-Next build")
+set(OGRE_NEXT_BUILD "${OGRE_NEXT_DIR}/build")
+
+if(EXISTS "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib")
+    message(STATUS "OGRE-Next found at ${OGRE_NEXT_DIR}")
+
+    # Include paths
+    target_include_directories(OpenGeoStudio PRIVATE
+        "${OGRE_NEXT_DIR}/OgreMain/include"
+        "${OGRE_NEXT_DIR}/Components/Hlms/Common/include"
+        "${OGRE_NEXT_DIR}/Components/Hlms/Pbs/include"
+        "${OGRE_NEXT_DIR}/Components/Hlms/Unlit/include"
+        "${OGRE_NEXT_DIR}/Components/PlanarReflections/include"
+        "${OGRE_NEXT_DIR}/Samples/2.0/Tutorials/Tutorial_Terrain/include"
+        "${OGRE_NEXT_BUILD}/include"
+    )
+
+    # Link OGRE-Next libraries
+    target_link_libraries(OpenGeoStudio PRIVATE
+        "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib"
+        "${OGRE_NEXT_BUILD}/lib/OgreNextHlmsPbs.lib"
+        "${OGRE_NEXT_BUILD}/lib/OgreNextHlmsUnlit.lib"
+        "${OGRE_NEXT_BUILD}/lib/OgreNextPlanarReflections.lib"
+        "${OGRE_NEXT_BUILD}/lib/RenderSystem_Direct3D11.lib"
+        "${OGRE_NEXT_BUILD}/lib/RenderSystem_GL3Plus.lib"
+        "${OGRE_NEXT_BUILD}/lib/Plugin_ParticleFX.lib"
+    )
+
+    target_compile_definitions(OpenGeoStudio PRIVATE HAVE_OGRE=1)
+
+    # Copy OGRE DLLs to deploy folder
+    add_custom_command(TARGET OpenGeoStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${OGRE_NEXT_BUILD}/bin" "$<TARGET_FILE_DIR:OpenGeoStudio>/ogre"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${OGRE_NEXT_DIR}/Samples/Media/Hlms" "$<TARGET_FILE_DIR:OpenGeoStudio>/Hlms"
+    )
+else()
+    message(WARNING "OGRE-Next not found at ${OGRE_NEXT_BUILD}, building without 3D viewport")
+    target_compile_definitions(OpenGeoStudio PRIVATE HAVE_OGRE=0)
+endif()
 
 # Set output directory for portable deployment
 set_target_properties(OpenGeoStudio PROPERTIES

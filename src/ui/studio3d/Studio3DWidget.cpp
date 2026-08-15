@@ -1,9 +1,7 @@
-// Studio3DWidget — 3D Studio workspace with O3DE integration
-
 #include "Studio3DWidget.hpp"
+#include "OgreWidget.hpp"
+
 #include "core/ApplicationContext.hpp"
-#include "core/logger/Logger.hpp"
-#include "core/project/ProjectManager.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -11,507 +9,315 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
-#include <QLineEdit>
 #include <QTextEdit>
+#include <QSlider>
 #include <QProgressBar>
-#include <QFileDialog>
-#include <QSettings>
-#include <QStandardPaths>
+#include <QMessageBox>
 #include <QDir>
 #include <QFileInfo>
-#include <QDateTime>
-#include <QMessageBox>
-#include <QFrame>
+#include <QFile>
 
 Studio3DWidget::Studio3DWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx)
 {
     setupUI();
-    loadSettings();
-    m_o3deProcess = new QProcess(this);
-    connect(m_o3deProcess, &QProcess::stateChanged,
-            this, &Studio3DWidget::onProcessStateChanged);
-    connect(m_o3deProcess, &QProcess::readyReadStandardOutput,
-            this, &Studio3DWidget::onProcessOutput);
-    connect(m_o3deProcess, &QProcess::readyReadStandardError,
-            this, &Studio3DWidget::onProcessOutput);
-    connect(m_o3deProcess, &QProcess::errorOccurred,
-            this, &Studio3DWidget::onProcessError);
-    connect(m_o3deProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, &Studio3DWidget::onProcessFinished);
 }
 
-Studio3DWidget::~Studio3DWidget() {
-    saveSettings();
-    if (m_o3deProcess && m_o3deProcess->state() != QProcess::NotRunning) {
-        m_o3deProcess->terminate();
-        m_o3deProcess->waitForFinished(3000);
-    }
-}
+Studio3DWidget::~Studio3DWidget() = default;
 
-void Studio3DWidget::setupUI() {
-    auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
+void Studio3DWidget::setupUI()
+{
+    auto* mainLayout = new QHBoxLayout(this);
 
-    // ─── Header ───
-    auto* headerFrame = new QFrame(this);
-    headerFrame->setFrameStyle(QFrame::StyledPanel);
-    headerFrame->setStyleSheet("QFrame { background-color: #1e1e2e; border-radius: 4px; }");
-    auto* headerLayout = new QVBoxLayout(headerFrame);
-    auto* titleLabel = new QLabel("3D Studio — O3DE Level Design", headerFrame);
-    titleLabel->setStyleSheet("font-size: 18px; font-weight: bold; color: #cdd6f4; padding: 8px;");
-    auto* descLabel = new QLabel(
-        "Launch O3DE Editor for professional 3D level design.\n"
-        "Export terrain and road data from OpenGeoStudio into your O3DE project.",
-        headerFrame);
-    descLabel->setStyleSheet("color: #a6adc8; padding: 0 8px 8px 8px;");
-    headerLayout->addWidget(titleLabel);
-    headerLayout->addWidget(descLabel);
-    mainLayout->addWidget(headerFrame);
+    // ─── Left: OGRE 3D Viewport ───
+    auto* viewportGroup = new QGroupBox("3D Viewport (OGRE-Next)", this);
+    auto* viewportLayout = new QVBoxLayout(viewportGroup);
 
-    // ─── O3DE Configuration ───
-    auto* configGroup = new QGroupBox("O3DE Configuration", this);
-    auto* configLayout = new QGridLayout(configGroup);
+    m_ogreWidget = new OgreWidget(viewportGroup);
+    viewportLayout->addWidget(m_ogreWidget->containerWidget());
 
-    configLayout->addWidget(new QLabel("Project path:", configGroup), 0, 0);
-    m_projectPathEdit = new QLineEdit(configGroup);
-    m_projectPathEdit->setPlaceholderText("D:/git/OpenGeoStudio3D-SDK");
-    configLayout->addWidget(m_projectPathEdit, 0, 1);
-    m_browseProjectBtn = new QPushButton("Browse...", configGroup);
-    configLayout->addWidget(m_browseProjectBtn, 0, 2);
-    connect(m_browseProjectBtn, &QPushButton::clicked, this, &Studio3DWidget::onBrowseProject);
+    // Camera controls
+    auto* camLayout = new QHBoxLayout();
+    m_resetCameraBtn = new QPushButton("Reset Camera", viewportGroup);
+    m_resetCameraBtn->setStyleSheet("QPushButton { padding: 6px 12px; }");
+    connect(m_resetCameraBtn, &QPushButton::clicked, this, &Studio3DWidget::onResetCamera);
+    camLayout->addWidget(m_resetCameraBtn);
+    camLayout->addStretch();
+    viewportLayout->addLayout(camLayout);
 
-    configLayout->addWidget(new QLabel("Editor executable:", configGroup), 1, 0);
-    m_editorPathEdit = new QLineEdit(configGroup);
-    m_editorPathEdit->setPlaceholderText("Auto-detect from O3DE build");
-    configLayout->addWidget(m_editorPathEdit, 1, 1);
-    m_browseEditorBtn = new QPushButton("Browse...", configGroup);
-    configLayout->addWidget(m_browseEditorBtn, 1, 2);
-    connect(m_browseEditorBtn, &QPushButton::clicked, this, &Studio3DWidget::onBrowseEditor);
+    viewportGroup->setLayout(viewportLayout);
+    mainLayout->addWidget(viewportGroup, 3);
 
-    mainLayout->addWidget(configGroup);
+    // ─── Right: Controls Panel ───
+    auto* sidePanel = new QWidget(this);
+    auto* sideLayout = new QVBoxLayout(sidePanel);
+    sidePanel->setMaximumWidth(350);
 
-    // ─── Launch ───
-    auto* launchGroup = new QGroupBox("Launch O3DE", this);
-    auto* launchLayout = new QHBoxLayout(launchGroup);
+    // ─── Terrain ───
+    auto* terrainGroup = new QGroupBox("Terrain", sidePanel);
+    auto* terrainLayout = new QVBoxLayout(terrainGroup);
 
-    m_launchEditorBtn = new QPushButton("Launch O3DE Editor", launchGroup);
-    m_launchEditorBtn->setStyleSheet(
+    m_loadTerrainBtn = new QPushButton("Load Terrain from Project", terrainGroup);
+    m_loadTerrainBtn->setStyleSheet(
         "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-        "font-weight: bold; padding: 10px 20px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b4befe; }"
-        "QPushButton:disabled { background-color: #45475a; color: #6c7086; }");
-    m_launchEditorBtn->setMinimumWidth(200);
-    connect(m_launchEditorBtn, &QPushButton::clicked, this, &Studio3DWidget::onLaunchEditor);
-    launchLayout->addWidget(m_launchEditorBtn);
+        "font-weight: bold; padding: 10px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #b4befe; }");
+    m_loadTerrainBtn->setToolTip("Load heightmap + albedo from the current project's Terrain folder");
+    connect(m_loadTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadTerrain);
+    terrainLayout->addWidget(m_loadTerrainBtn);
 
-    m_launchLauncherBtn = new QPushButton("Launch Game Launcher", launchGroup);
-    m_launchLauncherBtn->setStyleSheet(
-        "QPushButton { padding: 10px 20px; border-radius: 4px; }");
-    connect(m_launchLauncherBtn, &QPushButton::clicked, this, &Studio3DWidget::onLaunchLauncher);
-    launchLayout->addWidget(m_launchLauncherBtn);
+    m_clearTerrainBtn = new QPushButton("Clear Terrain", terrainGroup);
+    m_clearTerrainBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_clearTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearTerrain);
+    terrainLayout->addWidget(m_clearTerrainBtn);
 
-    launchLayout->addStretch();
-    mainLayout->addWidget(launchGroup);
+    // Height scale slider
+    auto* hsLayout = new QHBoxLayout();
+    auto* hsLabel = new QLabel("Height Scale:", terrainGroup);
+    m_heightScaleLabel = new QLabel("100m", terrainGroup);
+    m_heightScaleLabel->setMinimumWidth(50);
+    m_heightScaleSlider = new QSlider(Qt::Horizontal, terrainGroup);
+    m_heightScaleSlider->setRange(1, 1000);
+    m_heightScaleSlider->setValue(100);
+    connect(m_heightScaleSlider, &QSlider::valueChanged, this, &Studio3DWidget::onHeightScaleChanged);
+    hsLayout->addWidget(hsLabel);
+    hsLayout->addWidget(m_heightScaleSlider);
+    hsLayout->addWidget(m_heightScaleLabel);
+    terrainLayout->addLayout(hsLayout);
 
-    // ─── Data Export ───
-    auto* exportGroup = new QGroupBox("Export to O3DE", this);
-    auto* exportLayout = new QHBoxLayout(exportGroup);
+    sideLayout->addWidget(terrainGroup);
 
-    m_exportTerrainBtn = new QPushButton("Export Terrain Heightmap", exportGroup);
-    m_exportTerrainBtn->setToolTip("Export terrain elevation data as a heightmap PNG/TIF for O3DE terrain import");
+    // ─── Export ───
+    auto* exportGroup = new QGroupBox("Export", sidePanel);
+    auto* exportLayout = new QVBoxLayout(exportGroup);
+
+    m_exportTerrainBtn = new QPushButton("Export Terrain Data", exportGroup);
+    m_exportTerrainBtn->setToolTip("Export terrain heightmap + albedo to project Exports folder");
+    m_exportTerrainBtn->setStyleSheet("QPushButton { padding: 8px; }");
     connect(m_exportTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportTerrain);
     exportLayout->addWidget(m_exportTerrainBtn);
 
     m_exportRoadsBtn = new QPushButton("Export Road Network", exportGroup);
-    m_exportRoadsBtn->setToolTip("Export road network as OBJ mesh for O3DE scene import");
+    m_exportRoadsBtn->setToolTip("Export road network mesh for 3D rendering");
+    m_exportRoadsBtn->setStyleSheet("QPushButton { padding: 8px; }");
     connect(m_exportRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportRoads);
     exportLayout->addWidget(m_exportRoadsBtn);
 
-    exportLayout->addStretch();
-    mainLayout->addWidget(exportGroup);
+    sideLayout->addWidget(exportGroup);
 
     // ─── Status ───
-    auto* statusGroup = new QGroupBox("Status", this);
+    auto* statusGroup = new QGroupBox("Status", sidePanel);
     auto* statusLayout = new QVBoxLayout(statusGroup);
-
-    m_statusLabel = new QLabel("O3DE process: Not running", statusGroup);
+    m_statusLabel = new QLabel("Ready", statusGroup);
     statusLayout->addWidget(m_statusLabel);
-
-    m_progressBar = new QProgressBar(statusGroup);
-    m_progressBar->setRange(0, 0);  // indeterminate
-    m_progressBar->setVisible(false);
-    statusLayout->addWidget(m_progressBar);
-
-    mainLayout->addWidget(statusGroup);
+    sideLayout->addWidget(statusGroup);
 
     // ─── Log ───
-    auto* logGroup = new QGroupBox("O3DE Output Log", this);
+    auto* logGroup = new QGroupBox("Log", sidePanel);
     auto* logLayout = new QVBoxLayout(logGroup);
     m_logEdit = new QTextEdit(logGroup);
     m_logEdit->setReadOnly(true);
+    m_logEdit->setMaximumHeight(150);
     m_logEdit->setStyleSheet(
-        "QTextEdit { background-color: #11111b; color: #cdd6f4; "
-        "font-family: Consolas, monospace; font-size: 11px; }");
-    m_logEdit->setMinimumHeight(150);
+        "QTextEdit { background-color: #1e1e2e; color: #cdd6f4; "
+        "font-family: Consolas; font-size: 11px; }");
     logLayout->addWidget(m_logEdit);
-    mainLayout->addWidget(logGroup, 1);
+    sideLayout->addWidget(logGroup);
 
-    // Initial state
-    m_launchEditorBtn->setEnabled(false);
-    m_launchLauncherBtn->setEnabled(false);
+    sideLayout->addStretch();
+    mainLayout->addWidget(sidePanel, 1);
+
+    setLayout(mainLayout);
+
+    appendLog("3D Studio ready (OGRE-Next embedded)");
 }
 
-void Studio3DWidget::loadSettings() {
-    QSettings settings;
-    QString projectPath = settings.value(kKeyProjectPath, "").toString();
-    QString editorPath = settings.value(kKeyEditorPath, "").toString();
-
-    // Auto-detect project path if not set or invalid
-    if (projectPath.isEmpty() || !QFileInfo::exists(projectPath + "/project.json")) {
-        QString detected = findO3DEProject();
-        if (!detected.isEmpty()) {
-            projectPath = detected;
-            settings.setValue(kKeyProjectPath, projectPath);
-        }
-    }
-    m_projectPathEdit->setText(projectPath);
-    m_editorPathEdit->setText(editorPath);
-
-    // Auto-detect editor if not set
-    if (editorPath.isEmpty()) {
-        QString detected = findO3DEEditor();
-        if (!detected.isEmpty()) {
-            m_editorPathEdit->setText(detected);
-            m_launchEditorBtn->setEnabled(true);
-        }
-    } else {
-        m_launchEditorBtn->setEnabled(QFileInfo::exists(editorPath));
-    }
-
-    // Check project exists
-    if (QDir(projectPath).exists()) {
-        appendLog("O3DE project found: " + projectPath);
-    } else {
-        appendLog("Warning: O3DE project not found at: " + projectPath);
-    }
+void Studio3DWidget::appendLog(const QString& msg)
+{
+    m_logEdit->append("[" + QTime::currentTime().toString("HH:mm:ss") + "] " + msg);
 }
 
-void Studio3DWidget::saveSettings() {
-    QSettings settings;
-    settings.setValue(kKeyProjectPath, m_projectPathEdit->text());
-    settings.setValue(kKeyEditorPath, m_editorPathEdit->text());
-}
+QString Studio3DWidget::findHeightmapInProject()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
 
-QString Studio3DWidget::findO3DEEditor() const {
-    // Look for Editor.exe — the pre-built SDK has it, project builds don't
-    QStringList candidates = {
-        // Pre-built SDK install
-        "C:/O3DE/26.05/bin/Windows/profile/Default/Editor.exe",
-        // From-source builds
-        "D:/git/OpenGeoStudio3D/build/windows/bin/profile/Editor.exe",
-        "D:/git/o3de/build/windows/bin/profile/Editor.exe",
-    };
-    for (const auto& path : candidates) {
-        if (QFileInfo::exists(path)) return path;
-    }
-    return {};
-}
+    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
 
-QString Studio3DWidget::findO3DEProject() const {
-    // Look for project.json in common locations
-    QStringList candidates = {
-        "D:/git/OpenGeoStudio3D-SDK",
-        "D:/git/OpenGeoStudio3D",
-    };
-    for (const auto& path : candidates) {
-        if (QFileInfo::exists(path + "/project.json")) return path;
-    }
-    return {};
-}
-
-QString Studio3DWidget::findO3DELauncher() const {
-    QString projectPath = m_projectPathEdit->text();
-    QStringList candidates = {
-        // SDK project build
-        projectPath + "/build/windows/bin/profile/OpenGeoStudio3D.GameLauncher.exe",
-        projectPath + "/build/windows/bin/profile/OpenGeoStudio3D.UnifiedLauncher.exe",
-        // From-source project build
-        "D:/git/OpenGeoStudio3D/build/windows/bin/profile/OpenGeoStudio3D.GameLauncher.exe",
-    };
-    for (const auto& path : candidates) {
-        if (QFileInfo::exists(path)) return path;
-    }
-    return {};
-}
-
-void Studio3DWidget::appendLog(const QString& msg) {
-    QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
-    m_logEdit->append(QString("[%1] %2").arg(timestamp, msg));
-}
-
-void Studio3DWidget::onLaunchEditor() {
-    QString editorPath = m_editorPathEdit->text().trimmed();
-    QString projectPath = m_projectPathEdit->text().trimmed();
-
-    if (editorPath.isEmpty() || !QFileInfo::exists(editorPath)) {
-        QMessageBox::warning(this, "O3DE Editor Not Found",
-            "Could not find O3DE Editor executable.\n"
-            "Please build O3DE first or set the correct path.");
-        return;
+    // Check heightmaps subfolder
+    QString hmDir = terrainDir + "/heightmaps";
+    if (QDir(hmDir).exists()) {
+        QStringList filters;
+        filters << "*.png" << "*.tif" << "*.tiff";
+        QStringList files = QDir(hmDir).entryList(filters, QDir::Files);
+        if (!files.isEmpty()) return hmDir + "/" + files.first();
     }
 
-    if (projectPath.isEmpty() || !QDir(projectPath).exists()) {
-        QMessageBox::warning(this, "Project Not Found",
-            "O3DE project directory not found.\n"
-            "Please set the correct project path.");
-        return;
+    // Check Terrain root
+    if (QDir(terrainDir).exists()) {
+        QStringList filters;
+        filters << "heightmap*.png" << "heightmap*.tif" << "*.tif" << "*.png";
+        QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
+        if (!files.isEmpty()) return terrainDir + "/" + files.first();
     }
 
-    appendLog("Launching O3DE Editor...");
-    appendLog("  Editor: " + editorPath);
-    appendLog("  Project: " + projectPath);
-
-    m_progressBar->setVisible(true);
-    m_launchEditorBtn->setEnabled(false);
-
-    // Launch O3DE Editor with the project
-    // O3DE Editor requires --project-path argument
-    QStringList args;
-    args << "--project-path" << projectPath;
-    m_o3deProcess->start(editorPath, args);
+    return QString();
 }
 
-void Studio3DWidget::onLaunchLauncher() {
-    QString launcherPath = findO3DELauncher();
-    if (launcherPath.isEmpty()) {
-        QMessageBox::warning(this, "Launcher Not Found",
-            "Could not find the game launcher.\n"
-            "Build the project first.");
-        return;
+QString Studio3DWidget::findAlbedoInProject()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
+
+    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
+
+    // Check albedo subfolder
+    QString albDir = terrainDir + "/albedo";
+    if (QDir(albDir).exists()) {
+        QStringList filters;
+        filters << "*.png" << "*.tif" << "*.tiff";
+        QStringList files = QDir(albDir).entryList(filters, QDir::Files);
+        if (!files.isEmpty()) return albDir + "/" + files.first();
     }
-    appendLog("Launching Game Launcher: " + launcherPath);
-    QProcess::startDetached(launcherPath);
+
+    // Check Terrain root for albedo/satellite imagery
+    if (QDir(terrainDir).exists()) {
+        QStringList filters;
+        filters << "albedo*.png" << "albedo*.tif" << "satellite*.png" << "imagery*.png";
+        QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
+        if (!files.isEmpty()) return terrainDir + "/" + files.first();
+    }
+
+    return QString();
 }
 
-void Studio3DWidget::onExportTerrain() {
-    QString o3deProjectPath = m_projectPathEdit->text().trimmed();
-    if (o3deProjectPath.isEmpty() || !QDir(o3deProjectPath).exists()) {
-        QMessageBox::warning(this, "Project Not Found", "Set a valid O3DE project path first.");
-        return;
-    }
-
+void Studio3DWidget::onLoadTerrain()
+{
     if (!m_ctx || !m_ctx->projects().hasProject()) {
         QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
         return;
     }
 
-    // Export from OpenGeoStudio project's Terrain folder to O3DE project's Assets
-    QString exportDir = o3deProjectPath + "/Assets/terrain";
-    QDir().mkpath(exportDir);
-
-    // Copy heightmaps
-    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
-    QString hmDir = terrainDir + "/heightmaps";
-    QString albDir = terrainDir + "/albedo";
-
-    int hmCount = 0, albCount = 0;
-
-    // Copy heightmap files (convert TIFF to PNG for O3DE compatibility)
-    if (QDir(hmDir).exists()) {
-        QStringList pngFiles = QDir(hmDir).entryList(QStringList() << "*.png", QDir::Files);
-        for (const auto& f : pngFiles) {
-            QString src = hmDir + "/" + f;
-            QString dst = exportDir + "/heightmap_" + f;
-            if (QFile::exists(dst)) QFile::remove(dst);
-            if (QFile::copy(src, dst)) {
-                hmCount++;
-                appendLog("Copied heightmap: " + f);
-            }
-        }
-        // Also copy TIFF files
-        QStringList tiffFiles = QDir(hmDir).entryList(QStringList() << "*.tif" << "*.tiff", QDir::Files);
-        for (const auto& f : tiffFiles) {
-            QString src = hmDir + "/" + f;
-            QString dst = exportDir + "/heightmap_" + f;
-            if (QFile::exists(dst)) QFile::remove(dst);
-            if (QFile::copy(src, dst)) {
-                hmCount++;
-                appendLog("Copied heightmap: " + f);
-            }
-        }
-    }
-
-    // Copy albedo files
-    if (QDir(albDir).exists()) {
-        QStringList pngFiles = QDir(albDir).entryList(QStringList() << "*.png", QDir::Files);
-        for (const auto& f : pngFiles) {
-            QString src = albDir + "/" + f;
-            QString dst = exportDir + "/albedo_" + f;
-            if (QFile::exists(dst)) QFile::remove(dst);
-            if (QFile::copy(src, dst)) {
-                albCount++;
-                appendLog("Copied albedo: " + f);
-            }
-        }
-        QStringList tiffFiles = QDir(albDir).entryList(QStringList() << "*.tif" << "*.tiff", QDir::Files);
-        for (const auto& f : tiffFiles) {
-            QString src = albDir + "/" + f;
-            QString dst = exportDir + "/albedo_" + f;
-            if (QFile::exists(dst)) QFile::remove(dst);
-            if (QFile::copy(src, dst)) {
-                albCount++;
-                appendLog("Copied albedo: " + f);
-            }
-        }
-    }
-
-    // Copy manifest if it exists
-    QString manifestSrc = terrainDir + "/manifest.json";
-    if (QFile::exists(manifestSrc)) {
-        QString manifestDst = exportDir + "/manifest.json";
-        if (QFile::exists(manifestDst)) QFile::remove(manifestDst);
-        QFile::copy(manifestSrc, manifestDst);
-        appendLog("Copied terrain manifest");
-    }
-
-    if (hmCount > 0) {
-        appendLog(QString("Terrain export complete: %1 heightmaps, %2 albedo maps").arg(hmCount).arg(albCount));
-        QMessageBox::information(this, "Export Complete",
-            QString("Exported %1 heightmap(s) and %2 albedo map(s) to:\n%3")
-                .arg(hmCount).arg(albCount).arg(exportDir));
-    } else {
-        appendLog("Terrain export failed — no terrain data found.");
-        QMessageBox::warning(this, "Export Failed",
-            "No terrain data found in project.\n"
-            "Export terrain in Terrain Studio first.");
-    }
-}
-
-void Studio3DWidget::onExportRoads() {
-    QString o3deProjectPath = m_projectPathEdit->text().trimmed();
-    if (o3deProjectPath.isEmpty() || !QDir(o3deProjectPath).exists()) {
-        QMessageBox::warning(this, "Project Not Found", "Set a valid O3DE project path first.");
+    QString heightmapPath = findHeightmapInProject();
+    if (heightmapPath.isEmpty()) {
+        QMessageBox::warning(this, "No Terrain Data",
+            "No heightmap found in project.\n"
+            "Download terrain in Terrain Studio first.");
         return;
     }
 
-    QString exportDir = o3deProjectPath + "/Assets/roads";
+    QString albedoPath = findAlbedoInProject();
+
+    float heightScale = static_cast<float>(m_heightScaleSlider->value());
+    float terrainSize = 1000.0f; // meters
+
+    appendLog("Loading terrain...");
+    appendLog("  Heightmap: " + heightmapPath);
+    if (!albedoPath.isEmpty())
+        appendLog("  Albedo: " + albedoPath);
+    appendLog(QString("  Height scale: %1m").arg(heightScale));
+
+    m_statusLabel->setText("Loading terrain...");
+    m_ogreWidget->loadTerrain(heightmapPath, albedoPath, terrainSize, heightScale);
+
+    m_statusLabel->setText("Terrain loaded");
+    appendLog("Terrain loaded successfully.");
+}
+
+void Studio3DWidget::onClearTerrain()
+{
+    m_ogreWidget->clearTerrain();
+    m_statusLabel->setText("Terrain cleared");
+    appendLog("Terrain cleared.");
+}
+
+void Studio3DWidget::onResetCamera()
+{
+    m_ogreWidget->resetCamera();
+    appendLog("Camera reset.");
+}
+
+void Studio3DWidget::onHeightScaleChanged(int value)
+{
+    m_heightScaleLabel->setText(QString("%1m").arg(value));
+}
+
+void Studio3DWidget::onExportTerrain()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString exportDir = m_ctx->projects().current().basePath + "/Exports";
     QDir().mkpath(exportDir);
 
-    QString outputPath = exportDir + "/road_network.obj";
-    appendLog("Exporting road network to: " + outputPath);
-
-    if (exportRoadMesh(outputPath)) {
-        appendLog("Road network export complete.");
-        QMessageBox::information(this, "Export Complete",
-            "Road network exported to:\n" + outputPath);
-    } else {
-        appendLog("Road export failed — no road data available.");
-        QMessageBox::warning(this, "Export Failed",
-            "No road network data available.\n"
-            "Create roads in Road Studio first.");
-    }
-}
-
-void Studio3DWidget::onBrowseProject() {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select O3DE Project Directory",
-        m_projectPathEdit->text());
-    if (!dir.isEmpty()) {
-        m_projectPathEdit->setText(dir);
-        saveSettings();
-    }
-}
-
-void Studio3DWidget::onBrowseEditor() {
-    QString path = QFileDialog::getOpenFileName(this, "Select O3DE Editor Executable",
-        m_editorPathEdit->text(), "Executable (*.exe)");
-    if (!path.isEmpty()) {
-        m_editorPathEdit->setText(path);
-        m_launchEditorBtn->setEnabled(true);
-        saveSettings();
-    }
-}
-
-void Studio3DWidget::onProcessStateChanged(QProcess::ProcessState state) {
-    switch (state) {
-    case QProcess::NotRunning:
-        m_statusLabel->setText("O3DE process: Not running");
-        m_progressBar->setVisible(false);
-        m_launchEditorBtn->setEnabled(true);
-        break;
-    case QProcess::Starting:
-        m_statusLabel->setText("O3DE process: Starting...");
-        break;
-    case QProcess::Running:
-        m_statusLabel->setText("O3DE process: Running");
-        m_progressBar->setVisible(false);
-        break;
-    }
-}
-
-void Studio3DWidget::onProcessOutput() {
-    QByteArray output = m_o3deProcess->readAllStandardOutput();
-    QByteArray error = m_o3deProcess->readAllStandardError();
-    if (!output.isEmpty()) {
-        appendLog(QString::fromUtf8(output).trimmed());
-    }
-    if (!error.isEmpty()) {
-        appendLog("[stderr] " + QString::fromUtf8(error).trimmed());
-    }
-}
-
-void Studio3DWidget::onProcessError(QProcess::ProcessError error) {
-    QString msg;
-    switch (error) {
-    case QProcess::FailedToStart: msg = "Failed to start O3DE Editor"; break;
-    case QProcess::Crashed: msg = "O3DE Editor crashed"; break;
-    case QProcess::Timedout: msg = "O3DE Editor timed out"; break;
-    default: msg = "O3DE Editor error"; break;
-    }
-    appendLog("[ERROR] " + msg);
-    m_progressBar->setVisible(false);
-    m_launchEditorBtn->setEnabled(true);
-}
-
-void Studio3DWidget::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {
-    appendLog(QString("O3DE Editor exited (code=%1, status=%2)")
-        .arg(exitCode)
-        .arg(exitStatus == QProcess::NormalExit ? "normal" : "crashed"));
-    m_progressBar->setVisible(false);
-    m_launchEditorBtn->setEnabled(true);
-}
-
-bool Studio3DWidget::exportTerrainHeightmap(const QString& outputPath) {
-    if (!m_ctx || !m_ctx->projects().hasProject()) return false;
-
-    // Look for exported TIFF files in the project's Terrain folder
     QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
-    QDir dir(terrainDir);
-    if (!dir.exists()) return false;
+    int count = 0;
 
-    QStringList tiffFiles = dir.entryList(QStringList() << "*.tif" << "*.tiff", QDir::Files);
-    if (tiffFiles.isEmpty()) return false;
+    // Copy all terrain data to Exports
+    if (QDir(terrainDir).exists()) {
+        QStringList filters;
+        filters << "*.png" << "*.tif" << "*.tiff";
+        QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
+        for (const auto& f : files) {
+            QString src = terrainDir + "/" + f;
+            QString dst = exportDir + "/terrain_" + f;
+            if (QFile::exists(dst)) QFile::remove(dst);
+            if (QFile::copy(src, dst)) {
+                count++;
+                appendLog("Exported: " + f);
+            }
+        }
+    }
 
-    // Copy the first TIFF to the O3DE project assets
-    QString srcFile = terrainDir + "/" + tiffFiles.first();
-    if (QFile::exists(outputPath)) QFile::remove(outputPath);
-    return QFile::copy(srcFile, outputPath);
+    if (count > 0) {
+        appendLog(QString("Exported %1 terrain files to: %2").arg(count).arg(exportDir));
+        QMessageBox::information(this, "Export Complete",
+            QString("Exported %1 file(s) to:\n%2").arg(count).arg(exportDir));
+    } else {
+        appendLog("No terrain data found to export.");
+        QMessageBox::warning(this, "Export Failed",
+            "No terrain data found.\nDownload terrain in Terrain Studio first.");
+    }
 }
 
-bool Studio3DWidget::exportRoadMesh(const QString& outputPath) {
-    if (!m_ctx || !m_ctx->projects().hasProject()) return false;
+void Studio3DWidget::onExportRoads()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
 
-    // Look for road files in the project's Roads folder
     QString roadDir = m_ctx->projects().current().basePath + "/Roads";
-    QDir dir(roadDir);
-    if (!dir.exists()) return false;
+    QString exportDir = m_ctx->projects().current().basePath + "/Exports";
+    QDir().mkpath(exportDir);
 
-    // Look for .xodr files (OpenDRIVE) that can be imported into O3DE
-    QStringList roadFiles = dir.entryList(QStringList() << "*.xodr" << "*.obj" << "*.fbx", QDir::Files);
-    if (roadFiles.isEmpty()) return false;
+    if (!QDir(roadDir).exists()) {
+        QMessageBox::warning(this, "Export Failed",
+            "No road data found.\nCreate roads in Road Studio first.");
+        return;
+    }
 
-    QString srcFile = roadDir + "/" + roadFiles.first();
-    if (QFile::exists(outputPath)) QFile::remove(outputPath);
-    return QFile::copy(srcFile, outputPath);
+    QStringList filters;
+    filters << "*.xodr" << "*.obj" << "*.fbx";
+    QStringList files = QDir(roadDir).entryList(filters, QDir::Files);
+
+    int count = 0;
+    for (const auto& f : files) {
+        QString src = roadDir + "/" + f;
+        QString dst = exportDir + "/road_" + f;
+        if (QFile::exists(dst)) QFile::remove(dst);
+        if (QFile::copy(src, dst)) {
+            count++;
+            appendLog("Exported: " + f);
+        }
+    }
+
+    if (count > 0) {
+        appendLog(QString("Exported %1 road files to: %2").arg(count).arg(exportDir));
+        QMessageBox::information(this, "Export Complete",
+            QString("Exported %1 file(s) to:\n%2").arg(count).arg(exportDir));
+    } else {
+        QMessageBox::warning(this, "Export Failed",
+            "No road files found in Roads folder.");
+    }
 }
