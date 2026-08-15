@@ -212,6 +212,14 @@ QString Studio3DWidget::findHeightmapInProject()
 
     QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
 
+    // Prefer merged heightmap in Terrain root
+    if (QDir(terrainDir).exists()) {
+        QStringList mergedFilters;
+        mergedFilters << "heightmap*.png" << "heightmap*.tif" << "heightmap*.tiff";
+        QStringList mergedFiles = QDir(terrainDir).entryList(mergedFilters, QDir::Files);
+        if (!mergedFiles.isEmpty()) return terrainDir + "/" + mergedFiles.first();
+    }
+
     // Check heightmaps subfolder
     QString hmDir = terrainDir + "/heightmaps";
     if (QDir(hmDir).exists()) {
@@ -221,10 +229,10 @@ QString Studio3DWidget::findHeightmapInProject()
         if (!files.isEmpty()) return hmDir + "/" + files.first();
     }
 
-    // Check Terrain root
+    // Check Terrain root for any TIFF/PNG
     if (QDir(terrainDir).exists()) {
         QStringList filters;
-        filters << "heightmap*.png" << "heightmap*.tif" << "*.tif" << "*.png";
+        filters << "*.tif" << "*.tiff" << "*.png";
         QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
         if (!files.isEmpty()) return terrainDir + "/" + files.first();
     }
@@ -238,6 +246,15 @@ QString Studio3DWidget::findAlbedoInProject()
 
     QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
 
+    // Prefer merged albedo in Terrain root
+    if (QDir(terrainDir).exists()) {
+        QStringList mergedFilters;
+        mergedFilters << "albedo*.png" << "albedo*.tif" << "albedo*.tiff"
+                      << "satellite*.png" << "imagery*.png";
+        QStringList mergedFiles = QDir(terrainDir).entryList(mergedFilters, QDir::Files);
+        if (!mergedFiles.isEmpty()) return terrainDir + "/" + mergedFiles.first();
+    }
+
     // Check albedo subfolder
     QString albDir = terrainDir + "/albedo";
     if (QDir(albDir).exists()) {
@@ -245,14 +262,6 @@ QString Studio3DWidget::findAlbedoInProject()
         filters << "*.png" << "*.tif" << "*.tiff";
         QStringList files = QDir(albDir).entryList(filters, QDir::Files);
         if (!files.isEmpty()) return albDir + "/" + files.first();
-    }
-
-    // Check Terrain root for albedo/satellite imagery
-    if (QDir(terrainDir).exists()) {
-        QStringList filters;
-        filters << "albedo*.png" << "albedo*.tif" << "satellite*.png" << "imagery*.png";
-        QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
-        if (!files.isEmpty()) return terrainDir + "/" + files.first();
     }
 
     return QString();
@@ -464,8 +473,10 @@ void Studio3DWidget::onLoadScene()
 
 void Studio3DWidget::onProjectOpened()
 {
-    // Auto-load the saved scene if it exists
+    // Auto-load the saved scene if it exists (only once per project open)
     if (!m_ctx || !m_ctx->projects().hasProject()) return;
+    if (m_sceneAutoLoaded) return;  // Already loaded for this session
+    m_sceneAutoLoaded = true;
 
     QString path = sceneFilePath();
     if (QFile::exists(path)) {
@@ -519,6 +530,7 @@ void Studio3DWidget::onProjectClosed()
     m_ogreWidget->clearObjects();
     m_ogreWidget->clearRoads();
     m_ogreWidget->clearTerrain();
+    m_sceneAutoLoaded = false;  // Reset for next project
     appendLog("Project closed — 3D scene cleared.");
     m_statusLabel->setText("Ready");
 }

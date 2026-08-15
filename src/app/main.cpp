@@ -222,7 +222,9 @@ private:
 class AppMainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit AppMainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
+    void openProjectPath(const QString& path) { onOpenProjectPath(path); }
+    void activate3DStudio() { m_ctx->workspaces().activate("3d-studio"); }
+        explicit AppMainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
         : QMainWindow(parent), m_ctx(ctx)
     {
         setWindowTitle(QStringLiteral("OpenGeoStudio"));
@@ -982,6 +984,8 @@ int main(int argc, char* argv[]) {
     AppMainWindow window(&ctx);
     window.show();
     window.show();
+
+
 
 
     qDebug() << "OpenGeoStudio started ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Road Engine v"

@@ -86,4 +86,7 @@ private:
     // Status
     QLabel* m_statusLabel = nullptr;
     QTextEdit* m_logEdit = nullptr;
+
+    // Track whether scene has been auto-loaded for current project
+    bool m_sceneAutoLoaded = false;
 };
