@@ -230,4 +230,17 @@ struct ExportSettings {
     }
 };
 
+// ─── Mask Generation ──────────────────────────────────────────
+// Mirrors shared/types/terrain.ts MaskSettings
+
+struct MaskSettings {
+    bool generateRoadMask = false;
+    bool generateWaterMask = false;
+    bool generateVegetationMask = false;
+    bool generateBuildingMask = false;
+    bool generateCliffMask = false;
+    int cliffThresholdDegrees = 45;  // 0-90
+    int roadLineWidthPx = 3;         // 1-10
+};
+
 } // namespace terrain

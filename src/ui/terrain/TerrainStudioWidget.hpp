@@ -8,6 +8,8 @@
 #include "TerrainStore.hpp"
 #include "TerrainViewport.hpp"
 #include "ExportPanel.hpp"
+#include "LayerStack.hpp"
+#include "SearchBar.hpp"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -16,6 +18,8 @@
 #include <QDoubleSpinBox>
 #include <QAction>
 #include <QHBoxLayout>
+#include <QToolButton>
+#include <QFrame>
 
 class TerrainStudioWidget : public QWidget {
     Q_OBJECT
@@ -36,14 +40,41 @@ public:
         setupToolbar();
         layout->addWidget(m_toolbar);
 
-        // Main content: viewport + export panel side by side
+        // Search bar row
+        auto* searchContainer = new QWidget();
+        searchContainer->setStyleSheet("background: #0d1117; border-bottom: 1px solid #30363d;");
+        auto* searchLayout = new QHBoxLayout(searchContainer);
+        searchLayout->setContentsMargins(8, 4, 8, 4);
+        m_searchBar = new SearchBar();
+        searchLayout->addWidget(m_searchBar);
+        layout->addWidget(searchContainer);
+
+        // Main content: LayerStack | viewport | export panel
         auto* contentWidget = new QWidget();
         auto* contentLayout = new QHBoxLayout(contentWidget);
         contentLayout->setContentsMargins(0, 0, 0, 0);
         contentLayout->setSpacing(0);
 
+        // Left panel: LayerStack
+        m_layerStack = new LayerStack(m_store);
+        m_layerStack->setMaximumWidth(240);
+        m_layerStack->setStyleSheet("QWidget { background: #0d1117; }");
+        contentLayout->addWidget(m_layerStack);
+
+        // Separator
+        auto* leftSep = new QFrame();
+        leftSep->setFrameShape(QFrame::VLine);
+        leftSep->setStyleSheet("color: #30363d;");
+        contentLayout->addWidget(leftSep);
+
         m_viewport = new TerrainViewport(ctx, m_store, this);
         contentLayout->addWidget(m_viewport, 3);
+
+        // Separator
+        auto* rightSep = new QFrame();
+        rightSep->setFrameShape(QFrame::VLine);
+        rightSep->setStyleSheet("color: #30363d;");
+        contentLayout->addWidget(rightSep);
 
         m_exportPanel = new ExportPanel(m_store, this);
         m_exportPanel->setMaximumWidth(320);
@@ -65,17 +96,56 @@ public:
 
 private:
     void setupToolbar() {
-        auto* tileLabel = new QLabel("Tile size (km):");
+        m_toolbar->setStyleSheet(
+            "QToolBar { background: #0d1117; border-bottom: 1px solid #30363d; spacing: 4px; padding: 4px; }"
+            "QToolBar QToolButton { color: #e6edf3; padding: 4px 10px; border-radius: 4px; }"
+            "QToolBar QToolButton:hover { background: #21262d; }"
+            "QToolBar QToolButton:checked { background: #1f6feb; color: #ffffff; }"
+            "QToolBar QLabel { color: #7d8590; font-size: 11px; padding: 0 6px; }"
+            "QToolBar QDoubleSpinBox { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 2px 6px; color: #e6edf3; }");
+
+        // Tile size buttons (discrete, matching Electron)
+        auto* tileLabel = new QLabel("Tile:");
         m_toolbar->addWidget(tileLabel);
 
-        auto* tileSpin = new QDoubleSpinBox();
-        tileSpin->setRange(1, 16);
-        tileSpin->setSingleStep(1);
-        tileSpin->setValue(2);
-        tileSpin->setSuffix(" km");
-        connect(tileSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                m_store, &TerrainStore::setTileSizeKm);
-        m_toolbar->addWidget(tileSpin);
+        for (int size : {1, 2, 4, 8, 16}) {
+            auto* btn = new QToolButton();
+            btn->setText(QString("%1km").arg(size));
+            btn->setCheckable(true);
+            btn->setChecked(size == 2);
+            connect(btn, &QToolButton::clicked, this, [this, size, btn]() {
+                m_store->setTileSizeKm(size);
+                // Uncheck siblings
+                for (auto* child : m_toolbar->findChildren<QToolButton*>()) {
+                    if (child != btn && child->text().endsWith("km"))
+                        child->setChecked(false);
+                }
+            });
+            m_toolbar->addWidget(btn);
+        }
+
+        m_toolbar->addSeparator();
+
+        // Select All / Clear
+        auto* selectAllBtn = new QToolButton();
+        selectAllBtn->setText("Select All");
+        connect(selectAllBtn, &QToolButton::clicked, m_store, &TerrainStore::selectAllTiles);
+        m_toolbar->addWidget(selectAllBtn);
+
+        auto* clearBtn = new QToolButton();
+        clearBtn->setText("Clear");
+        connect(clearBtn, &QToolButton::clicked, m_store, &TerrainStore::clearTileSelection);
+        m_toolbar->addWidget(clearBtn);
+
+        // Tile count display
+        auto* tileCountLabel = new QLabel("0/0");
+        tileCountLabel->setStyleSheet("color: #58a6ff; font-weight: bold; padding: 0 8px;");
+        m_toolbar->addWidget(tileCountLabel);
+        connect(m_store, &TerrainStore::tileSelectionChanged, this, [tileCountLabel, this]() {
+            int selected = m_store->selectedTiles().size();
+            int total = m_store->tileGrid().tiles.size();
+            tileCountLabel->setText(QString("%1/%2").arg(selected).arg(total));
+        });
 
         m_toolbar->addSeparator();
 
@@ -103,14 +173,16 @@ private:
 
         m_toolbar->addSeparator();
 
-        auto* hintLabel = new QLabel("Shift+drag to select area | Click tiles to toggle");
-        hintLabel->setStyleSheet("color: #7d8590; padding: 0 10px; font-size: 12px;");
+        auto* hintLabel = new QLabel("Shift+drag to select | Click tiles to toggle");
+        hintLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
         m_toolbar->addWidget(hintLabel);
     }
 
     ApplicationContext* m_ctx;
     TerrainStore* m_store = nullptr;
     QToolBar* m_toolbar = nullptr;
+    SearchBar* m_searchBar = nullptr;
+    LayerStack* m_layerStack = nullptr;
     TerrainViewport* m_viewport = nullptr;
     ExportPanel* m_exportPanel = nullptr;
     QLabel* m_statusLabel = nullptr;

@@ -132,6 +132,25 @@ void TerrainStore::setLocalImageryFilePath(const QString& path) {
     emit exportSettingsChanged();
 }
 
+void TerrainStore::setMaskSettings(const terrain::MaskSettings& settings) {
+    m_maskSettings = settings;
+    emit maskSettingsChanged(m_maskSettings);
+}
+
+void TerrainStore::setSatelliteVisible(bool visible) {
+    if (m_satelliteVisible != visible) {
+        m_satelliteVisible = visible;
+        emit visibilityChanged();
+    }
+}
+
+void TerrainStore::setDemVisible(bool visible) {
+    if (m_demVisible != visible) {
+        m_demVisible = visible;
+        emit visibilityChanged();
+    }
+}
+
 void TerrainStore::computeTileGrid() {
     m_tileGrid.tiles.clear();
     m_selectedTiles.clear();

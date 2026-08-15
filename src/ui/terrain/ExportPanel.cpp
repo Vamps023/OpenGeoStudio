@@ -6,11 +6,69 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QScrollArea>
+#include <QFrame>
+
+// ============================================================
+// Dark theme stylesheet (GitHub dark inspired, matching Electron)
+// ============================================================
+static const char* kDarkTheme = R"(
+    QWidget { background: #0d1117; color: #e6edf3; font-size: 12px; }
+    QScrollArea { background: #0d1117; border: none; }
+    QGroupBox {
+        background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+        margin-top: 12px; padding-top: 8px; font-size: 11px;
+        font-weight: bold; color: #7d8590; letter-spacing: 1px;
+    }
+    QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+    QComboBox {
+        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+        padding: 4px 8px; color: #e6edf3; min-height: 20px;
+    }
+    QComboBox::drop-down { border: none; width: 20px; }
+    QComboBox::down-arrow { image: none; width: 0; height: 0; }
+    QComboBox QAbstractItemView {
+        background: #1c2128; border: 1px solid #30363d; selection-background-color: #1f6feb;
+        color: #e6edf3; outline: none;
+    }
+    QSpinBox, QDoubleSpinBox {
+        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+        padding: 4px 8px; color: #e6edf3; min-height: 20px;
+    }
+    QLineEdit {
+        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+        padding: 4px 8px; color: #e6edf3;
+    }
+    QLineEdit:focus { border-color: #1f6feb; }
+    QCheckBox { color: #e6edf3; spacing: 6px; }
+    QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px; }
+    QCheckBox::indicator:unchecked { background: #21262d; border: 1px solid #30363d; }
+    QCheckBox::indicator:checked { background: #1f6feb; border: 1px solid #1f6feb; }
+    QPushButton {
+        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+        padding: 6px 12px; color: #e6edf3; font-weight: 500;
+    }
+    QPushButton:hover { background: #30363d; border-color: #8b949e; }
+    QPushButton:pressed { background: #1c2128; }
+    QPushButton:disabled { color: #484f58; background: #161b22; }
+    QToolButton {
+        background: transparent; border: none; color: #7d8590;
+        font-size: 10px; font-weight: bold; text-transform: uppercase;
+        letter-spacing: 1px; padding: 6px 10px;
+    }
+    QToolButton:hover { color: #e6edf3; }
+    QProgressBar {
+        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+        height: 6px; text-align: center;
+    }
+    QProgressBar::chunk { background: #1f6feb; border-radius: 3px; }
+    QLabel { color: #e6edf3; }
+)";
 
 ExportPanel::ExportPanel(TerrainStore* store, QWidget* parent)
     : QWidget(parent), m_store(store) {
     m_engine = new ExportEngine(store, this);
     setupUi();
+    applyDarkTheme();
 
     connect(m_engine, &ExportEngine::progress, this, &ExportPanel::onExportProgress);
     connect(m_engine, &ExportEngine::finished, this, &ExportPanel::onExportFinished);
@@ -18,22 +76,32 @@ ExportPanel::ExportPanel(TerrainStore* store, QWidget* parent)
         int count = m_store->selectedTiles().size();
         m_tileCountLabel->setText(QString("%1 tiles selected").arg(count));
         if (m_tileBadge) m_tileBadge->setText(QString::number(count));
+        // Update export button text dynamically
+        if (count > 0) {
+            m_exportBtn->setText(QString("Export %1 tile%2").arg(count).arg(count > 1 ? "s" : ""));
+        } else {
+            m_exportBtn->setText("Export");
+        }
     });
 }
 
+void ExportPanel::applyDarkTheme() {
+    setStyleSheet(kDarkTheme);
+}
+
 void ExportPanel::setupUi() {
-    // Wrap everything in a scroll area since there are many options now
     auto* scrollArea = new QScrollArea(this);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
 
     auto* content = new QWidget();
     auto* mainLayout = new QVBoxLayout(content);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
+    mainLayout->setContentsMargins(10, 10, 10, 10);
+    mainLayout->setSpacing(6);
 
     // --- Header ---
     auto* headerLayout = new QHBoxLayout();
+    headerLayout->setSpacing(8);
     auto* headerLabel = new QLabel("EXPORT");
     headerLabel->setStyleSheet(
         "QLabel { font-size: 14px; font-weight: bold; color: #e6edf3; letter-spacing: 2px; }");
@@ -41,7 +109,7 @@ void ExportPanel::setupUi() {
 
     auto* tileBadge = new QLabel("0");
     tileBadge->setStyleSheet(
-        "QLabel { background: rgba(6,182,212,0.2); color: #06b6d4; border-radius: 10px;"
+        "QLabel { background: rgba(31,111,235,0.2); color: #58a6ff; border-radius: 10px;"
         "padding: 2px 10px; font-size: 11px; font-weight: bold; }");
     tileBadge->setAlignment(Qt::AlignCenter);
     tileBadge->setMinimumWidth(30);
@@ -55,11 +123,16 @@ void ExportPanel::setupUi() {
     mainLayout->addLayout(headerLayout);
     m_tileBadge = tileBadge;
 
-    // --- Export Settings ---
-    auto* settingsGroup = new QGroupBox("Export Settings");
-    auto* formLayout = new QFormLayout(settingsGroup);
+    // --- Basic Settings (always visible) ---
+    auto* basicGroup = new QGroupBox("OUTPUT");
+    auto* basicLayout = new QFormLayout(basicGroup);
+    basicLayout->setSpacing(6);
+    basicLayout->setContentsMargins(10, 16, 10, 10);
+    // Set label alignment
+    basicLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    basicLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    // Heightmap format — now includes "None" for albedo-only
+    // Heightmap format
     m_heightmapFormatCombo = new QComboBox();
     m_heightmapFormatCombo->addItems({
         "None (Albedo only)", "PNG 16-bit", "R16 Raw",
@@ -68,7 +141,7 @@ void ExportPanel::setupUi() {
     connect(m_heightmapFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         m_store->setHeightmapFormat(static_cast<terrain::HeightmapFormat>(idx));
     });
-    formLayout->addRow("Heightmap:", m_heightmapFormatCombo);
+    basicLayout->addRow("Heightmap:", m_heightmapFormatCombo);
 
     // Albedo format
     m_albedoFormatCombo = new QComboBox();
@@ -76,38 +149,32 @@ void ExportPanel::setupUi() {
     connect(m_albedoFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         m_store->setAlbedoFormat(static_cast<terrain::AlbedoFormat>(idx));
     });
-    formLayout->addRow("Albedo:", m_albedoFormatCombo);
+    basicLayout->addRow("Albedo:", m_albedoFormatCombo);
 
-    // DEM Source — full list matching Electron version
+    // DEM Source
     m_demSourceCombo = new QComboBox();
     m_demSourceCombo->addItems({
-        // Tiled (no API key)
         "AWS Terrarium (~30m, free)",
         "Mapzen Terrarium (~30m, free)",
         "Mapbox Terrain-RGB (HD 0.1m, token)",
-        // Copernicus (free, no key)
         "NASA EarthData Copernicus GLO-30 (~30m, free)",
-        // OpenTopography (free API key)
         "OpenTopo Copernicus GLO-30 (~30m, best)",
         "OpenTopo NASADEM (~30m, reprocessed)",
         "OpenTopo SRTM GL1 (~30m, global)",
         "OpenTopo SRTM GL3 (~90m, global)",
         "OpenTopo ALOS AW3D30 (~30m, global)",
         "OpenTopo USGS 3DEP (~10m, USA only)",
-        // GPXZ
         "GPXZ LiDAR (5m, API key)",
-        // GLAD
         "GLAD SRTM (~30m, free, UMD)",
-        // Local file
         "Import GeoTIFF DEM from file..."
     });
     connect(m_demSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         m_store->setDemSource(static_cast<terrain::DemSource>(idx));
         onDemSourceChanged();
     });
-    formLayout->addRow("DEM Source:", m_demSourceCombo);
+    basicLayout->addRow("DEM Source:", m_demSourceCombo);
 
-    // Imagery source — full list
+    // Imagery source
     m_imagerySourceCombo = new QComboBox();
     m_imagerySourceCombo->addItems({
         "Google Satellite (free, up-to-date)",
@@ -121,9 +188,37 @@ void ExportPanel::setupUi() {
         m_store->setImagerySource(static_cast<terrain::ImagerySource>(idx));
         onImagerySourceChanged();
     });
-    formLayout->addRow("Imagery:", m_imagerySourceCombo);
+    basicLayout->addRow("Imagery:", m_imagerySourceCombo);
 
-    // GLAD ARD interval (shown only when GLAD ARD is selected)
+    mainLayout->addWidget(basicGroup);
+
+    // --- Advanced Settings Toggle (collapsible, matching Electron) ---
+    m_advancedToggle = new QToolButton();
+    m_advancedToggle->setText("Settings  +");
+    m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_advancedToggle->setStyleSheet(
+        "QToolButton { color: #7d8590; font-size: 10px; font-weight: bold;"
+        "text-transform: uppercase; letter-spacing: 1px; padding: 8px 0;"
+        "border-top: 1px solid #30363d; border-bottom: 1px solid #30363d;"
+        "background: transparent; }"
+        "QToolButton:hover { color: #e6edf3; }");
+    connect(m_advancedToggle, &QToolButton::clicked, this, &ExportPanel::onToggleAdvancedSettings);
+    mainLayout->addWidget(m_advancedToggle);
+
+    // --- Advanced Settings Container (hidden by default) ---
+    m_advancedContainer = new QWidget();
+    auto* advLayout = new QVBoxLayout(m_advancedContainer);
+    advLayout->setContentsMargins(0, 0, 0, 0);
+    advLayout->setSpacing(6);
+
+    // Settings group
+    m_settingsGroup = new QGroupBox("ADVANCED");
+    auto* formLayout = new QFormLayout(m_settingsGroup);
+    formLayout->setSpacing(6);
+    formLayout->setContentsMargins(10, 16, 10, 10);
+    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    // GLAD ARD interval
     m_gladArdContainer = new QWidget();
     auto* gladLayout = new QHBoxLayout(m_gladArdContainer);
     gladLayout->setContentsMargins(0, 0, 0, 0);
@@ -139,7 +234,7 @@ void ExportPanel::setupUi() {
     formLayout->addRow("GLAD Interval:", m_gladArdContainer);
     m_gladArdContainer->setVisible(false);
 
-    // CRS — full list with specific UTM zones
+    // CRS
     m_crsCombo = new QComboBox();
     m_crsCombo->addItems({
         "Auto (UTM from bounds centroid)",
@@ -156,7 +251,7 @@ void ExportPanel::setupUi() {
     });
     formLayout->addRow("CRS:", m_crsCombo);
 
-    // Heightmap resolution — presets with labels
+    // Heightmap resolution
     m_heightmapResCombo = new QComboBox();
     m_heightmapResCombo->addItems({
         "512 × 512 (~150m/pixel)",
@@ -164,19 +259,15 @@ void ExportPanel::setupUi() {
         "2048 × 2048 (~37m/pixel)",
         "4096 × 4096 (~18m/pixel)"
     });
-    // Map combo index to actual resolution
     const int hResValues[] = {512, 1024, 2048, 4096};
     connect(m_heightmapResCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, hResValues](int idx) {
-        auto& settings = const_cast<terrain::ExportSettings&>(m_store->exportSettings());
-        const_cast<TerrainStore*>(m_store)->setExportSettings(settings);
-        // Use the store's setExportSettings to update
         terrain::ExportSettings s = m_store->exportSettings();
         s.heightmapResolution = hResValues[idx];
         m_store->setExportSettings(s);
     });
     formLayout->addRow("Heightmap Res:", m_heightmapResCombo);
 
-    // Albedo resolution — presets with labels
+    // Albedo resolution
     m_albedoResCombo = new QComboBox();
     m_albedoResCombo->addItems({
         "1024 × 1024",
@@ -192,19 +283,12 @@ void ExportPanel::setupUi() {
     });
     formLayout->addRow("Albedo Res:", m_albedoResCombo);
 
-    // Imagery zoom level — manual override
+    // Imagery zoom
     m_imageryZoomCombo = new QComboBox();
     m_imageryZoomCombo->addItems({
-        "Auto (recommended)",
-        "10 — Low",
-        "12 — Medium",
-        "14 — Good",
-        "16 — High",
-        "18 — Very High",
-        "19 — Ultra",
-        "20 — Extreme (ArcGIS/Mapbox)",
-        "21 — Max Detail (limited areas)",
-        "22 — Micro (city blocks only)"
+        "Auto (recommended)", "10 — Low", "12 — Medium", "14 — Good",
+        "16 — High", "18 — Very High", "19 — Ultra",
+        "20 — Extreme (ArcGIS/Mapbox)", "21 — Max Detail", "22 — Micro"
     });
     const int zoomValues[] = {0, 10, 12, 14, 16, 18, 19, 20, 21, 22};
     connect(m_imageryZoomCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, zoomValues](int idx) {
@@ -221,11 +305,14 @@ void ExportPanel::setupUi() {
     });
     formLayout->addRow("Compress:", m_compressCheck);
 
-    mainLayout->addWidget(settingsGroup);
+    advLayout->addWidget(m_settingsGroup);
 
-    // --- Local file import (shown when DEM/imagery source is local) ---
-    auto* localGroup = new QGroupBox("Local File Import");
-    auto* localLayout = new QFormLayout(localGroup);
+    // Local file import group
+    m_localGroup = new QGroupBox("LOCAL FILE IMPORT");
+    auto* localLayout = new QFormLayout(m_localGroup);
+    localLayout->setSpacing(6);
+    localLayout->setContentsMargins(10, 16, 10, 10);
+    localLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_localDemBtn = new QPushButton("Browse...");
     m_localDemLabel = new QLabel("No DEM file selected");
@@ -253,14 +340,15 @@ void ExportPanel::setupUi() {
     localLayout->addRow("Imagery file:", m_localImageryBtn);
     localLayout->addRow("", m_localImageryLabel);
 
-    localGroup->setVisible(false);
-    mainLayout->addWidget(localGroup);
-    // Store references for visibility toggling
-    m_localDemBtn->setProperty("group", "localFile");
+    m_localGroup->setVisible(false);
+    advLayout->addWidget(m_localGroup);
 
-    // --- API Keys ---
-    auto* keysGroup = new QGroupBox("API Keys");
-    auto* keysLayout = new QFormLayout(keysGroup);
+    // API Keys group
+    m_keysGroup = new QGroupBox("API KEYS");
+    auto* keysLayout = new QFormLayout(m_keysGroup);
+    keysLayout->setSpacing(6);
+    keysLayout->setContentsMargins(10, 16, 10, 10);
+    keysLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_openTopoKeyEdit = new QLineEdit();
     m_openTopoKeyEdit->setPlaceholderText("OpenTopography API key");
@@ -292,25 +380,32 @@ void ExportPanel::setupUi() {
     connect(m_stadiaKeyEdit, &QLineEdit::textChanged, m_store, &TerrainStore::setStadiaApiKey);
     keysLayout->addRow("Stadia:", m_stadiaKeyEdit);
 
-    mainLayout->addWidget(keysGroup);
+    advLayout->addWidget(m_keysGroup);
+    mainLayout->addWidget(m_advancedContainer);
+    m_advancedContainer->setVisible(false);  // Hidden by default
 
     // --- API Key Warning ---
     m_apiKeyWarning = new QLabel("");
     m_apiKeyWarning->setStyleSheet(
-        "QLabel { color: #d29922; font-size: 11px; padding: 6px; "
-        "background: rgba(210,153,34,0.1); border-radius: 4px; }");
+        "QLabel { color: #d29922; font-size: 11px; padding: 8px 10px;"
+        "background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.3);"
+        "border-radius: 6px; }");
     m_apiKeyWarning->setWordWrap(true);
     m_apiKeyWarning->setVisible(false);
     mainLayout->addWidget(m_apiKeyWarning);
 
     // --- Tile Selection ---
-    auto* tileGroup = new QGroupBox("Tiles");
+    auto* tileGroup = new QGroupBox("TILES");
     auto* tileLayout = new QVBoxLayout(tileGroup);
+    tileLayout->setSpacing(6);
+    tileLayout->setContentsMargins(10, 16, 10, 10);
 
     m_tileCountLabel = new QLabel("0 tiles selected");
+    m_tileCountLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
     tileLayout->addWidget(m_tileCountLabel);
 
     auto* tileBtnLayout = new QHBoxLayout();
+    tileBtnLayout->setSpacing(6);
     m_selectAllBtn = new QPushButton("Select All");
     connect(m_selectAllBtn, &QPushButton::clicked, m_store, &TerrainStore::selectAllTiles);
     m_clearTilesBtn = new QPushButton("Clear");
@@ -321,11 +416,12 @@ void ExportPanel::setupUi() {
 
     mainLayout->addWidget(tileGroup);
 
-    // --- Export ---
+    // --- Export Button ---
     m_exportBtn = new QPushButton("Export");
     m_exportBtn->setStyleSheet(
-        "QPushButton { background-color: #06b6d4; color: #0d1117; padding: 10px; font-weight: bold; border: none; border-radius: 6px; }"
-        "QPushButton:hover { background-color: #22d3ee; }"
+        "QPushButton { background-color: #238636; color: #ffffff; padding: 10px;"
+        "font-weight: bold; border: none; border-radius: 6px; font-size: 13px; }"
+        "QPushButton:hover { background-color: #2ea043; }"
         "QPushButton:disabled { background-color: #21262d; color: #484f58; }");
     connect(m_exportBtn, &QPushButton::clicked, this, &ExportPanel::onExportClicked);
     mainLayout->addWidget(m_exportBtn);
@@ -336,6 +432,7 @@ void ExportPanel::setupUi() {
 
     m_statusLabel = new QLabel("");
     m_statusLabel->setWordWrap(true);
+    m_statusLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
     mainLayout->addWidget(m_statusLabel);
 
     mainLayout->addStretch();
@@ -346,14 +443,16 @@ void ExportPanel::setupUi() {
     outerLayout->addWidget(scrollArea);
 }
 
+void ExportPanel::onToggleAdvancedSettings() {
+    bool visible = !m_advancedContainer->isVisible();
+    m_advancedContainer->setVisible(visible);
+    m_advancedToggle->setText(visible ? "Settings  −" : "Settings  +");
+}
+
 void ExportPanel::onDemSourceChanged() {
     int idx = m_demSourceCombo->currentIndex();
     bool isLocal = (idx == static_cast<int>(terrain::DemSource::Local_File));
-
-    // Show/hide local file import group
-    auto* localGroup = qobject_cast<QGroupBox*>(m_localDemBtn->parentWidget()->parentWidget());
-    if (localGroup) localGroup->setVisible(isLocal);
-
+    m_localGroup->setVisible(isLocal);
     updateApiKeyWarnings();
 }
 
@@ -364,12 +463,9 @@ void ExportPanel::onImagerySourceChanged() {
 
     m_gladArdContainer->setVisible(isGladArd);
 
-    // Show/hide local file import for imagery
-    if (m_localImageryBtn) {
-        auto* localGroup = qobject_cast<QGroupBox*>(m_localImageryBtn->parentWidget()->parentWidget());
-        if (localGroup) localGroup->setVisible(
-            isLocal || (m_demSourceCombo->currentIndex() == static_cast<int>(terrain::DemSource::Local_File)));
-    }
+    // Show local file group if either DEM or imagery is local
+    bool demLocal = (m_demSourceCombo->currentIndex() == static_cast<int>(terrain::DemSource::Local_File));
+    m_localGroup->setVisible(isLocal || demLocal);
 
     updateApiKeyWarnings();
 }
@@ -412,6 +508,7 @@ void ExportPanel::onExportClicked() {
     if (dir.isEmpty()) return;
 
     m_exportBtn->setEnabled(false);
+    m_exportBtn->setText("Exporting...");
     m_progressBar->setVisible(true);
     m_progressBar->setValue(0);
     m_statusLabel->setText("Starting export...");
@@ -426,6 +523,8 @@ void ExportPanel::onExportProgress(int percent, const QString& stage) {
 
 void ExportPanel::onExportFinished(bool success, const QString& message) {
     m_exportBtn->setEnabled(true);
+    int count = m_store->selectedTiles().size();
+    m_exportBtn->setText(count > 0 ? QString("Export %1 tile%2").arg(count).arg(count > 1 ? "s" : "") : "Export");
     m_progressBar->setVisible(false);
     m_statusLabel->setText(message);
     if (success) {

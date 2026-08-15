@@ -1,52 +1,20 @@
-Add QGIS-inspired map subsystem (CRS, tile math, transforms)
+Fix terrain UI alignment and implement missing features
 
-Studied QGIS source code (D:/git/QGIS) and ported key map
-subsystem patterns to create a proper coordinate/tile
-infrastructure. No PROJ dependency — uses built-in formulas
-for the common EPSG:4326 ↔ EPSG:3857 transforms.
-
-New files in src/core/map/:
-
-1. MapRectangle.hpp — Geographic extent class
-   Inspired by QgsRectangle. Supports normalize, scale, grow,
-   intersect, contains, combineWith.
-
-2. CoordinateReferenceSystem.hpp — CRS representation
-   Inspired by QgsCoordinateReferenceSystem. Supports
-   EPSG:4326 (WGS84 lat/lon) and EPSG:3857 (Web Mercator).
-
-3. CoordinateTransform.hpp — CRS transformations
-   Inspired by QgsCoordinateTransform. Built-in formulas for
-   EPSG:4326 ↔ EPSG:3857 (lonLatToMercator, mercatorToLonLat).
-   No PROJ library dependency needed.
-
-4. TileMatrix.hpp — Standard XYZ tile scheme
-   Inspired by QgsTileMatrix/QgsTileMatrixSet from qgstiles.cpp.
-   Web Mercator tile math: tileExtent, tileRangeFromExtent,
-   mapToTileCoordinates, scaleToZoomLevel, zoomLevelForExtent.
-
-5. MapToPixel.hpp — Screen ↔ World conversion
-   Inspired by QgsMapToPixel. Uses QTransform matrix for
-   world→screen and screen→world conversion with Y-axis flip.
-
-6. TileCache.hpp — In-memory LRU tile cache
-   Inspired by QgsTileCache. Thread-safe QCache<QUrl, QImage>
-   with 256 tile limit.
-
-7. XyzTileProvider.hpp — XYZ tile URL template + download
-   Inspired by QGIS formatXYZUrlTemplate() and QgsWmsProvider
-   XYZ mode. Supports {x}, {y}, {-y} (TMS), {z} placeholders.
-   Integrates with TileCache for cached requests.
-
-8. MapSubsystem.hpp — Umbrella header
-
-9. map_tests.cpp — 31 doctest tests covering all classes
-
-CMakeLists.txt: Added map tests to geometry_segment_tests,
-added src/core/map to include dirs, linked Qt6::Gui/Network.
-
-Tests: 504/504 passed (473 original + 31 new map tests)
-App: runs
+- ExportPanel: Add collapsible advanced settings section, proper dark
+  theme styling, dynamic export button text, GitHub-dark color scheme
+  matching Electron version
+- Toolbar: Replace spinbox with discrete tile size buttons (1/2/4/8/16km),
+  add Select All/Clear buttons, tile count display (selected/total)
+- SearchBar: New component with Nominatim geocoding, 300ms debounce,
+  1000ms rate limiting, keyboard navigation, max 5 results
+- LayerStack: New component with 7 layer toggles (DEM, satellite, 5 masks),
+  Road Width slider (1-10px), Cliff Threshold slider (0-90 degrees)
+- MaskSettings: New type in TerrainTypes matching Electron's interface
+- TerrainStore: Add maskSettings, satelliteVisible, demVisible state
+- ExportEngine: Implement local file import for DEM and imagery,
+  implement GLAD ARD Landsat URL, fix typo in file header
+- TerrainStudioWidget: 3-panel layout (LayerStack | viewport | export),
+  search bar row, separators between panels
 
 Generated with [Devin](https://devin.ai)
 

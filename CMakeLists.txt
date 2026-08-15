@@ -285,6 +285,8 @@ set(APP_SOURCES
     src/ui/terrain/TerrainViewport.cpp
     src/ui/terrain/ExportPanel.cpp
     src/ui/terrain/ExportEngine.cpp
+    src/ui/terrain/LayerStack.cpp
+    src/ui/terrain/SearchBar.cpp
     src/ui/terrain/TerrainStudioWidget.cpp
 )
 

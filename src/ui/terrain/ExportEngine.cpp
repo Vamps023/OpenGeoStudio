@@ -80,13 +80,21 @@ void ExportEngine::processNextTile() {
     emit progress(percent, QString("Exporting tile %1/%2: %3")
         .arg(m_completedTiles + 1).arg(m_totalTiles).arg(m_currentTile.id()));
 
-    // Download DEM (heightmap)
+    // Download DEM (heightmap) or load from local file
     QString demPath = m_exportDir + "/heightmaps/tile_" + m_currentTile.id() + ".png";
-    downloadDemForTile(m_currentTile, demPath);
+    if (m_store->exportSettings().demSource == terrain::DemSource::Local_File) {
+        loadLocalDemForTile(m_currentTile, demPath);
+    } else {
+        downloadDemForTile(m_currentTile, demPath);
+    }
 
-    // Download imagery (albedo)
+    // Download imagery (albedo) or load from local file
     QString albedoPath = m_exportDir + "/albedo/tile_" + m_currentTile.id() + ".png";
-    downloadImageryForTile(m_currentTile, albedoPath);
+    if (m_store->exportSettings().imagerySource == terrain::ImagerySource::Local_File) {
+        loadLocalImageryForTile(m_currentTile, albedoPath);
+    } else {
+        downloadImageryForTile(m_currentTile, albedoPath);
+    }
 }
 
 void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& outputPath) {
@@ -227,6 +235,83 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     });
 }
 
+void ExportEngine::loadLocalDemForTile(const terrain::Tile& tile, const QString& outputPath) {
+    const QString& localPath = m_store->exportSettings().localDemFilePath;
+    const int res = m_store->exportSettings().heightmapResolution;
+
+    if (localPath.isEmpty() || !QFile::exists(localPath)) {
+        // No local file — generate flat placeholder
+        QImage img(res, res, QImage::Format_Grayscale16);
+        img.fill(0);
+        img.save(outputPath);
+        m_demDownloaded = true;
+        if (m_imageryDownloaded) {
+            m_completedTiles++;
+            processNextTile();
+        }
+        return;
+    }
+
+    // Load the GeoTIFF/PNG DEM file
+    QImage srcImg(localPath);
+    if (srcImg.isNull()) {
+        m_log.warn("Failed to load local DEM: " + localPath);
+        QImage img(res, res, QImage::Format_Grayscale16);
+        img.fill(0);
+        img.save(outputPath);
+    } else {
+        // Convert to grayscale 16-bit and scale to target resolution
+        QImage gray = srcImg.convertToFormat(QImage::Format_Grayscale16);
+        QImage scaled = gray.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        scaled.save(outputPath);
+
+        // Also write GeoTIFF version
+        QString geotiffPath = outputPath;
+        geotiffPath.replace(".png", ".tif");
+        writeGeoTiff(geotiffPath, scaled, tile.bounds);
+    }
+
+    m_demDownloaded = true;
+    if (m_imageryDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
+void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QString& outputPath) {
+    const QString& localPath = m_store->exportSettings().localImageryFilePath;
+    const int res = m_store->exportSettings().albedoResolution;
+
+    if (localPath.isEmpty() || !QFile::exists(localPath)) {
+        QImage img(res, res, QImage::Format_RGB32);
+        img.fill(Qt::darkGreen);
+        img.save(outputPath);
+        m_imageryDownloaded = true;
+        if (m_demDownloaded) {
+            m_completedTiles++;
+            processNextTile();
+        }
+        return;
+    }
+
+    QImage srcImg(localPath);
+    if (srcImg.isNull()) {
+        m_log.warn("Failed to load local imagery: " + localPath);
+        QImage img(res, res, QImage::Format_RGB32);
+        img.fill(Qt::darkGreen);
+        img.save(outputPath);
+    } else {
+        QImage scaled = srcImg.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        scaled.save(outputPath);
+    }
+
+    m_imageryDownloaded = true;
+    if (m_demDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
 void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QString& outputPath) {
     // Compute tile coordinates for the tile center
     double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
@@ -253,7 +338,7 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
     double latRad = centerLat * M_PI / 180.0;
     int y = static_cast<int>((1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 * n);
 
-    QString url = imageryTileUrl(zoom, x, y);
+    QString url = imageryTileUrl(zoom, x, y, tile);
     if (url.isEmpty()) {
         QImage img(m_store->exportSettings().albedoResolution,
                    m_store->exportSettings().albedoResolution,
@@ -370,7 +455,7 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     return url.toString();
 }
 
-QString ExportEngine::imageryTileUrl(int z, int x, int y) const {
+QString ExportEngine::imageryTileUrl(int z, int x, int y, const terrain::Tile& tile) const {
     const auto& settings = m_store->exportSettings();
     switch (settings.imagerySource) {
     case terrain::ImagerySource::Google_Satellite:
@@ -387,9 +472,18 @@ QString ExportEngine::imageryTileUrl(int z, int x, int y) const {
         if (settings.maptilerToken.isEmpty()) return {};
         return QString("https://api.maptiler.com/tiles/satellite/%1/%2/%3.jpg?key=%4")
             .arg(z).arg(x).arg(y).arg(settings.maptilerToken);
-    case terrain::ImagerySource::GLAD_ARD_Landsat:
-        // GLAD ARD uses a different tile scheme — return empty for now, placeholder will be used
-        return {};
+    case terrain::ImagerySource::GLAD_ARD_Landsat: {
+        // GLAD ARD Landsat — uses UMD GLAD tile scheme
+        // Format: https://glad.umd.edu/ardapid/landsat/NDVI/{interval}/{lat}/{lon}.tif
+        int interval = m_store->exportSettings().gladArdInterval;
+        if (interval <= 0) interval = 920;
+        double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
+        double centerLon = (tile.bounds.east + tile.bounds.west) / 2.0;
+        return QString("https://glad.umd.edu/ardapid/landsat/NDVI/%1/%2/%3.tif")
+            .arg(interval)
+            .arg(centerLat, 0, 'f', 4)
+            .arg(centerLon, 0, 'f', 4);
+    }
     case terrain::ImagerySource::Local_File:
         return {};
     }

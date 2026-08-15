@@ -11,6 +11,7 @@
 //
 
 #include "TerrainStore.hpp"
+#include "../../core/logger/Logger.hpp"
 
 #include <QObject>
 #include <QString>
@@ -31,6 +32,8 @@ signals:
 private:
     void downloadDemForTile(const terrain::Tile& tile, const QString& outputPath);
     void downloadImageryForTile(const terrain::Tile& tile, const QString& outputPath);
+    void loadLocalDemForTile(const terrain::Tile& tile, const QString& outputPath);
+    void loadLocalImageryForTile(const terrain::Tile& tile, const QString& outputPath);
     void writeManifest(const QString& dir);
     void writeGeoTiff(const QString& path, const QImage& heightmap,
                       const terrain::GeoBounds& bounds);
@@ -53,7 +56,8 @@ private:
     bool m_demDownloaded = false;
     bool m_imageryDownloaded = false;
     terrain::Tile m_currentTile;
+    Logger m_log{"ExportEngine"};
 
     QString demUrlForTile(const terrain::Tile& tile) const;
-    QString imageryTileUrl(int z, int x, int y) const;
+    QString imageryTileUrl(int z, int x, int y, const terrain::Tile& tile) const;
 };

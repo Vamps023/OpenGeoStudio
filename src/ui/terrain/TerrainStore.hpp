@@ -26,8 +26,11 @@ public:
     const QSet<QString>& selectedTiles() const { return m_selectedTiles; }
     double tileSizeKm() const { return m_tileSizeKm; }
     const terrain::ExportSettings& exportSettings() const { return m_exportSettings; }
+    const terrain::MaskSettings& maskSettings() const { return m_maskSettings; }
     bool isSelecting() const { return m_isSelecting; }
     bool zoomLocked() const { return m_zoomLocked; }
+    bool satelliteVisible() const { return m_satelliteVisible; }
+    bool demVisible() const { return m_demVisible; }
 
     // Actions
     void setBounds(const terrain::GeoBounds& bounds);
@@ -56,6 +59,11 @@ public:
     void setLocalDemFilePath(const QString& path);
     void setLocalImageryFilePath(const QString& path);
 
+    // Mask settings
+    void setMaskSettings(const terrain::MaskSettings& settings);
+    void setSatelliteVisible(bool visible);
+    void setDemVisible(bool visible);
+
     // Compute tile grid from bounds
     void computeTileGrid();
 
@@ -69,6 +77,8 @@ signals:
     void tileSelectionChanged();
     void exportSettingsChanged();
     void selectingChanged(bool selecting);
+    void maskSettingsChanged(const terrain::MaskSettings& settings);
+    void visibilityChanged();
 
 private:
     EventBus* m_bus;
@@ -79,6 +89,9 @@ private:
     QSet<QString> m_selectedTiles;
     double m_tileSizeKm = 2.0;
     terrain::ExportSettings m_exportSettings;
+    terrain::MaskSettings m_maskSettings;
     bool m_isSelecting = false;
     bool m_zoomLocked = false;
+    bool m_satelliteVisible = true;
+    bool m_demVisible = true;
 };

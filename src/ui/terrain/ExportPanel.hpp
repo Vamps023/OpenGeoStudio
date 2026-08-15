@@ -23,6 +23,7 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QScrollArea>
+#include <QToolButton>
 
 class ExportEngine;
 
@@ -38,10 +39,12 @@ private slots:
     void onExportFinished(bool success, const QString& message);
     void onDemSourceChanged();
     void onImagerySourceChanged();
+    void onToggleAdvancedSettings();
 
 private:
     void setupUi();
     void updateApiKeyWarnings();
+    void applyDarkTheme();
 
     TerrainStore* m_store;
     ExportEngine* m_engine;
@@ -76,6 +79,13 @@ private:
 
     // GLAD ARD interval container (shown/hidden based on imagery source)
     QWidget* m_gladArdContainer = nullptr;
+
+    // Collapsible advanced settings
+    QToolButton* m_advancedToggle = nullptr;
+    QWidget* m_advancedContainer = nullptr;
+    QGroupBox* m_settingsGroup = nullptr;
+    QGroupBox* m_keysGroup = nullptr;
+    QGroupBox* m_localGroup = nullptr;
 
     // Export controls
     QPushButton* m_exportBtn = nullptr;
