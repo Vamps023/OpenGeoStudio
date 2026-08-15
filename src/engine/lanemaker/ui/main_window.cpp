@@ -167,10 +167,10 @@ void MainWindow::saveToFile()
         }
         auto loc = s.toStdString();
         LM::ChangeTracker::Instance()->Save(loc);
-        if (loadedFileName.empty())
-        {
-            loadedFileName = loc;
-        }
+        loadedFileName = loc;
+        // Track the saved file path as a Qt property so the project
+        // save system can serialize it into the .ogproj file
+        setProperty("lastRoadFile", s);
     }
 }
 
@@ -189,6 +189,8 @@ void MainWindow::loadFromFile()
     {
         reset();
         loadedFileName = s.toStdString();
+        // Track the loaded file path for project persistence
+        setProperty("lastRoadFile", s);
 
         bool supported = LM::ChangeTracker::Instance()->Load(loadedFileName);
         if (!supported)

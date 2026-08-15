@@ -1,28 +1,42 @@
-Add 3D Studio workspace with O3DE integration
+Unify project save workflow: terrain + roads + 3D studio under one .ogproj
 
-Adds a new "3D Studio" workspace to OpenGeoStudio that integrates
-with O3DE (Open 3D Engine) for professional level design.
+Previously each studio saved data independently:
+  - Terrain Studio: state was in a local TerrainStore, never persisted
+  - Road Studio: LaneMaker saved .xodr files via its own dialog, no link to project
+  - 3D Studio: exports to hardcoded paths, no project connection
 
-New workspace:
-  Home | Terrain Studio | Road Studio | Train Studio | 3D Studio
+Now all studios share the same project file (.ogproj):
 
-3D Studio widget (Studio3DWidget):
-  - Launch O3DE Editor with the OpenGeoStudio3D project
-  - Launch Game Launcher for testing
-  - Export terrain heightmaps from Terrain Studio to O3DE assets
-  - Export road network meshes from Road Studio to O3DE assets
-  - Real-time O3DE process status and output log
-  - Configurable O3DE project and editor paths
-  - Auto-detect Editor.exe in common build locations
-  - Settings persisted via QSettings
+Save (File > Save Project or Ctrl+S):
+  1. TerrainStore.toJson() → serialized into project.moduleState["terrain"]
+     (bounds, tile grid, export settings, selected tiles, API keys)
+  2. LaneMaker's last saved .xodr path → project.moduleState["road-studio"]["xodrFile"]
+  3. Project bounds updated from terrain bounds
+  4. Single .ogproj file written with all module state
 
-O3DE setup (separate repo at D:/git/o3de):
-  - O3DE 2.7.0 cloned and registered
-  - OpenGeoStudio3D project created from DefaultProject template
-  - CMake configured with PhysX5, Atom, LandscapeCanvas, etc.
-  - Build in progress (MSBuild /m parallel)
+Open (File > Open Project):
+  1. .ogproj loaded → moduleState parsed
+  2. TerrainStore.fromJson() restores bounds, tiles, export settings
+  3. Road .xodr file path restored (user can load it in LaneMaker)
+  4. Project bounds synced to terrain store
 
-Architecture:
-  OpenGeoStudio (Qt) → 3D Studio workspace → launches O3DE Editor
-                                            → exports terrain/road data
-  O3DE runs as separate process (cannot be embedded in Qt widget)
+Architecture changes:
+  - TerrainStore moved from TerrainStudioWidget-local to ApplicationContext
+    (shared singleton, accessible from all studios)
+  - LaneMaker MainWindow::saveToFile/loadFromFile now set
+    setProperty("lastRoadFile", path) so the project system can track it
+  - 3D Studio export functions now read from project basePath/Terrain
+    and basePath/Roads (matching ProjectManager::kSubfolders casing)
+  - saveProjectState() and loadProjectState() methods in AppMainWindow
+    handle the full serialization round-trip
+
+Project folder structure (unchanged, now actually used):
+  MyProject/
+    MyProject.ogproj       ← all module state saved here
+    Terrain/               ← terrain TIFF/PNG exports
+    Roads/                 ← road .xodr files
+    Exports/               ← 3D studio exports
+    Scene/                 ← scene files
+    ...
+
+Build: SUCCESS

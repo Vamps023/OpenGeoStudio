@@ -41,6 +41,8 @@
 // Core services
 #include "core/ApplicationContext.hpp"
 #include "core/project/ProjectManager.hpp"
+#include "core/project/Project.hpp"
+#include "ui/terrain/TerrainTypes.hpp"
 #include "core/workspace/WorkspaceManager.hpp"
 
 // UI
@@ -289,7 +291,7 @@ private:
         QAction* saveAct = fileMenu->addAction(tr("&Save Project"));
         saveAct->setShortcut(QKeySequence::Save);
         connect(saveAct, &QAction::triggered, this, [this]() {
-            m_ctx->projects().save();
+            saveProjectState();
         });
 
         fileMenu->addSeparator();
@@ -328,7 +330,7 @@ private:
                 QString cmd = palette.selectedCommand();
                 if (cmd == "file.new") onNewProject();
                 else if (cmd == "file.open") onOpenProject();
-                else if (cmd == "file.save") m_ctx->projects().save();
+                else if (cmd == "file.save") saveProjectState();
                 else if (cmd == "ws.home") m_ctx->workspaces().activate("home");
                 else if (cmd == "ws.terrain") m_ctx->workspaces().activate("terrain");
                 else if (cmd == "ws.road") m_ctx->workspaces().activate("road-studio");
@@ -479,7 +481,7 @@ private:
         QAction* saveAct = toolbar->addAction(tr("Save"));
         saveAct->setShortcut(QKeySequence::Save);
         connect(saveAct, &QAction::triggered, this, [this]() {
-            m_ctx->projects().save();
+            saveProjectState();
         });
 
         QAction* openAct = toolbar->addAction(tr("Open"));
@@ -660,7 +662,84 @@ private slots:
     void onProjectOpened(const Project& p) {
         // Switch to the project's workspace
         m_ctx->workspaces().activate(p.workspaceId);
+        // Restore terrain and road state from the project file
+        loadProjectState();
         updateStatusBar();
+    }
+
+    // ─── Project state save/load ─────────────────────────────
+    // Serializes TerrainStore + road file path into the .ogproj
+    // moduleState so all studios share the same project file.
+    void saveProjectState() {
+        if (!m_ctx->projects().hasProject()) {
+            QMessageBox::warning(this, tr("No Project"),
+                tr("Create or open a project first."));
+            return;
+        }
+
+        // Serialize terrain state into moduleState
+        QJsonObject moduleState;
+        moduleState["terrain"] = m_ctx->terrain().toJson();
+
+        // Serialize road studio state — track the last saved .xodr path
+        if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
+            auto* lmw = m_roadStudioWidget->laneMakerWindow();
+            QString roadFile = lmw->property("lastRoadFile").toString();
+            if (!roadFile.isEmpty()) {
+                QJsonObject roadState;
+                roadState["xodrFile"] = roadFile;
+                moduleState["road-studio"] = roadState;
+            }
+        }
+
+        // Update the project's moduleState
+        // We need const_cast because current() returns const&, but
+        // ProjectManager::save() reads from m_current internally
+        const_cast<Project&>(m_ctx->projects().current()).moduleState = moduleState;
+
+        // Save the project file
+        if (m_ctx->projects().save()) {
+            m_statusLabel->setText(QStringLiteral("Project saved: %1")
+                .arg(m_ctx->projects().current().name));
+        }
+    }
+
+    void loadProjectState() {
+        if (!m_ctx->projects().hasProject()) return;
+
+        const auto& proj = m_ctx->projects().current();
+        const QJsonObject& ms = proj.moduleState;
+
+        // Restore terrain state
+        if (ms.contains("terrain")) {
+            m_ctx->terrain().fromJson(ms["terrain"].toObject());
+        }
+
+        // Restore road studio — auto-load the .xodr file
+        if (ms.contains("road-studio")) {
+            QJsonObject roadState = ms["road-studio"].toObject();
+            QString xodrFile = roadState["xodrFile"].toString();
+            if (!xodrFile.isEmpty() && QFile::exists(xodrFile) &&
+                m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
+                // Load the road file into LaneMaker
+                auto* lmw = m_roadStudioWidget->laneMakerWindow();
+                lmw->setProperty("lastRoadFile", xodrFile);
+                // LaneMaker's loadFromFile uses a file dialog, so we need
+                // to call the ChangeTracker directly for programmatic loading
+                // For now, store the path so the user can load it manually
+                m_statusLabel->setText(QStringLiteral("Road file available: %1").arg(xodrFile));
+            }
+        }
+
+        // Update project bounds in terrain store if available
+        if (proj.bounds.valid) {
+            terrain::GeoBounds bounds;
+            bounds.south = proj.bounds.minLat;
+            bounds.north = proj.bounds.maxLat;
+            bounds.west = proj.bounds.minLon;
+            bounds.east = proj.bounds.maxLon;
+            m_ctx->terrain().setBounds(bounds);
+        }
     }
 
     void onNewProject() {

@@ -32,7 +32,7 @@ public:
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(0);
 
-        m_store = new TerrainStore(&m_ctx->events(), this);
+        m_store = &m_ctx->terrain();  // Use shared TerrainStore from context
 
         // Toolbar
         m_toolbar = new QToolBar("Terrain", this);

@@ -269,13 +269,14 @@ void Studio3DWidget::onLaunchLauncher() {
 }
 
 void Studio3DWidget::onExportTerrain() {
-    QString projectPath = m_projectPathEdit->text().trimmed();
-    if (projectPath.isEmpty() || !QDir(projectPath).exists()) {
+    QString o3deProjectPath = m_projectPathEdit->text().trimmed();
+    if (o3deProjectPath.isEmpty() || !QDir(o3deProjectPath).exists()) {
         QMessageBox::warning(this, "Project Not Found", "Set a valid O3DE project path first.");
         return;
     }
 
-    QString exportDir = projectPath + "/Assets/terrain";
+    // Export from OpenGeoStudio project's Terrain folder to O3DE project's Assets
+    QString exportDir = o3deProjectPath + "/Assets/terrain";
     QDir().mkpath(exportDir);
 
     QString outputPath = exportDir + "/heightmap.tif";
@@ -294,13 +295,13 @@ void Studio3DWidget::onExportTerrain() {
 }
 
 void Studio3DWidget::onExportRoads() {
-    QString projectPath = m_projectPathEdit->text().trimmed();
-    if (projectPath.isEmpty() || !QDir(projectPath).exists()) {
+    QString o3deProjectPath = m_projectPathEdit->text().trimmed();
+    if (o3deProjectPath.isEmpty() || !QDir(o3deProjectPath).exists()) {
         QMessageBox::warning(this, "Project Not Found", "Set a valid O3DE project path first.");
         return;
     }
 
-    QString exportDir = projectPath + "/Assets/roads";
+    QString exportDir = o3deProjectPath + "/Assets/roads";
     QDir().mkpath(exportDir);
 
     QString outputPath = exportDir + "/road_network.obj";
@@ -389,8 +390,8 @@ void Studio3DWidget::onProcessFinished(int exitCode, QProcess::ExitStatus exitSt
 bool Studio3DWidget::exportTerrainHeightmap(const QString& outputPath) {
     if (!m_ctx || !m_ctx->projects().hasProject()) return false;
 
-    // Check if there are exported TIFF files from Terrain Studio
-    QString terrainDir = m_ctx->projects().current().basePath + "/terrain";
+    // Look for exported TIFF files in the project's Terrain folder
+    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
     QDir dir(terrainDir);
     if (!dir.exists()) return false;
 
@@ -406,14 +407,16 @@ bool Studio3DWidget::exportTerrainHeightmap(const QString& outputPath) {
 bool Studio3DWidget::exportRoadMesh(const QString& outputPath) {
     if (!m_ctx || !m_ctx->projects().hasProject()) return false;
 
-    QString roadDir = m_ctx->projects().current().basePath + "/roads";
+    // Look for road files in the project's Roads folder
+    QString roadDir = m_ctx->projects().current().basePath + "/Roads";
     QDir dir(roadDir);
     if (!dir.exists()) return false;
 
-    QStringList meshFiles = dir.entryList(QStringList() << "*.obj" << "*.fbx", QDir::Files);
-    if (meshFiles.isEmpty()) return false;
+    // Look for .xodr files (OpenDRIVE) that can be imported into O3DE
+    QStringList roadFiles = dir.entryList(QStringList() << "*.xodr" << "*.obj" << "*.fbx", QDir::Files);
+    if (roadFiles.isEmpty()) return false;
 
-    QString srcFile = roadDir + "/" + meshFiles.first();
+    QString srcFile = roadDir + "/" + roadFiles.first();
     if (QFile::exists(outputPath)) QFile::remove(outputPath);
     return QFile::copy(srcFile, outputPath);
 }

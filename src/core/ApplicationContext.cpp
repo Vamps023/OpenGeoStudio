@@ -7,4 +7,5 @@ ApplicationContext::ApplicationContext(QObject* parent)
     m_eventBus = std::make_unique<EventBus>(this);
     m_projectManager = std::make_unique<ProjectManager>(m_eventBus.get(), this);
     m_workspaceManager = std::make_unique<WorkspaceManager>(m_eventBus.get(), this);
+    m_terrainStore = std::make_unique<TerrainStore>(m_eventBus.get(), this);
 }
