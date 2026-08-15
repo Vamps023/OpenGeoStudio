@@ -714,10 +714,18 @@ private slots:
             QString roadFile = roadsDir + "/road.xodr";
             lmw->saveToPath(roadFile);
 
-            // Record the path in moduleState
-            QJsonObject roadState;
-            roadState["xodrFile"] = roadFile;
-            moduleState["road-studio"] = roadState;
+            // Verify the file was actually created
+            if (QFile::exists(roadFile)) {
+                QJsonObject roadState;
+                roadState["xodrFile"] = roadFile;
+                moduleState["road-studio"] = roadState;
+                qDebug() << "saveProjectState: road file saved:" << roadFile
+                         << "size:" << QFileInfo(roadFile).size();
+            } else {
+                qDebug() << "saveProjectState: WARNING — road file was NOT created:" << roadFile;
+            }
+        } else {
+            qDebug() << "saveProjectState: road studio widget not available";
         }
 
         // Update the project's moduleState

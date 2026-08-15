@@ -8,6 +8,7 @@
 #include <QScreen>
 #include <filesystem>
 #include <fstream>
+#include "../../../core/PathHelper.hpp"
 #include <sstream>
 
 #include "main_window.h"
@@ -174,10 +175,13 @@ void MainWindow::saveToPath(const QString& path)
     if (!s.endsWith(".xodr")) {
         s.append(".xodr");
     }
-    auto loc = s.toStdString();
+    // Convert to short path for Windows Unicode paths (e.g. OneDrive/Chinese)
+    QString safePath = PathHelper::toTiffPath(s);
+    auto loc = safePath.toStdString();
     LM::ChangeTracker::Instance()->Save(loc);
     loadedFileName = loc;
     setProperty("lastRoadFile", s);
+    spdlog::info("saveToPath: saved road file to: {} (safe: {})", s.toStdString(), safePath.toStdString());
 }
 
 void MainWindow::loadFromFile()
@@ -201,7 +205,10 @@ void MainWindow::loadFromPath(const QString& path)
 {
     QString s = path;
     if (s.isEmpty()) return;
-    if (!QFile::exists(s)) return;
+    if (!QFile::exists(s)) {
+        spdlog::warn("loadFromPath: file does not exist: {}", s.toStdString());
+        return;
+    }
 
     // Check file is not empty
     QFileInfo fi(s);
@@ -210,9 +217,15 @@ void MainWindow::loadFromPath(const QString& path)
         return;
     }
 
+    // Convert to short path for Windows Unicode paths
+    QString safePath = PathHelper::toTiffPath(s);
+    auto safeLoc = safePath.toStdString();
+
     reset();
-    loadedFileName = s.toStdString();
+    loadedFileName = safeLoc;
     setProperty("lastRoadFile", s);
+
+    spdlog::info("loadFromPath: loading road file: {} (safe: {})", s.toStdString(), safePath.toStdString());
 
     bool supported = LM::ChangeTracker::Instance()->Load(loadedFileName);
     if (!supported)

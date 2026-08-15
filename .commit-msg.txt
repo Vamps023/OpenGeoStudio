@@ -1,20 +1,21 @@
-Fix Copernicus DEM download URL (404 error)
+Fix road .xodr not saving/loading with Unicode project paths
 
-Three bugs in the Copernicus DEM GLO-30 URL:
+The road file was not being saved to the project folder because
+LaneMaker's saveToPath/loadFromPath used QString::toStdString()
+which produces garbage for Unicode paths on Windows (e.g.
+OneDrive/文档/...).
 
-1. Wrong corner: tiles are named by SOUTHWEST (lower-left) corner,
-   not north/east. Was using tile.bounds.north/east, now uses
-   floor(tile.bounds.south/west).
+Fix: use PathHelper::toTiffPath() to convert Unicode paths to
+Windows 8.3 short paths before converting to std::string for
+ChangeTracker::Save/Load.
 
-2. Wrong path: S3 key includes a subdirectory with the same name
-   as the file. Was: /data/{name}.tif
-   Now: {name}/{name}.tif
+Also added:
+  - Logging in saveToPath/loadFromPath (spdlog)
+  - Verification in saveProjectState: checks if road.xodr was
+    actually created after saveToPath, logs warning if not
+  - Logging in loadProjectState via qDebug
+  - Better error messages in loadFromPath
 
-3. Missing N/S, E/W handling: negative coordinates (southern/western
-   hemisphere) now get S/W prefix instead of negative numbers.
-
-Example (Mumbai area, tile covering 18-19N, 72-73E):
-  Before: .../data/Copernicus_DSM_COG_10_N19_00_E073_00_DEM.tif → 404
-  After:  .../Copernicus_DSM_COG_10_N18_00_E072_00_DEM/Copernicus_DSM_COG_10_N18_00_E072_00_DEM.tif → 200 OK
-
-Verified with curl: HTTP 200 OK, file exists on S3.
+Files changed:
+  - main_window.cpp: saveToPath and loadFromPath use PathHelper
+  - main.cpp: saveProjectState verifies road file creation
