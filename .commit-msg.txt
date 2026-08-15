@@ -1,25 +1,18 @@
-Fix road not loading on project open — std::ifstream Unicode issue
+Fix road changes not saving — pugixml save_file silently fails on Unicode
 
-The road file was being saved correctly (33KB, verified) but
-not loading when reopening the project.
+The "try direct save first, fallback to temp" approach was flawed:
+pugixml's save_file() silently fails on Unicode paths (returns false
+but we didn't check it). The old file from a previous temp-copy save
+still existed, so QFile::exists() returned true and we logged "saved
+directly" — but the file was never actually updated. The file size
+stayed at 33658 bytes across multiple saves with different road data.
 
-Root cause: OpenDriveMap::Load() uses std::ifstream to read the
-.xodr file. std::ifstream on Windows cannot handle Unicode paths
-(like OneDrive/文档/...). The file was opened as empty, pugixml
-printed "Err{} No document element found", and no roads were
-loaded into the engine.
+Fix: always use the temp file approach for saving, same as loading:
+  1. Save to temp file in QDir::tempPath() (always ASCII-safe)
+  2. Remove old file at destination
+  3. QFile::copy from temp to final destination (Qt handles Unicode)
+  4. Delete temp file
 
-The previous "try direct first, fallback to temp" approach didn't
-work because Load() returned true even when parsing failed (it
-only checks if roads were added, not if XML parsing succeeded).
-
-Fix: always copy the .xodr to a temp file in QDir::tempPath()
-(ASCII-safe) using QFile::copy (Qt handles Unicode), then load
-from the temp file. Also read the file content via QFile for
-ActionManager recording instead of std::ifstream.
-
-Log output now shows:
-  loadFromPath: loaded successfully from: .../road.xodr
-Instead of the misleading:
-  Err{} No document element found
-  loadFromPath: loaded directly from: ...
+This is simpler and more reliable than trying to detect whether the
+path is ASCII or not. The log now shows the actual file size after
+save, so we can verify the content changed.

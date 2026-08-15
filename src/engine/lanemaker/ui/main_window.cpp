@@ -179,36 +179,32 @@ void MainWindow::saveToPath(const QString& path)
     // Ensure the parent directory exists (Qt handles Unicode paths)
     QDir().mkpath(QFileInfo(s).absolutePath());
 
-    // Try saving directly first (works for ASCII paths)
-    auto loc = s.toStdString();
-    LM::ChangeTracker::Instance()->Save(loc);
+    // pugixml's save_file uses fopen() which can't handle Unicode paths
+    // on Windows. Always save to a temp file first (ASCII-safe location),
+    // then copy to the final destination using QFile::copy (Qt handles
+    // Unicode paths natively). This is more reliable than trying to detect
+    // whether the path is ASCII or not.
+    QString tempFile = QDir::tempPath() + "/road_save_temp.xodr";
+    if (QFile::exists(tempFile)) QFile::remove(tempFile);
 
-    // Check if the file was created
-    if (!QFile::exists(s)) {
-        // Direct save failed — likely a Unicode path issue.
-        // Save to a temp file in an ASCII-safe location, then copy.
-        QString tempDir = QDir::tempPath();
-        QString tempFile = tempDir + "/road_temp.xodr";
-        auto tempLoc = tempFile.toStdString();
-        LM::ChangeTracker::Instance()->Save(tempLoc);
+    auto tempLoc = tempFile.toStdString();
+    LM::ChangeTracker::Instance()->Save(tempLoc);
 
-        if (QFile::exists(tempFile)) {
-            // Copy from temp to final destination (Qt handles Unicode)
-            if (QFile::exists(s)) QFile::remove(s);
-            if (QFile::copy(tempFile, s)) {
-                QFile::remove(tempFile);
-                spdlog::info("saveToPath: saved via temp copy to: {}", s.toStdString());
-            } else {
-                spdlog::error("saveToPath: failed to copy temp file to: {}", s.toStdString());
-            }
-        } else {
-            spdlog::error("saveToPath: failed to save temp file: {}", tempFile.toStdString());
-        }
-    } else {
-        spdlog::info("saveToPath: saved directly to: {}", s.toStdString());
+    if (!QFile::exists(tempFile)) {
+        spdlog::error("saveToPath: failed to save temp file: {}", tempFile.toStdString());
+        return;
     }
 
-    loadedFileName = loc;
+    // Copy from temp to final destination (Qt handles Unicode)
+    if (QFile::exists(s)) QFile::remove(s);
+    if (QFile::copy(tempFile, s)) {
+        spdlog::info("saveToPath: saved to: {} (size: {})", s.toStdString(), QFileInfo(s).size());
+    } else {
+        spdlog::error("saveToPath: failed to copy to final destination: {}", s.toStdString());
+    }
+    QFile::remove(tempFile);
+
+    loadedFileName = s.toStdString();
     setProperty("lastRoadFile", s);
 }
 
