@@ -1,18 +1,21 @@
-Fix road changes not saving — pugixml save_file silently fails on Unicode
+Update 3D Studio to use O3DE SDK project and pre-built editor
 
-The "try direct save first, fallback to temp" approach was flawed:
-pugixml's save_file() silently fails on Unicode paths (returns false
-but we didn't check it). The old file from a previous temp-copy save
-still existed, so QFile::exists() returned true and we logged "saved
-directly" — but the file was never actually updated. The file size
-stayed at 33658 bytes across multiple saves with different road data.
+O3DE project at D:/git/OpenGeoStudio3D-SDK is now built against
+the pre-built SDK at C:/O3DE/26.05 (not from source).
 
-Fix: always use the temp file approach for saving, same as loading:
-  1. Save to temp file in QDir::tempPath() (always ASCII-safe)
-  2. Remove old file at destination
-  3. QFile::copy from temp to final destination (Qt handles Unicode)
-  4. Delete temp file
+Built successfully:
+  - OpenGeoStudio3D.GameLauncher.exe
+  - OpenGeoStudio3D.UnifiedLauncher.exe
+  - OpenGeoStudio3D.ServerLauncher.exe
+  - OpenGeoStudio3D.HeadlessServerLauncher.exe
 
-This is simpler and more reliable than trying to detect whether the
-path is ASCII or not. The log now shows the actual file size after
-save, so we can verify the content changed.
+Studio3DWidget updated:
+  - Editor detection: checks C:/O3DE/26.05/bin/Windows/profile/Default/Editor.exe
+    (pre-built SDK) first, then falls back to from-source builds
+  - Launcher detection: checks D:/git/OpenGeoStudio3D-SDK/build/ first
+  - Default project path: D:/git/OpenGeoStudio3D-SDK (was OpenGeoStudio3D)
+
+Note: VS 2026 (v18) is installed but its STL is incompatible with
+the VS 2022 compiler that CMake's cache uses. O3DE project builds
+with VS 2022 BuildTools (MSVC 14.44). VS 2026 can be used after
+reconfiguring CMake from scratch.

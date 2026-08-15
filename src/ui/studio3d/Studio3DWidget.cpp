@@ -165,7 +165,7 @@ void Studio3DWidget::setupUI() {
 
 void Studio3DWidget::loadSettings() {
     QSettings settings;
-    QString projectPath = settings.value(kKeyProjectPath, "D:/git/OpenGeoStudio3D").toString();
+    QString projectPath = settings.value(kKeyProjectPath, "D:/git/OpenGeoStudio3D-SDK").toString();
     QString editorPath = settings.value(kKeyEditorPath, "").toString();
     m_projectPathEdit->setText(projectPath);
     m_editorPathEdit->setText(editorPath);
@@ -196,10 +196,12 @@ void Studio3DWidget::saveSettings() {
 }
 
 QString Studio3DWidget::findO3DEEditor() const {
-    // Look for Editor.exe in common build locations
+    // Look for Editor.exe — the pre-built SDK has it, project builds don't
     QStringList candidates = {
+        // Pre-built SDK install
+        "C:/O3DE/26.05/bin/Windows/profile/Default/Editor.exe",
+        // From-source builds
         "D:/git/OpenGeoStudio3D/build/windows/bin/profile/Editor.exe",
-        "D:/git/OpenGeoStudio3D/build/windows/bin/Editor.exe",
         "D:/git/o3de/build/windows/bin/profile/Editor.exe",
     };
     for (const auto& path : candidates) {
@@ -211,8 +213,11 @@ QString Studio3DWidget::findO3DEEditor() const {
 QString Studio3DWidget::findO3DELauncher() const {
     QString projectPath = m_projectPathEdit->text();
     QStringList candidates = {
+        // SDK project build
         projectPath + "/build/windows/bin/profile/OpenGeoStudio3D.GameLauncher.exe",
-        projectPath + "/build/windows/bin/profile/ProjectName.GameLauncher.exe",
+        projectPath + "/build/windows/bin/profile/OpenGeoStudio3D.UnifiedLauncher.exe",
+        // From-source project build
+        "D:/git/OpenGeoStudio3D/build/windows/bin/profile/OpenGeoStudio3D.GameLauncher.exe",
     };
     for (const auto& path : candidates) {
         if (QFileInfo::exists(path)) return path;
