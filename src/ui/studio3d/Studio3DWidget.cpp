@@ -165,8 +165,17 @@ void Studio3DWidget::setupUI() {
 
 void Studio3DWidget::loadSettings() {
     QSettings settings;
-    QString projectPath = settings.value(kKeyProjectPath, "D:/git/OpenGeoStudio3D-SDK").toString();
+    QString projectPath = settings.value(kKeyProjectPath, "").toString();
     QString editorPath = settings.value(kKeyEditorPath, "").toString();
+
+    // Auto-detect project path if not set or invalid
+    if (projectPath.isEmpty() || !QFileInfo::exists(projectPath + "/project.json")) {
+        QString detected = findO3DEProject();
+        if (!detected.isEmpty()) {
+            projectPath = detected;
+            settings.setValue(kKeyProjectPath, projectPath);
+        }
+    }
     m_projectPathEdit->setText(projectPath);
     m_editorPathEdit->setText(editorPath);
 
@@ -206,6 +215,18 @@ QString Studio3DWidget::findO3DEEditor() const {
     };
     for (const auto& path : candidates) {
         if (QFileInfo::exists(path)) return path;
+    }
+    return {};
+}
+
+QString Studio3DWidget::findO3DEProject() const {
+    // Look for project.json in common locations
+    QStringList candidates = {
+        "D:/git/OpenGeoStudio3D-SDK",
+        "D:/git/OpenGeoStudio3D",
+    };
+    for (const auto& path : candidates) {
+        if (QFileInfo::exists(path + "/project.json")) return path;
     }
     return {};
 }

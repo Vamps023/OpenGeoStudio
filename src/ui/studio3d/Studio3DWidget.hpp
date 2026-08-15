@@ -54,6 +54,7 @@ private:
     void saveSettings();
     void appendLog(const QString& msg);
     QString findO3DEEditor() const;
+    QString findO3DEProject() const;
     QString findO3DELauncher() const;
     bool exportTerrainHeightmap(const QString& outputPath);
     bool exportRoadMesh(const QString& outputPath);

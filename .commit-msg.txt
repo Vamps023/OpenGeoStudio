@@ -1,12 +1,17 @@
-Fix O3DE Editor launch — add --project-path argument
+Fix O3DE project path — auto-detect valid project on startup
 
-O3DE Editor requires --project-path <path> argument to know which
-project to open. Previously the path was passed as a bare argument
-which the editor didn't recognize, causing it to exit immediately
-with code 2.
+The registry had the old broken project path D:/git/OpenGeoStudio3D
+saved from a previous session. Even after updating the registry,
+the running app would overwrite it on exit with the stale value.
 
-Fix:
-  Before: Editor.exe D:/git/OpenGeoStudio3D-SDK
-  After:  Editor.exe --project-path D:/git/OpenGeoStudio3D-SDK
+Fix: add findO3DEProject() that auto-detects a valid O3DE project
+by checking for project.json. On startup, if the saved path is
+empty or invalid (project.json doesn't exist), it auto-detects
+and saves the correct path.
 
-Also updated placeholder text to show the correct SDK project path.
+Detection order:
+  1. D:/git/OpenGeoStudio3D-SDK (SDK project, correct)
+  2. D:/git/OpenGeoStudio3D (from-source, may not exist)
+
+Also cleared the stale registry setting while the app was not
+running, so it starts fresh with the correct SDK project path.
