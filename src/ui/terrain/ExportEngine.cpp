@@ -18,6 +18,7 @@
 #include <QUrlQuery>
 #include <QAuthenticator>
 #include <cmath>
+#include <utility>
 #include <limits>
 #include <QRegularExpression>
 
@@ -521,46 +522,161 @@ void ExportEngine::writeGeoTiff(const QString& path, const QImage& heightmap,
 // ============================================================
 // QGIS-style DEM output — uses RasterWriter for proper GeoTIFF
 // ============================================================
+
+// Lat/Lon to Web Mercator (EPSG:3857) conversion
+static void latLonToWebMercator(double lat, double lon, double& x, double& y) {
+    const double R = 6378137.0;  // WGS84 semi-major
+    x = R * lon * M_PI / 180.0;
+    y = R * log(tan(M_PI / 4.0 + lat * M_PI / 360.0));
+}
+
+// Lat/Lon to UTM conversion (returns zone + easting/northing)
+static void latLonToUtm(double lat, double lon, int& zone, bool& north,
+                        double& easting, double& northing) {
+    zone = static_cast<int>((lon + 180.0) / 6.0) + 1;
+    north = lat >= 0.0;
+
+    const double a = 6378137.0;
+    const double f = 1.0 / 298.257223563;
+    const double k0 = 0.9996;
+    const double e2 = f * (2.0 - f);
+    const double e2sq = e2 * e2;
+
+    double latRad = lat * M_PI / 180.0;
+    double lonRad = lon * M_PI / 180.0;
+    double lonOrigin = (zone - 1) * 6.0 - 180.0 + 3.0;
+    double lonOriginRad = lonOrigin * M_PI / 180.0;
+
+    double N = a / sqrt(1.0 - e2 * sin(latRad) * sin(latRad));
+    double T = tan(latRad) * tan(latRad);
+    double C = e2sq * cos(latRad) * cos(latRad) / (1.0 - e2);
+    double A = cos(latRad) * (lonRad - lonOriginRad);
+
+    double M = a * ((1.0 - e2/4.0 - 3.0*e2sq/64.0) * latRad
+              - (3.0*e2/8.0 + 3.0*e2sq/32.0) * sin(2.0*latRad)
+              + (15.0*e2sq/256.0) * sin(4.0*latRad));
+
+    easting = k0 * N * (A + (1.0 - T + C) * A*A*A / 6.0) + 500000.0;
+    northing = k0 * (M + N * tan(latRad) * (A*A / 2.0
+              + (5.0 - T + 9.0*C) * A*A*A*A / 24.0));
+    if (!north) northing += 10000000.0;
+}
+
 terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile) const {
     terrain::RasterExtent ext;
-    ext.west = tile.bounds.west;
-    ext.east = tile.bounds.east;
-    ext.north = tile.bounds.north;
-    ext.south = tile.bounds.south;
 
-    // Map CRS setting to GeoCrsMode
+    // Source bounds are always in WGS84 lat/lon
+    double west = tile.bounds.west;
+    double east = tile.bounds.east;
+    double north = tile.bounds.north;
+    double south = tile.bounds.south;
+
     auto crs = m_store->exportSettings().crsSource;
     switch (crs) {
     case terrain::CrsSource::EPSG_4326:
+        // Keep lat/lon as-is
         ext.crsMode = terrain::GeoCrsMode::WGS84;
+        ext.west = west;
+        ext.east = east;
+        ext.north = north;
+        ext.south = south;
         break;
+
     case terrain::CrsSource::EPSG_3857:
+    {
+        // Convert lat/lon to Web Mercator meters
+        double mx_w, my_n, mx_e, my_s;
+        latLonToWebMercator(north, west, mx_w, my_n);
+        latLonToWebMercator(south, east, mx_e, my_s);
         ext.crsMode = terrain::GeoCrsMode::WebMercator;
+        ext.west = mx_w;
+        ext.east = mx_e;
+        ext.north = my_n;
+        ext.south = my_s;
         break;
-    case terrain::CrsSource::EPSG_32633:
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = 32633;
-        break;
-    case terrain::CrsSource::EPSG_32634:
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = 32634;
-        break;
-    case terrain::CrsSource::EPSG_32635:
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = 32635;
-        break;
-    case terrain::CrsSource::EPSG_25832:
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = 25832;
-        break;
-    case terrain::CrsSource::EPSG_25833:
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = 25833;
-        break;
+    }
+
     case terrain::CrsSource::Auto_UTM:
+    {
+        // Compute UTM zone from centroid
+        double clat = (north + south) / 2.0;
+        double clon = (west + east) / 2.0;
+        int zone;
+        bool isNorth;
+        double e_w, n_n, e_e, n_s;
+        latLonToUtm(north, west, zone, isNorth, e_w, n_n);
+        latLonToUtm(south, east, zone, isNorth, e_e, n_s);
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = isNorth ? (32600 + zone) : (32700 + zone);
+        ext.west = e_w;
+        ext.east = e_e;
+        ext.north = n_n;
+        ext.south = n_s;
+        break;
+    }
+
+    case terrain::CrsSource::EPSG_32633:
+    case terrain::CrsSource::EPSG_32634:
+    case terrain::CrsSource::EPSG_32635:
+    case terrain::CrsSource::EPSG_25832:
+    case terrain::CrsSource::EPSG_25833:
+    {
+        // Fixed UTM zone — convert lat/lon to UTM meters
+        int targetZone;
+        bool isNorth;
+        if (crs == terrain::CrsSource::EPSG_32633) { targetZone = 33; isNorth = true; ext.utmEpsg = 32633; }
+        else if (crs == terrain::CrsSource::EPSG_32634) { targetZone = 34; isNorth = true; ext.utmEpsg = 32634; }
+        else if (crs == terrain::CrsSource::EPSG_32635) { targetZone = 35; isNorth = true; ext.utmEpsg = 32635; }
+        else if (crs == terrain::CrsSource::EPSG_25832) { targetZone = 32; isNorth = true; ext.utmEpsg = 25832; }
+        else { targetZone = 33; isNorth = true; ext.utmEpsg = 25833; }
+
+        // Use the target zone for conversion (not auto-computed)
+        // We need to compute UTM with the specific zone
+        double clon = (west + east) / 2.0;
+        (void)clon;  // suppress unused warning
+
+        // Convert all 4 corners using the target zone
+        auto convertPoint = [&](double lat, double lon) -> std::pair<double, double> {
+            const double a = 6378137.0;
+            const double f = 1.0 / 298.257223563;
+            const double k0 = 0.9996;
+            const double e2 = f * (2.0 - f);
+            const double e2sq = e2 * e2;
+            double latRad = lat * M_PI / 180.0;
+            double lonRad = lon * M_PI / 180.0;
+            double lonOrigin = (targetZone - 1) * 6.0 - 180.0 + 3.0;
+            double lonOriginRad = lonOrigin * M_PI / 180.0;
+            double N = a / sqrt(1.0 - e2 * sin(latRad) * sin(latRad));
+            double T = tan(latRad) * tan(latRad);
+            double C = e2sq * cos(latRad) * cos(latRad) / (1.0 - e2);
+            double A = cos(latRad) * (lonRad - lonOriginRad);
+            double M = a * ((1.0 - e2/4.0 - 3.0*e2sq/64.0) * latRad
+                      - (3.0*e2/8.0 + 3.0*e2sq/32.0) * sin(2.0*latRad)
+                      + (15.0*e2sq/256.0) * sin(4.0*latRad));
+            double easting = k0 * N * (A + (1.0 - T + C) * A*A*A / 6.0) + 500000.0;
+            double northing = k0 * (M + N * tan(latRad) * (A*A / 2.0
+                      + (5.0 - T + 9.0*C) * A*A*A*A / 24.0));
+            if (!isNorth) northing += 10000000.0;
+            return {easting, northing};
+        };
+
+        auto [e_w, n_n] = convertPoint(north, west);
+        auto [e_e, n_s] = convertPoint(south, east);
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.west = e_w;
+        ext.east = e_e;
+        ext.north = n_n;
+        ext.south = n_s;
+        break;
+    }
+
     default:
-        // Auto: use WGS84 for now (could calculate UTM zone from centroid)
+        // Fallback: WGS84
         ext.crsMode = terrain::GeoCrsMode::WGS84;
+        ext.west = west;
+        ext.east = east;
+        ext.north = north;
+        ext.south = south;
         break;
     }
 

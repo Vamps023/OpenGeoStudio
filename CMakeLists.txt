@@ -464,6 +464,24 @@ if(BUILD_TESTS)
     if(MSVC)
         target_compile_options(test_gpxz_download PRIVATE /EHa /bigobj)
     endif()
+
+    # ─── GeoTIFF writer test ──────────────────────────────────
+    add_executable(test_geotiff_writer
+        src/ui/terrain/test_geotiff_writer.cpp
+        src/ui/terrain/RasterWriter.cpp
+    )
+    set_target_properties(test_geotiff_writer PROPERTIES AUTOMOC ON)
+    target_include_directories(test_geotiff_writer PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
+    )
+    target_link_libraries(test_geotiff_writer PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        TIFF::TIFF
+    )
+    if(MSVC)
+        target_compile_options(test_geotiff_writer PRIVATE /EHa /bigobj)
+    endif()
 endif()
 
 # ─── Print Configuration Summary ─────────────────────────────
