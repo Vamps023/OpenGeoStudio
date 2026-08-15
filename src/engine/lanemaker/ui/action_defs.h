@@ -14,10 +14,7 @@ namespace LM
         Mode_CreateLanes,
         Mode_Destroy,
         Mode_Modify,
-        Mode_StraightLine,
-        Mode_CircleArc,
-        Mode_Polyline,
-        Mode_Bezier
+        Mode_StraightLine
     };
 
     enum ActionType

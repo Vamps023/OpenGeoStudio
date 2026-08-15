@@ -623,18 +623,6 @@ void RoadCreationSession::UpdateFlexGeometry()
 			double hdg = std::atan2(snappedPos[1] - localStartPos[1], snappedPos[0] - localStartPos[0]);
 			flexGeo = std::make_unique<odr::Line>(0, localStartPos[0], localStartPos[1], hdg, length);
 		}
-		else if (forceArc)
-		{
-			// Circle Arc — fit an arc from start position/direction to end point
-			flexGeo = LM::FitArcOrLine(localStartPos, localStartDir, snappedPos);
-			// FitArcOrLine returns Line if collinear, Arc otherwise — that's correct
-		}
-		else if (bezierMode)
-		{
-			// Bezier — use ParamPoly3 (cubic bezier) to connect start and end
-			flexGeo = LM::FitParamPoly(localStartPos, localStartDir, snappedPos,
-				odr::sub(snappedPos, localStartPos));
-		}
 		else if (joinAtEnd.expired())
 		{
 			flexGeo = LM::FitArcOrLine(localStartPos, localStartDir, snappedPos);

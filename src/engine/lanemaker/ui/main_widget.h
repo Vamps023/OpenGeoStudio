@@ -85,9 +85,6 @@ private slots:
     void gotoModifyMode(bool);
     void gotoDragMode(bool c=true);
     void gotoStraightLineMode(bool);
-    void gotoCircleArcMode(bool);
-    void gotoPolylineMode(bool);
-    void gotoBezierMode(bool);
     void toggleViewMode(bool checked);
     void onMapMoved();
     void onProfileChanged(int index);
@@ -114,9 +111,6 @@ protected:
     QButtonGroup* pointerModeGroup;
     QToolButton* createModeButton, * createLaneModeButton, * destroyModeButton, * modifyModeButton, * dragModeButton;
     QToolButton* straightLineButton;  // Straight line tool
-    QToolButton* arcButton;           // Circle arc tool
-    QToolButton* polylineButton;      // Polyline tool
-    QToolButton* bezierButton;        // Bezier curve tool
     QToolButton* viewModeButton;   // 2D/3D toggle
     QToolButton* loadMapButton;    // Load satellite map background
     QToolButton* zoomInButton;     // Zoom in

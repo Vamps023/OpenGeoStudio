@@ -174,18 +174,6 @@ void ReplayWindow::FillHistoryTable()
 				desc += " straight";
 				icon = QIcon(QPixmap(":/icons/road_mode.png"));
 				break;
-			case LM::Mode_CircleArc:
-				desc += " arc";
-				icon = QIcon(QPixmap(":/icons/road_mode.png"));
-				break;
-			case LM::Mode_Polyline:
-				desc += " polyline";
-				icon = QIcon(QPixmap(":/icons/road_mode.png"));
-				break;
-			case LM::Mode_Bezier:
-				desc += " bezier";
-				icon = QIcon(QPixmap(":/icons/road_mode.png"));
-				break;
 			case LM::Mode_CreateLanes:
 				desc += " lane";
 				icon = QIcon(QPixmap(":/icons/lane_mode.png"));
