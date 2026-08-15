@@ -1,33 +1,28 @@
-Add PBR lighting and sky gradient to Road Studio 3D viewport
+Add 3D Studio workspace with O3DE integration
 
-Replaces the flat blue 3D viewport with Unreal/Blender-style PBR
-lighting, a sky gradient background, and a ground reference grid.
+Adds a new "3D Studio" workspace to OpenGeoStudio that integrates
+with O3DE (Open 3D Engine) for professional level design.
 
-Lighting:
-- Per-vertex normal computation for all road meshes (AddQuads,
-  AddPoly, AddColumn)
-- Vertex struct extended with nx, ny, nz normal fields
-- Directional sun light (warm 1.0, 0.95, 0.85) with diffuse shading
-- Blinn-Phong specular highlights (specPower=32)
-- Hemispheric sky ambient (sky from top, ground bounce from bottom)
-- Fresnel-like rim lighting for edge definition
-- Reinhard tone mapping + gamma correction
-- 2D top-down mode uses flat colors (no lighting)
+New workspace:
+  Home | Terrain Studio | Road Studio | Train Studio | 3D Studio
 
-Background:
-- Sky gradient shader: zenith blue (0.25, 0.45, 0.75) to warm
-  horizon (0.65, 0.70, 0.78) to earth ground (0.35, 0.32, 0.28)
-- Replaces flat blue glClearColor(0.1, 0.15, 0.3)
+3D Studio widget (Studio3DWidget):
+  - Launch O3DE Editor with the OpenGeoStudio3D project
+  - Launch Game Launcher for testing
+  - Export terrain heightmaps from Terrain Studio to O3DE assets
+  - Export road network meshes from Road Studio to O3DE assets
+  - Real-time O3DE process status and output log
+  - Configurable O3DE project and editor paths
+  - Auto-detect Editor.exe in common build locations
+  - Settings persisted via QSettings
 
-Ground grid:
-- 10m grid cells extending ±200m around camera
-- Semi-transparent (alpha=0.3) for subtle spatial reference
-- Follows camera position dynamically
+O3DE setup (separate repo at D:/git/o3de):
+  - O3DE 2.7.0 cloned and registered
+  - OpenGeoStudio3D project created from DefaultProject template
+  - CMake configured with PhysX5, Atom, LandscapeCanvas, etc.
+  - Build in progress (MSBuild /m parallel)
 
-Shader changes:
-- simple.vert: PBR lighting in vertex shader, passes normals
-- simple.frag: unchanged (receives interpolated lit color)
-- New sky gradient shader (inline in map_view_gl.cpp)
-- New ground grid shader (inline in map_view_gl.cpp)
-
-Build: SUCCESS (main app)
+Architecture:
+  OpenGeoStudio (Qt) → 3D Studio workspace → launches O3DE Editor
+                                            → exports terrain/road data
+  O3DE runs as separate process (cannot be embedded in Qt widget)

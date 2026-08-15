@@ -290,6 +290,8 @@ set(APP_SOURCES
     src/ui/terrain/LayerStack.cpp
     src/ui/terrain/SearchBar.cpp
     src/ui/terrain/TerrainStudioWidget.cpp
+    # UI - 3D Studio (O3DE integration)
+    src/ui/studio3d/Studio3DWidget.cpp
 )
 
 if(QMapLibre_FOUND)

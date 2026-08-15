@@ -48,6 +48,7 @@
 #include "ui/roadstudio/RoadStudioWidget.hpp"
 #include "ui/trainstudio/TrainStudioWidget.hpp"
 #include "ui/terrain/TerrainStudioWidget.hpp"
+#include "ui/studio3d/Studio3DWidget.hpp"
 #include "main_window.h"
 
 // Phase 2c: MapLibre Native Qt map viewport
@@ -252,6 +253,7 @@ private:
     RoadStudioWidget* m_roadStudioWidget = nullptr;
     TrainStudioWidget* m_trainStudioWidget = nullptr;
     TerrainStudioWidget* m_terrainStudioWidget = nullptr;
+    Studio3DWidget* m_studio3DWidget = nullptr;
     QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
@@ -331,6 +333,7 @@ private:
                 else if (cmd == "ws.terrain") m_ctx->workspaces().activate("terrain");
                 else if (cmd == "ws.road") m_ctx->workspaces().activate("road-studio");
                 else if (cmd == "ws.train") m_ctx->workspaces().activate("train-studio");
+                else if (cmd == "ws.3d") m_ctx->workspaces().activate("3d-studio");
                 else if (cmd == "settings.open") openSettings();
                 else if (cmd == "help.about") {
                     const QString version = QString::fromLatin1(road_engine::versionString());
@@ -548,6 +551,10 @@ private:
         }
 #endif
 
+        // Page 4: 3D Studio (O3DE level design integration)
+        m_studio3DWidget = new Studio3DWidget(m_ctx);
+        m_centerStack->addWidget(m_studio3DWidget);
+
         setCentralWidget(m_centerStack);
         m_centerStack->setCurrentIndex(0); // Home
     }
@@ -621,6 +628,11 @@ private slots:
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
             // Train Studio: no docks (matching reference)
+            m_leftDock->setVisible(false);
+            m_rightDock->setVisible(false);
+            showRoadStudioMenus(false);
+        } else if (ws.id == "3d-studio") {
+            m_centerStack->setCurrentIndex(4); // 3D Studio (O3DE)
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
             showRoadStudioMenus(false);

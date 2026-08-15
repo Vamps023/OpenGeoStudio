@@ -32,6 +32,12 @@ void WorkspaceManager::registerDefaults() {
         "train-studio", "Train Studio", "Railway design and simulation",
         "", {"train-studio"}, {"train-inspector"}, "train"
     });
+
+    // 3D Studio — O3DE level design integration
+    m_workspaces.push_back(Workspace{
+        "3d-studio", "3D Studio", "O3DE level design and scene building",
+        "", {"3d-studio"}, {"studio3d-export"}, "3d-studio"
+    });
 }
 
 const Workspace* WorkspaceManager::active() const {
