@@ -7,6 +7,8 @@
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QFrame>
+#include <QStandardPaths>
+#include <QDir>
 
 // ============================================================
 // Dark theme stylesheet (GitHub dark inspired, matching Electron)
@@ -64,8 +66,8 @@ static const char* kDarkTheme = R"(
     QLabel { color: #e6edf3; }
 )";
 
-ExportPanel::ExportPanel(TerrainStore* store, QWidget* parent)
-    : QWidget(parent), m_store(store) {
+ExportPanel::ExportPanel(TerrainStore* store, ApplicationContext* ctx, QWidget* parent)
+    : QWidget(parent), m_store(store), m_ctx(ctx) {
     m_engine = new ExportEngine(store, this);
     setupUi();
     applyDarkTheme();
@@ -503,15 +505,22 @@ void ExportPanel::onExportClicked() {
         return;
     }
 
-    const QString dir = QFileDialog::getExistingDirectory(
-        this, "Select Export Directory");
-    if (dir.isEmpty()) return;
+    // Export directly to the project's Terrain folder — no file dialog
+    QString dir;
+    if (m_ctx && m_ctx->projects().hasProject()) {
+        dir = m_ctx->projects().current().basePath + "/Terrain";
+        QDir().mkpath(dir);
+    } else {
+        // No project open — fall back to Documents/OpenGeoStudio/Exports
+        dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Exports";
+        QDir().mkpath(dir);
+    }
 
     m_exportBtn->setEnabled(false);
     m_exportBtn->setText("Exporting...");
     m_progressBar->setVisible(true);
     m_progressBar->setValue(0);
-    m_statusLabel->setText("Starting export...");
+    m_statusLabel->setText("Exporting to: " + dir);
 
     m_engine->exportToDirectory(dir);
 }

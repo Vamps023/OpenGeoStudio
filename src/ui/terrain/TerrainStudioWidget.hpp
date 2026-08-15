@@ -76,7 +76,7 @@ public:
         rightSep->setStyleSheet("color: #30363d;");
         contentLayout->addWidget(rightSep);
 
-        m_exportPanel = new ExportPanel(m_store, this);
+        m_exportPanel = new ExportPanel(m_store, ctx, this);
         m_exportPanel->setMinimumWidth(340);
         m_exportPanel->setMaximumWidth(400);
         contentLayout->addWidget(m_exportPanel, 1);

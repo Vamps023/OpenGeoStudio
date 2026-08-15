@@ -10,6 +10,7 @@
 //
 
 #include "TerrainStore.hpp"
+#include "../../core/ApplicationContext.hpp"
 
 #include <QWidget>
 #include <QGroupBox>
@@ -31,7 +32,7 @@ class ExportPanel : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ExportPanel(TerrainStore* store, QWidget* parent = nullptr);
+    explicit ExportPanel(TerrainStore* store, ApplicationContext* ctx = nullptr, QWidget* parent = nullptr);
 
 private slots:
     void onExportClicked();
@@ -48,6 +49,7 @@ private:
 
     TerrainStore* m_store;
     ExportEngine* m_engine;
+    ApplicationContext* m_ctx;
 
     // Format settings
     QComboBox* m_heightmapFormatCombo = nullptr;
