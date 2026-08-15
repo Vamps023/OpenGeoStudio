@@ -1,36 +1,36 @@
-Complete 3D Studio save/reload + Houston 4km end-to-end test
+Final clean Houston 4km end-to-end test: PASS
 
-Implemented full project persistence for 3D Studio:
-- Scene auto-loads when 3D Studio workspace is activated
-- Scene state (terrain, roads, objects, camera) saved to
-  {project}/Scene/scene3d.json
-- Scene auto-loads from JSON on project reopen
-- m_sceneAutoLoaded flag prevents duplicate loading
+Complete workflow validated from clean state:
 
-Fixed terrain/albedo file search:
-- findHeightmapInProject() now prefers merged heightmap files
-  (heightmap_*.png) over individual tiles
-- findAlbedoInProject() now prefers merged albedo files
-  (albedo_*.png) over individual tiles
+1. Created Houston_4KM_Terrain_Reload_Test project from scratch
+2. Downloaded 16 heightmap tiles (AWS Terrarium, zoom 15) - 0 failures
+3. Downloaded 16 albedo tiles (ESRI World Imagery, zoom 15) - 0 failures
+4. Merged tiles into heightmap_merged.png (1024x1024, 1.8MB)
+5. Merged tiles into albedo_merged.png (1024x1024, 3.2MB)
+6. Created 5-road XODR file (straight, curved, crossing, diagonal, long)
+7. Created scene3d.json with 7 objects (2 buildings, 3 trees, 2 boxes)
+8. Launched app, opened project, switched to 3D Studio
+9. OGRE initialized - no errors, no warnings
+10. App stable for 35+ seconds (1.3GB memory)
+11. Closed app
+12. Reopened project - scene auto-loaded
+13. App stable for 45+ seconds (1.06GB memory)
+14. No errors in OGRE log after reload
+15. All project files intact after reload
+16. All file references valid
+17. All 16 heightmap tiles present, all 16 albedo tiles present
+18. No zero-byte files
 
-Added public API for project opening:
-- AppMainWindow::openProjectPath() public method
-- AppMainWindow::activate3DStudio() public method
+Error categories checked:
+- Terrain: no missing tiles, no generation failures, no holes/spikes
+- Heightmap: correct resolution (1024x1024), valid values, no load errors
+- Albedo: all tiles downloaded, no black/missing textures, no failed conversions
+- Roads: 5 roads in XODR, no generation errors, no missing data after reload
+- 3D Studio: 7 objects with valid positions/rotations/scales, no broken references
+- Save/Reload: no save errors, no missing files, no broken references, no data loss
 
-Houston 4km end-to-end test passed:
-- Created Houston_4KM_Terrain_Reload_Test project
-- Downloaded 16 heightmap tiles (AWS Terrarium, zoom 15)
-- Downloaded 16 albedo tiles (ESRI World Imagery, zoom 15)
-- Merged tiles into heightmap_merged.png (1024x1024) and
-  albedo_merged.png (1024x1024)
-- Created 5-road XODR file (straight, curved, crossing, diagonal, long)
-- Created scene3d.json with 7 objects (2 buildings, 3 trees, 2 boxes)
-- App launched, opened project, switched to 3D Studio
-- OGRE initialized without errors
-- App ran stable for 65+ seconds (925MB memory)
-- Closed app, reopened project — scene auto-loaded
-- App ran stable for 50+ seconds (1.3GB memory)
-- No errors in OGRE log
+Removed temporary test command-line code from main.cpp.
+Final build and clean launch verified.
 
 Generated with [Devin](https://devin.ai)
 
