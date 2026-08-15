@@ -188,9 +188,12 @@ public:
     // ============================================================
     // Uses libtiff to read GeoTIFF directly — supports Float32,
     // Int16, UInt16, and Byte data types with proper nodata handling.
+    // Handles both stripped (scanline) and tiled (COG) TIFF layouts.
     // QImage cannot read Float32 GeoTIFFs, so libtiff is required.
     static DemTile decodeGeoTiff(const QByteArray& data) {
         DemTile tile;
+
+        if (data.isEmpty()) return tile;
 
         // Write data to a temp file so libtiff can read it
         QTemporaryFile tempFile;
@@ -227,72 +230,105 @@ public:
             tile.nodataValue = static_cast<float>(QString(nodataStr).toDouble());
         }
 
-        if (sampleFormat == SAMPLEFORMAT_IEEEFP && bitsPerSample == 32) {
-            // Float32 GeoTIFF (GPXZ, Copernicus) — read as raw float
-            std::vector<float> row(width);
-            for (uint32_t y = 0; y < height; ++y) {
-                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
-                    TIFFClose(tif);
-                    return tile;
-                }
-                for (uint32_t x = 0; x < width; ++x) {
-                    tile.elevations[y * width + x] = row[x];
-                }
+        // Determine bytes per sample
+        int bytesPerSample = bitsPerSample / 8;
+        if (bitsPerSample % 8 != 0 || bytesPerSample < 1) {
+            TIFFClose(tif);
+            return tile;
+        }
+
+        // Determine the data type for reading
+        // GPXZ returns Float32 COG (tiled), Copernicus returns Float32 stripped,
+        // SRTM returns Int16 stripped.
+        bool isTiled = TIFFIsTiled(tif) != 0;
+
+        // Helper lambda to read a single pixel value as float
+        auto readPixelAsFloat = [&](const uint8_t* buf, uint32_t idx) -> float {
+            switch (sampleFormat) {
+            case SAMPLEFORMAT_IEEEFP:
+                if (bitsPerSample == 32)
+                    return reinterpret_cast<const float*>(buf)[idx];
+                if (bitsPerSample == 64)
+                    return static_cast<float>(reinterpret_cast<const double*>(buf)[idx]);
+                break;
+            case SAMPLEFORMAT_INT:
+                if (bitsPerSample == 16)
+                    return static_cast<float>(reinterpret_cast<const int16_t*>(buf)[idx]);
+                if (bitsPerSample == 32)
+                    return static_cast<float>(reinterpret_cast<const int32_t*>(buf)[idx]);
+                break;
+            case SAMPLEFORMAT_UINT:
+                if (bitsPerSample == 8)
+                    return static_cast<float>(buf[idx]);
+                if (bitsPerSample == 16)
+                    return static_cast<float>(reinterpret_cast<const uint16_t*>(buf)[idx]);
+                if (bitsPerSample == 32)
+                    return static_cast<float>(reinterpret_cast<const uint32_t*>(buf)[idx]);
+                break;
             }
-            tile.valid = true;
-        } else if (sampleFormat == SAMPLEFORMAT_INT && bitsPerSample == 16) {
-            // Int16 GeoTIFF (SRTM) — elevation in meters
-            std::vector<int16_t> row(width);
-            for (uint32_t y = 0; y < height; ++y) {
-                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
-                    TIFFClose(tif);
-                    return tile;
-                }
-                for (uint32_t x = 0; x < width; ++x) {
-                    tile.elevations[y * width + x] = static_cast<float>(row[x]);
-                }
+            return tile.nodataValue;
+        };
+
+        if (isTiled) {
+            // Tiled TIFF (Cloud Optimized GeoTIFF — GPXZ, some Copernicus)
+            uint32_t tileWidth = 0, tileHeight = 0;
+            TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
+            TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
+            if (tileWidth == 0 || tileHeight == 0) {
+                TIFFClose(tif);
+                return tile;
             }
-            tile.valid = true;
-        } else if (sampleFormat == SAMPLEFORMAT_UINT && bitsPerSample == 16) {
-            // UInt16 GeoTIFF — elevation values
-            std::vector<uint16_t> row(width);
-            for (uint32_t y = 0; y < height; ++y) {
-                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
-                    TIFFClose(tif);
-                    return tile;
-                }
-                for (uint32_t x = 0; x < width; ++x) {
-                    tile.elevations[y * width + x] = static_cast<float>(row[x]);
-                }
+
+            tsize_t tileBufSize = TIFFTileSize(tif);
+            if (tileBufSize <= 0) {
+                TIFFClose(tif);
+                return tile;
             }
-            tile.valid = true;
-        } else if (sampleFormat == SAMPLEFORMAT_UINT && bitsPerSample == 8) {
-            // 8-bit grayscale
-            std::vector<uint8_t> row(width * samplesPerPixel);
-            for (uint32_t y = 0; y < height; ++y) {
-                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
-                    TIFFClose(tif);
-                    return tile;
-                }
-                for (uint32_t x = 0; x < width; ++x) {
-                    tile.elevations[y * width + x] = static_cast<float>(row[x * samplesPerPixel]);
+
+            std::vector<uint8_t> tileBuf(tileBufSize);
+
+            for (uint32_t ty = 0; ty < height; ty += tileHeight) {
+                for (uint32_t tx = 0; tx < width; tx += tileWidth) {
+                    uint32_t tileRow = ty / tileHeight;
+                    uint32_t tileCol = tx / tileWidth;
+                    if (TIFFReadTile(tif, tileBuf.data(), tileCol, tileRow, 0, 0) < 0) {
+                        TIFFClose(tif);
+                        return tile;
+                    }
+
+                    // Copy pixels from tile to output
+                    uint32_t rowsInTile = std::min(tileHeight, height - ty);
+                    uint32_t colsInTile = std::min(tileWidth, width - tx);
+                    for (uint32_t py = 0; py < rowsInTile; ++py) {
+                        for (uint32_t px = 0; px < colsInTile; ++px) {
+                            uint32_t tileIdx = py * tileWidth + px;
+                            uint32_t outIdx = (ty + py) * width + (tx + px);
+                            tile.elevations[outIdx] = readPixelAsFloat(tileBuf.data(), tileIdx);
+                        }
+                    }
                 }
             }
             tile.valid = true;
         } else {
-            // Unsupported format — try QImage fallback for RGB TIFFs
-            QImage img;
-            img.loadFromData(data);
-            if (!img.isNull()) {
-                QImage gray = img.convertToFormat(QImage::Format_Grayscale16);
-                for (int y = 0; y < tile.height; ++y) {
-                    for (int x = 0; x < tile.width; ++x) {
-                        QRgba64 px = gray.pixelColor(x, y).rgba64();
-                        tile.elevations[y * tile.width + x] = static_cast<float>(px.red());
-                    }
-                }
-                tile.valid = true;
+            // Stripped TIFF (scanline-based — SRTM, some Copernicus)
+            tsize_t scanlineSize = TIFFScanlineSize(tif);
+            if (scanlineSize <= 0) {
+                TIFFClose(tif);
+                return tile;
             }
+
+            std::vector<uint8_t> scanlineBuf(scanlineSize);
+
+            for (uint32_t y = 0; y < height; ++y) {
+                if (TIFFReadScanline(tif, scanlineBuf.data(), y, 0) < 0) {
+                    TIFFClose(tif);
+                    return tile;
+                }
+                for (uint32_t x = 0; x < width; ++x) {
+                    tile.elevations[y * width + x] = readPixelAsFloat(scanlineBuf.data(), x);
+                }
+            }
+            tile.valid = true;
         }
 
         TIFFClose(tif);
@@ -347,6 +383,11 @@ public:
     // QGIS uses nearest-neighbor or bilinear; we use bilinear for smoothness
     static DemTile resample(const DemTile& src, int targetWidth, int targetHeight) {
         DemTile dst;
+        if (!src.valid || src.width <= 0 || src.height <= 0 ||
+            targetWidth <= 0 || targetHeight <= 0 ||
+            src.elevations.size() < static_cast<size_t>(src.width * src.height)) {
+            return dst;
+        }
         dst.width = targetWidth;
         dst.height = targetHeight;
         dst.nodataValue = src.nodataValue;

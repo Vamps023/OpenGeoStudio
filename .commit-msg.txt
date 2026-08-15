@@ -1,29 +1,26 @@
-Add straight line tool and move LaneMaker menus to main app bar
+Fix GPXZ crash: handle tiled (Cloud Optimized) GeoTIFFs in DemDecoder
 
-Straight Line Tool:
-- New "─" button in Road Studio sidebar toolbar
-- Click two points to create a straight road — no direction handle,
-  no multi-click staging, no confirm step needed
-- Uses odr::Line geometry directly (same as LaneMaker's collinear case)
-- Auto-completes after the second click
-- Added Mode_StraightLine to EditMode enum
-- Added forceStraightLine and autoCompleteAfterFirstSegment flags
-  to RoadCreationSession
-- Replay system updated to handle the new mode
+Root cause: GPXZ returns Cloud Optimized GeoTIFF (COG) which uses
+TIFF tiles, not scanlines. The previous decodeGeoTiff used
+TIFFReadScanline exclusively, which crashes on tiled TIFFs because:
+  1. The scanline buffer size is wrong for tiled data
+  2. TIFFReadScanline returns -1 for tiled images
+  3. The buffer access causes a segfault
 
-Menu Bar Integration:
-- Removed LaneMaker's internal menu bar (File/Edit/Replay/Simulation)
-- Added Road Studio menus to the main app's menu bar instead
-- Menus appear when Road Studio workspace is activated
-- Menus are hidden when switching to other workspaces
-- All actions wired to LaneMaker's MainWindow methods:
-  - Road File: New, Open, Save, Preferences
-  - Edit: Undo, Redo, Verify Now
-  - Replay: Save, Debug, Watch
-  - Simulation: Toggle simulation, Paused
-- Exposed MainWindow methods as public for external menu integration
-- Simulation toggle disables Undo/Redo while active (same as before)
-- Pause action only enabled when simulation is active
+Fix: Rewrote decodeGeoTiff to handle both layouts:
+  - TIFFIsTiled() check determines the layout
+  - Tiled: uses TIFFReadTile with TIFFTileSize buffer, copies
+    pixels tile-by-tile into the output grid
+  - Stripped: uses TIFFReadScanline with TIFFScanlineSize buffer
+    (also fixes buffer size to match libtiff's expectation)
+
+Additional fixes:
+  - Unified data type handling via readPixelAsFloat lambda — supports
+    Float32, Float64, Int16, Int32, UInt8, UInt16, UInt32 in one path
+  - Uses TIFFScanlineSize/TIFFTileSize for correct buffer allocation
+    (was using width*sizeof(float) which is wrong for non-float data)
+  - Added safety guards in resample() for invalid/empty source tiles
+  - Added empty data check at start of decodeGeoTiff
 
 Generated with [Devin](https://devin.ai)
 
