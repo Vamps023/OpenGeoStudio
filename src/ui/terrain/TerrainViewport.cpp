@@ -5,6 +5,7 @@
 #include <QVBoxLayout>
 #include <QResizeEvent>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QPainterPath>
 #include <cmath>
 #include <limits>
@@ -241,4 +242,37 @@ void TerrainOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
         }
         update();
     }
+}
+
+void TerrainOverlayWidget::wheelEvent(QWheelEvent* event) {
+    if (!m_map || !m_map->map()) return;
+
+    // MapLibre zoom: scale by factor based on wheel delta
+    // QGIS/MapLibre pattern: zoom toward cursor position
+    const QPointF pos = event->position();
+    const double zoomFactor = (event->angleDelta().y() > 0) ? 1.15 : (1.0 / 1.15);
+    double currentZoom = m_map->map()->zoom();
+    double newZoom = currentZoom + std::log(zoomFactor) / std::log(2.0);
+
+    // Clamp zoom to reasonable range
+    newZoom = std::max(0.0, std::min(20.0, newZoom));
+
+    // Get geo coordinate under cursor before zoom
+    double lat, lon;
+    screenToGeo(pos, lat, lon);
+
+    // Apply zoom
+    m_map->map()->setZoom(newZoom);
+
+    // Adjust center so the cursor stays over the same geo point
+    // (zoom-toward-cursor like QGIS/MapLibre)
+    if (!std::isnan(lat) && !std::isnan(lon)) {
+        // After zoom, find where the cursor geo point is now,
+        // and shift the map to keep it under the cursor
+        QPointF newScreen = geoToScreen(lat, lon);
+        QPointF delta = pos - newScreen;
+        m_map->map()->moveBy(delta);
+    }
+
+    update();
 }

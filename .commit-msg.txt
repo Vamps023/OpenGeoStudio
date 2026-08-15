@@ -1,37 +1,26 @@
-Add QGIS-style RasterWriter and DemDecoder for proper GeoTIFF export
+Fix terrain zoom, search bar, and panel alignment
 
-Studied QGIS source (QgsRasterFileWriter, QgsGdalProvider, QgsGdalUtils)
-and adopted their patterns using libtiff directly (no GDAL dependency):
+Zoom (Issue 1):
+- Add wheelEvent to TerrainOverlayWidget — scroll to zoom toward cursor
+  (MapLibre/QGIS pattern: zoom + adjust center to keep cursor geo point)
+- Add zoom in/out buttons (➕/➖) to toolbar with keyboard shortcuts
+- Add "Fit" button to fit map to current selection bounds
+- Zoom clamped to 0-20 range
 
-RasterWriter (new):
-- Proper GeoKey directory construction for EPSG:4326, EPSG:3857, UTM zones
-  (same structure GDAL/libgeotiff builds internally)
-- GeoTransform calculation matching QGIS globalOutputParameters pattern:
-  [originX, pixelW, 0, originY, 0, -pixelH]
-- Compression support (Deflate, LZW, None) matching GDAL creation options
-- Nodata value support per band (GDALSetRasterNoDataValue pattern)
-- All data types: Float32, Int16, UInt16, Byte (QGIS DataType mapping)
-- RGB GeoTIFF (3-band 8-bit) for imagery
-- World file generation (.pgw/.tfw/.jgw) matching QGIS layout exporter
+Search bar (Issue 2):
+- Connect SearchBar::locationSelected signal to map — selecting a result
+  now flies the map to that location with type-specific zoom
+- Fix dropdown layout: was in QVBoxLayout which resized the search bar
+  when shown. Now uses Qt::ToolTip window flag as floating popup
+- Position dropdown below input using mapToGlobal
+- Add search icon emoji to placeholder text
+- Increase input height to 34px for visibility
+- Status bar shows "Flew to lat, lon (zoom N)" on location select
 
-DemDecoder (new):
-- Terrarium format decoding: (R*256 + G + B/256) - 32768
-- Mapbox Terrain-RGB decoding: -10000 + ((R*65536 + G*256 + B) * 0.1)
-- AAIGrid (ASCII ArcGrid) parsing for OpenTopography
-- GeoTIFF DEM loading for Copernicus/SRTM
-- Auto-detection from data magic bytes and source name
-- Bilinear resampling to target resolution
-- Elevation-to-QImage conversion for visualization
-
-ExportEngine (refactored):
-- DEM download now uses DemDecoder for proper elevation decoding
-- DEM output uses RasterWriter with format-specific data types:
-  Float32 (full precision), Int16 (meters), UInt16 (normalized),
-  PNG16+world file, R16 raw+world file
-- Imagery output uses RasterWriter: PNG+world file or RGB GeoTIFF
-- CRS mode mapping from CrsSource to GeoCrsMode with proper EPSG codes
-- Local file loading uses DemDecoder for proper GeoTIFF DEM reading
-- Compression option respected throughout export pipeline
+Panel alignment (Issue 3):
+- Increase ExportPanel max width from 320 to 400px
+- Add minimum width of 340px so form labels don't get truncated
+- This prevents combo boxes and form rows from being squished
 
 Generated with [Devin](https://devin.ai)
 

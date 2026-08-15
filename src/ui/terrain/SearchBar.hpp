@@ -43,33 +43,35 @@ public:
     explicit SearchBar(QWidget* parent = nullptr)
         : QWidget(parent)
     {
-        auto* layout = new QVBoxLayout(this);
+        // Use QHBoxLayout so the dropdown doesn't push the input around
+        auto* layout = new QHBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(2);
+        layout->setSpacing(0);
 
         m_input = new QLineEdit();
-        m_input->setPlaceholderText("Search for a location...");
+        m_input->setPlaceholderText("🔍  Search for a location...");
         m_input->setStyleSheet(
             "QLineEdit { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-            "padding: 6px 10px 6px 28px; color: #e6edf3; font-size: 12px; }"
+            "padding: 8px 12px; color: #e6edf3; font-size: 13px; }"
             "QLineEdit:focus { border-color: #1f6feb; }"
             "QLineEdit::placeholder { color: #484f58; }");
         m_input->setClearButtonEnabled(true);
+        m_input->setMinimumHeight(34);
 
-        // Add search icon via action
-        // (Using text prefix since icon resources may not be available)
         layout->addWidget(m_input);
 
+        // Dropdown as a floating popup (not in the layout — won't resize the search bar)
         m_dropdown = new QListWidget();
-        m_dropdown->setMaximumHeight(150);
+        m_dropdown->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
+        m_dropdown->setMaximumHeight(180);
+        m_dropdown->setMinimumWidth(300);
         m_dropdown->setStyleSheet(
             "QListWidget { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-            "color: #e6edf3; font-size: 12px; outline: none; }"
-            "QListWidget::item { padding: 6px 10px; border-bottom: 1px solid #21262d; }"
-            "QListWidget::item:selected { background: #1f6feb; }"
+            "color: #e6edf3; font-size: 12px; outline: none; padding: 4px; }"
+            "QListWidget::item { padding: 8px 10px; border-bottom: 1px solid #21262d; }"
+            "QListWidget::item:selected { background: #1f6feb; color: #ffffff; }"
             "QListWidget::item:hover { background: #21262d; }");
         m_dropdown->hide();
-        layout->addWidget(m_dropdown);
 
         m_network = new QNetworkAccessManager(this);
         m_debounceTimer = new QTimer(this);
@@ -171,8 +173,11 @@ private:
                 m_dropdown->addItem(r.displayName);
             }
         }
+        // Position dropdown below the input (floating popup)
+        QPoint bottomLeft = m_input->mapToGlobal(QPoint(0, m_input->height()));
+        m_dropdown->move(bottomLeft);
+        m_dropdown->setFixedWidth(m_input->width());
         m_dropdown->show();
-        m_dropdown->setFocus();
         m_highlightedIndex = -1;
     }
 

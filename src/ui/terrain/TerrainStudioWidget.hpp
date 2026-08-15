@@ -77,8 +77,20 @@ public:
         contentLayout->addWidget(rightSep);
 
         m_exportPanel = new ExportPanel(m_store, this);
-        m_exportPanel->setMaximumWidth(320);
+        m_exportPanel->setMinimumWidth(340);
+        m_exportPanel->setMaximumWidth(400);
         contentLayout->addWidget(m_exportPanel, 1);
+
+        // Connect search bar to map — fly to location on select
+        connect(m_searchBar, &SearchBar::locationSelected, this, [this](double lat, double lon, int zoom) {
+            if (m_viewport && m_viewport->mapWidget()) {
+                m_viewport->mapWidget()->setCenter(lat, lon);
+                m_viewport->mapWidget()->setZoom(zoom);
+                if (m_statusLabel) {
+                    m_statusLabel->setText(QString("Flew to %1, %2 (zoom %3)").arg(lat, 0, 'f', 4).arg(lon, 0, 'f', 4).arg(zoom));
+                }
+            }
+        });
 
         layout->addWidget(contentWidget, 1);
 
@@ -173,7 +185,47 @@ private:
 
         m_toolbar->addSeparator();
 
-        auto* hintLabel = new QLabel("Shift+drag to select | Click tiles to toggle");
+        // Zoom controls
+        auto* zoomInBtn = new QToolButton();
+        zoomInBtn->setText("➕");
+        zoomInBtn->setToolTip("Zoom in");
+        zoomInBtn->setShortcut(QKeySequence::ZoomIn);
+        connect(zoomInBtn, &QToolButton::clicked, this, [this]() {
+            if (m_viewport && m_viewport->mapWidget() && m_viewport->mapWidget()->map()) {
+                auto* map = m_viewport->mapWidget()->map();
+                map->setZoom(std::min(20.0, map->zoom() + 1.0));
+            }
+        });
+        m_toolbar->addWidget(zoomInBtn);
+
+        auto* zoomOutBtn = new QToolButton();
+        zoomOutBtn->setText("➖");
+        zoomOutBtn->setToolTip("Zoom out");
+        zoomOutBtn->setShortcut(QKeySequence::ZoomOut);
+        connect(zoomOutBtn, &QToolButton::clicked, this, [this]() {
+            if (m_viewport && m_viewport->mapWidget() && m_viewport->mapWidget()->map()) {
+                auto* map = m_viewport->mapWidget()->map();
+                map->setZoom(std::max(0.0, map->zoom() - 1.0));
+            }
+        });
+        m_toolbar->addWidget(zoomOutBtn);
+
+        auto* fitBtn = new QToolButton();
+        fitBtn->setText("Fit");
+        fitBtn->setToolTip("Fit to selection");
+        connect(fitBtn, &QToolButton::clicked, this, [this]() {
+            if (m_viewport && m_viewport->mapWidget()) {
+                const auto& b = m_store->selectedBounds();
+                if (b.isValid()) {
+                    m_viewport->mapWidget()->fitBounds(b.south, b.west, b.north, b.east);
+                }
+            }
+        });
+        m_toolbar->addWidget(fitBtn);
+
+        m_toolbar->addSeparator();
+
+        auto* hintLabel = new QLabel("Shift+drag to select | Click tiles to toggle | Scroll to zoom");
         hintLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
         m_toolbar->addWidget(hintLabel);
     }
