@@ -35,36 +35,15 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
 
     g_mainWindow = this;
 
-    // Menu bar — kept for functionality but styled to match dark theme
-    QMenuBar* menu = new QMenuBar;
-    QMenu* file = new QMenu("&File");
-    auto newAction = file->addAction("New");
-    auto loadAction = file->addAction("Open");
-    auto saveAction = file->addAction("Save");
-    auto preferenceAction = file->addAction("Preference");
-    menu->addMenu(file);
-
-    QMenu* editMenu = new QMenu("&Edit");
-    auto undoAction = editMenu->addAction("Undo");
-    auto redoAction = editMenu->addAction("Redo");
-    auto verifyAction = editMenu->addAction("Verify Now");
-    menu->addMenu(editMenu);
-
-    QMenu* replay = new QMenu("&Replay");
-    auto saveReplayAction = replay->addAction("Save");
-    auto debugReplayAction = replay->addAction("Debug");
-    auto controlledReplayAction = replay->addAction("Watch");
-    menu->addMenu(replay);
-
-    QMenu* simulation = new QMenu("&Simulation");
-    toggleSimAction = simulation->addAction("Toggle simulation");
+    // Menu bar is now integrated into the main app's menu bar (AppMainWindow)
+    // We still need the QAction objects for state tracking
+    toggleSimAction = new QAction("Toggle simulation", this);
     toggleSimAction->setCheckable(true);
     toggleSimAction->setChecked(false);
-    pauseResumeSimulation = simulation->addAction("Paused");
+    pauseResumeSimulation = new QAction("Paused", this);
     pauseResumeSimulation->setCheckable(true);
     pauseResumeSimulation->setChecked(false);
     pauseResumeSimulation->setEnabled(false);
-    menu->addMenu(simulation);
 
 #ifdef __linux__
     replayWindow = std::make_unique<ReplayWindow>();
@@ -101,26 +80,14 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     auto mainLayout = new QVBoxLayout;
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
-    mainLayout->addWidget(menu);
     mainLayout->addWidget(mainWidget.get());
     mainLayout->addWidget(statusBar);
 
     setLayout(mainLayout);
 
-    connect(newAction, &QAction::triggered, this, &MainWindow::newMap);
-    connect(saveAction, &QAction::triggered, this, &MainWindow::saveToFile);
-    connect(loadAction, &QAction::triggered, this, &MainWindow::loadFromFile);
-    connect(preferenceAction, &QAction::triggered, preferenceWindow.get(), &PreferenceWindow::open);
-    connect(undoAction, &QAction::triggered, this, &MainWindow::undo);
-    connect(redoAction, &QAction::triggered, this, &MainWindow::redo);
-    connect(verifyAction, &QAction::triggered, this, &MainWindow::verifyMap);
+    // Internal connections for simulation state
     connect(toggleSimAction, &QAction::toggled, this, &MainWindow::toggleSimulation);
-    connect(toggleSimAction, &QAction::toggled, this, [=](bool enabled) {
-        undoAction->setEnabled(!enabled); redoAction->setEnabled(!enabled); });
     connect(pauseResumeSimulation, &QAction::toggled, vehicleManager.get(), &VehicleManager::TogglePause);
-    connect(saveReplayAction, &QAction::triggered, this, &MainWindow::saveActionHistory);
-    connect(debugReplayAction, &QAction::triggered, this, &MainWindow::debugActionHistory);
-    connect(controlledReplayAction, &QAction::triggered, this, &MainWindow::playActionHistory);
     connect(replayWindow.get(), &ReplayWindow::Restart, this, &MainWindow::reset);
     connect(mainWidget.get(), &MainWidget::FPSChanged, this, &MainWindow::setFPS);
     connect(preferenceWindow.get(), &PreferenceWindow::ToggleAA, mainWidget.get(), &MainWidget::toggleAntialiasing);
@@ -476,4 +443,31 @@ void MainWindow::runReplay(std::string replay)
             }
         }
     }
+}
+
+// Helper methods for external menu bar integration
+bool MainWindow::isSimulationActive() const
+{
+    return toggleSimAction && toggleSimAction->isChecked();
+}
+
+bool MainWindow::isSimulationPaused() const
+{
+    return pauseResumeSimulation && pauseResumeSimulation->isChecked();
+}
+
+void MainWindow::togglePauseSimulation(bool paused)
+{
+    if (pauseResumeSimulation)
+    {
+        pauseResumeSimulation->setChecked(paused);
+        if (paused)
+            vehicleManager->TogglePause();
+    }
+}
+
+void MainWindow::openPreferences()
+{
+    if (preferenceWindow)
+        preferenceWindow->open();
 }

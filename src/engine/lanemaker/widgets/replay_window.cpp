@@ -170,6 +170,10 @@ void ReplayWindow::FillHistoryTable()
 				desc += " road";
 				icon = QIcon(QPixmap(":/icons/road_mode.png"));
 				break;
+			case LM::Mode_StraightLine:
+				desc += " straight";
+				icon = QIcon(QPixmap(":/icons/road_mode.png"));
+				break;
 			case LM::Mode_CreateLanes:
 				desc += " lane";
 				icon = QIcon(QPixmap(":/icons/lane_mode.png"));

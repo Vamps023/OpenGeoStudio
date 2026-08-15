@@ -145,15 +145,26 @@ MainWidget::MainWidget(QWidget* parent)
     dragModeButton->setCheckable(true);
     dragModeButton->setChecked(false);
 
+    straightLineButton = new QToolButton;
+    straightLineButton->setToolTip(tr("Straight Line — Click two points for a straight road"));
+    straightLineButton->setText("─");
+    straightLineButton->setStyleSheet(
+        "QToolButton { font-size: 20px; font-weight: bold; }");
+    straightLineButton->setIconSize(largeIconSize);
+    straightLineButton->setCheckable(true);
+    straightLineButton->setChecked(false);
+
     pointerModeGroup = new QButtonGroup(this);
     pointerModeGroup->setExclusive(true);
     pointerModeGroup->addButton(createModeButton);
+    pointerModeGroup->addButton(straightLineButton);
     pointerModeGroup->addButton(createLaneModeButton);
     pointerModeGroup->addButton(modifyModeButton);
     pointerModeGroup->addButton(destroyModeButton);
     pointerModeGroup->addButton(dragModeButton);
 
     sidebarLayout->addWidget(createModeButton);
+    sidebarLayout->addWidget(straightLineButton);
     sidebarLayout->addWidget(createLaneModeButton);
     sidebarLayout->addWidget(modifyModeButton);
     sidebarLayout->addWidget(destroyModeButton);
@@ -309,6 +320,7 @@ MainWidget::MainWidget(QWidget* parent)
     setLayout(mainLayout);
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
+    connect(straightLineButton, &QAbstractButton::toggled, this, &MainWidget::gotoStraightLineMode);
     connect(createLaneModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateLaneMode);
     connect(destroyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDestroyMode);
     connect(modifyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoModifyMode);
@@ -407,6 +419,14 @@ void MainWidget::gotoCreateRoadMode(bool checked)
 {
     if (!checked) return;
     SetEditMode(LM::Mode_Create);
+    LM::ActionManager::Instance()->Record(LM::Mode_Create);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoStraightLineMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_StraightLine);
     LM::ActionManager::Instance()->Record(LM::Mode_Create);
     laneConfig->GotoRoadMode();
 }
@@ -682,6 +702,9 @@ void MainWidget::SetModeFromReplay(int mode)
     case LM::Mode_Create:
         createModeButton->setChecked(true);
         break;
+    case LM::Mode_StraightLine:
+        straightLineButton->setChecked(true);
+        break;
     case LM::Mode_CreateLanes:
         createLaneModeButton->setChecked(true);
         break;
@@ -723,6 +746,14 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
     {
     case LM::Mode_Create:
         drawingSession = new RoadCreationSession();
+        break;
+    case LM::Mode_StraightLine:
+        {
+            auto* session = new RoadCreationSession();
+            session->forceStraightLine = true;
+            session->autoCompleteAfterFirstSegment = true;
+            drawingSession = session;
+        }
         break;
     case LM::Mode_CreateLanes:
         drawingSession = new LanesCreationSession();

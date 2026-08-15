@@ -1,28 +1,29 @@
-Add search bar and zoom controls to Road Studio toolbar
+Add straight line tool and move LaneMaker menus to main app bar
 
-Added the same map navigation features that Terrain Studio has
-to Road Studio's LaneMaker toolbar:
+Straight Line Tool:
+- New "─" button in Road Studio sidebar toolbar
+- Click two points to create a straight road — no direction handle,
+  no multi-click staging, no confirm step needed
+- Uses odr::Line geometry directly (same as LaneMaker's collinear case)
+- Auto-completes after the second click
+- Added Mode_StraightLine to EditMode enum
+- Added forceStraightLine and autoCompleteAfterFirstSegment flags
+  to RoadCreationSession
+- Replay system updated to handle the new mode
 
-Search bar:
-- Nominatim (OpenStreetMap) geocoding — type a location, press Enter
-- Flies the map to the result location (SetMapCenter + ResetCamera)
-- Shows the full display name in the search field after selection
-- Dark theme styling matching the rest of the toolbar
-- Clear button enabled for easy reset
-
-Zoom buttons:
-- ➕ Zoom in: 0.85x camera Z (2D) or dolly forward (3D)
-- ➖ Zoom out: 1.15x camera Z (2D) or dolly backward (3D)
-- "Fit" button: ResetCamera to default view
-- Zoom limits preserved: 20m min, 50000m max (2D mode)
-- Keyboard shortcuts: Ctrl++ / Ctrl+-
-
-Implementation:
-- Added ZoomIn()/ZoomOut() public methods to MapViewGL
-  (m_camera was private, so toolbar can't access it directly)
-- Zoom logic matches existing wheelEvent behavior exactly
-- Search uses QNetworkAccessManager with Nominatim API
-- LaneMaker road engine preserved as-is (no changes to road behavior)
+Menu Bar Integration:
+- Removed LaneMaker's internal menu bar (File/Edit/Replay/Simulation)
+- Added Road Studio menus to the main app's menu bar instead
+- Menus appear when Road Studio workspace is activated
+- Menus are hidden when switching to other workspaces
+- All actions wired to LaneMaker's MainWindow methods:
+  - Road File: New, Open, Save, Preferences
+  - Edit: Undo, Redo, Verify Now
+  - Replay: Save, Debug, Watch
+  - Simulation: Toggle simulation, Paused
+- Exposed MainWindow methods as public for external menu integration
+- Simulation toggle disables Undo/Redo while active (same as before)
+- Pause action only enabled when simulation is active
 
 Generated with [Devin](https://devin.ai)
 

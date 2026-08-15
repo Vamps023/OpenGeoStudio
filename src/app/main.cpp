@@ -48,6 +48,7 @@
 #include "ui/roadstudio/RoadStudioWidget.hpp"
 #include "ui/trainstudio/TrainStudioWidget.hpp"
 #include "ui/terrain/TerrainStudioWidget.hpp"
+#include "main_window.h"
 
 // Phase 2c: MapLibre Native Qt map viewport
 #if defined(HAVE_MAPLIBRE)
@@ -259,6 +260,16 @@ private:
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
 
+    // Road Studio menu bar integration
+    QMenu* m_roadFileMenu = nullptr;
+    QMenu* m_roadEditMenu = nullptr;
+    QMenu* m_roadReplayMenu = nullptr;
+    QMenu* m_roadSimulationMenu = nullptr;
+    QAction* m_roadSimToggleAct = nullptr;
+    QAction* m_roadSimPauseAct = nullptr;
+    QAction* m_roadUndoAct = nullptr;
+    QAction* m_roadRedoAct = nullptr;
+
     void setupMenuBar() {
         // File menu
         QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
@@ -349,6 +360,86 @@ private:
     void openSettings() {
         SettingsDialog dialog(this);
         dialog.exec();
+    }
+
+    void setupRoadStudioMenus() {
+        if (m_roadFileMenu) return;  // Already set up
+
+        MainWindow* lmw = m_roadStudioWidget->laneMakerWindow();
+
+        // File menu
+        m_roadFileMenu = menuBar()->addMenu(tr("&Road File"));
+        auto* newAct = m_roadFileMenu->addAction(tr("New"));
+        newAct->setShortcut(QKeySequence::New);
+        connect(newAct, &QAction::triggered, lmw, &MainWindow::newMap);
+
+        auto* openAct = m_roadFileMenu->addAction(tr("Open"));
+        openAct->setShortcut(QKeySequence::Open);
+        connect(openAct, &QAction::triggered, lmw, &MainWindow::loadFromFile);
+
+        auto* saveAct = m_roadFileMenu->addAction(tr("Save"));
+        saveAct->setShortcut(QKeySequence::Save);
+        connect(saveAct, &QAction::triggered, lmw, &MainWindow::saveToFile);
+
+        m_roadFileMenu->addSeparator();
+
+        auto* prefAct = m_roadFileMenu->addAction(tr("Preferences"));
+        connect(prefAct, &QAction::triggered, lmw, &MainWindow::openPreferences);
+
+        // Edit menu
+        m_roadEditMenu = menuBar()->addMenu(tr("&Edit"));
+        m_roadUndoAct = m_roadEditMenu->addAction(tr("Undo"));
+        m_roadUndoAct->setShortcut(QKeySequence::Undo);
+        connect(m_roadUndoAct, &QAction::triggered, lmw, &MainWindow::undo);
+
+        m_roadRedoAct = m_roadEditMenu->addAction(tr("Redo"));
+        m_roadRedoAct->setShortcut(QKeySequence::Redo);
+        connect(m_roadRedoAct, &QAction::triggered, lmw, &MainWindow::redo);
+
+        m_roadEditMenu->addSeparator();
+
+        auto* verifyAct = m_roadEditMenu->addAction(tr("Verify Now"));
+        connect(verifyAct, &QAction::triggered, lmw, &MainWindow::verifyMap);
+
+        // Replay menu
+        m_roadReplayMenu = menuBar()->addMenu(tr("&Replay"));
+        auto* saveReplayAct = m_roadReplayMenu->addAction(tr("Save"));
+        connect(saveReplayAct, &QAction::triggered, lmw, &MainWindow::saveActionHistory);
+
+        auto* debugReplayAct = m_roadReplayMenu->addAction(tr("Debug"));
+        connect(debugReplayAct, &QAction::triggered, lmw, &MainWindow::debugActionHistory);
+
+        auto* watchReplayAct = m_roadReplayMenu->addAction(tr("Watch"));
+        connect(watchReplayAct, &QAction::triggered, lmw, &MainWindow::playActionHistory);
+
+        // Simulation menu
+        m_roadSimulationMenu = menuBar()->addMenu(tr("&Simulation"));
+        m_roadSimToggleAct = m_roadSimulationMenu->addAction(tr("Toggle simulation"));
+        m_roadSimToggleAct->setCheckable(true);
+        connect(m_roadSimToggleAct, &QAction::triggered, lmw, [this, lmw]() {
+            bool enabled = m_roadSimToggleAct->isChecked();
+            lmw->toggleSimulation(enabled);
+            if (m_roadSimPauseAct) {
+                m_roadSimPauseAct->setEnabled(enabled);
+                if (!enabled) m_roadSimPauseAct->setChecked(false);
+            }
+            if (m_roadUndoAct) m_roadUndoAct->setEnabled(!enabled);
+            if (m_roadRedoAct) m_roadRedoAct->setEnabled(!enabled);
+        });
+
+        m_roadSimPauseAct = m_roadSimulationMenu->addAction(tr("Paused"));
+        m_roadSimPauseAct->setCheckable(true);
+        m_roadSimPauseAct->setEnabled(false);
+        connect(m_roadSimPauseAct, &QAction::triggered, lmw, [this, lmw]() {
+            lmw->togglePauseSimulation(m_roadSimPauseAct->isChecked());
+        });
+    }
+
+    void showRoadStudioMenus(bool show) {
+        if (m_roadFileMenu) m_roadFileMenu->menuAction()->setVisible(show);
+        if (m_roadEditMenu) m_roadEditMenu->menuAction()->setVisible(show);
+        if (m_roadReplayMenu) m_roadReplayMenu->menuAction()->setVisible(show);
+        if (m_roadSimulationMenu) m_roadSimulationMenu->menuAction()->setVisible(show);
     }
 
     void setupToolBar() {
@@ -512,21 +603,27 @@ private slots:
             // Home: no docks (matching reference)
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
+            showRoadStudioMenus(false);
         } else if (ws.id == "terrain") {
             m_centerStack->setCurrentIndex(1); // Terrain Studio
             // Terrain: right dock has export panel (built into widget), hide docks
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
+            showRoadStudioMenus(false);
         } else if (ws.id == "road-studio") {
             m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
             // LaneMaker's MainWindow has its own toolbar, lane config, etc.
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
+            // Add Road Studio menus to the main app menu bar
+            setupRoadStudioMenus();
+            showRoadStudioMenus(true);
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
             // Train Studio: no docks (matching reference)
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
+            showRoadStudioMenus(false);
         }
 
         // Reset inspector for non-road-studio workspaces

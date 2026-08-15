@@ -1,5 +1,6 @@
 #include "road_drawing.h"
 #include "curve_fitting.h"
+#include "Geometries/Line.h"
 #include "LaneConfigWidget.h"
 #include "map_view_gl.h"
 #include "junction.h"
@@ -311,6 +312,11 @@ bool RoadCreationSession::Update(const LM::MouseAction& act)
 				// force complete
 				return false;
 			}
+			if (autoCompleteAfterFirstSegment && !stagedGeometries.empty())
+			{
+				// Straight line mode — complete after 2 clicks
+				return false;
+			}
 		}
 
 		UpdateFlexGeometry();
@@ -608,7 +614,14 @@ void RoadCreationSession::UpdateFlexGeometry()
 		}
 		localStartDir = odr::normalize(localStartDir);
 
-		if (joinAtEnd.expired())
+		if (forceStraightLine)
+		{
+			// Always create a straight Line — ignore direction
+			double length = odr::euclDistance(localStartPos, snappedPos);
+			double hdg = std::atan2(snappedPos[1] - localStartPos[1], snappedPos[0] - localStartPos[0]);
+			flexGeo = std::make_unique<odr::Line>(0, localStartPos[0], localStartPos[1], hdg, length);
+		}
+		else if (joinAtEnd.expired())
 		{
 			flexGeo = LM::FitArcOrLine(localStartPos, localStartDir, snappedPos);
 		}

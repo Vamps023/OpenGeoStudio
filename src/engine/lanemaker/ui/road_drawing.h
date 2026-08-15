@@ -88,6 +88,10 @@ public:
     virtual bool Complete() override;
     virtual bool Cancel() override;
 
+    // Straight line mode: always create Line geometry, auto-complete after 2 clicks
+    bool forceStraightLine = false;
+    bool autoCompleteAfterFirstSegment = false;
+
 protected:
     // Record extend / join
     virtual SnapResult SnapFirstPointToExisting(odr::Vec2D&);

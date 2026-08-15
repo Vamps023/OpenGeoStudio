@@ -27,6 +27,19 @@ public:
 
     void runReplay(std::string replay);
 
+    // Exposed for external menu bar integration
+    void newMap();
+    void verifyMap();
+    void saveActionHistory();
+    void debugActionHistory();
+    void playActionHistory();
+    void toggleSimulation(bool enabled);
+    void stopSimulation();
+    bool isSimulationPaused() const;
+    void togglePauseSimulation(bool paused);
+    bool isSimulationActive() const;
+    void openPreferences();
+
 protected:
     void resizeEvent(QResizeEvent*) override;
 
@@ -74,20 +87,6 @@ public slots:
 private slots:
     void updateHint();
     void setFPS(QString);
-
-    void newMap();
-
-    void verifyMap();
-
-    void saveActionHistory();
-
-    void debugActionHistory();
-
-    void playActionHistory();
-
-    void toggleSimulation(bool);
-
-    void stopSimulation();
 
     void onReplayDone(bool);
 
