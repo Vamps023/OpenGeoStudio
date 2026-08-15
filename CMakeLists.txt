@@ -397,12 +397,37 @@ if(EXISTS "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib")
 
     target_compile_definitions(OpenGeoStudio PRIVATE HAVE_OGRE=1)
 
-    # Copy OGRE DLLs to deploy folder
+    # Copy OGRE DLLs to deploy folder (same folder as exe)
     add_custom_command(TARGET OpenGeoStudio POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${OGRE_NEXT_BUILD}/bin" "$<TARGET_FILE_DIR:OpenGeoStudio>/ogre"
+        # Copy all OGRE DLLs to the exe folder so Windows can find them
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextMain.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextHlmsPbs.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextHlmsUnlit.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextPlanarReflections.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextAtmosphere.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/OgreNextProperty.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/RenderSystem_Direct3D11.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/RenderSystem_GL3Plus.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/RenderSystem_NULL.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/Plugin_ParticleFX.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${OGRE_NEXT_BUILD}/bin/Plugin_ParticleFX2.dll" "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        # Copy Hlms shader media
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${OGRE_NEXT_DIR}/Samples/Media/Hlms" "$<TARGET_FILE_DIR:OpenGeoStudio>/Hlms"
+        # Also keep ogre/ subfolder for plugins.cfg compatibility
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${OGRE_NEXT_BUILD}/bin" "$<TARGET_FILE_DIR:OpenGeoStudio>/ogre"
     )
 else()
     message(WARNING "OGRE-Next not found at ${OGRE_NEXT_BUILD}, building without 3D viewport")

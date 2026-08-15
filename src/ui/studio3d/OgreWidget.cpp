@@ -77,18 +77,18 @@ void OgreWidget::timerEvent(QTimerEvent* event)
 
 void OgreWidget::initOgre()
 {
-    QString ogreRoot = "D:/git/ogre-next";
-    QString buildDir = ogreRoot + "/build";
+    // OGRE DLLs and plugins are deployed alongside the exe
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString pluginsCfg = appDir + "/plugins.cfg";
 
-    // Create plugins.cfg if it doesn't exist
-    QString pluginsCfg = buildDir + "/bin/plugins.cfg";
+    // Create plugins.cfg pointing to the app directory
     if (!QFile::exists(pluginsCfg)) {
         QString cfg = QString(
-            "PluginFolder=%1/bin\n"
+            "PluginFolder=%1\n"
             "Plugin=RenderSystem_Direct3D11\n"
             "Plugin=RenderSystem_GL3Plus\n"
             "Plugin=Plugin_ParticleFX\n"
-        ).arg(buildDir);
+        ).arg(appDir);
         QFile f(pluginsCfg);
         f.open(QIODevice::WriteOnly);
         f.write(cfg.toUtf8());
@@ -99,8 +99,8 @@ void OgreWidget::initOgre()
     Ogre::AbiCookie abiCookie = Ogre::generateAbiCookie();
     m_root = OGRE_NEW Ogre::Root(&abiCookie,
                                  pluginsCfg.toStdString(),
-                                 buildDir.toStdString() + "/ogre.cfg",
-                                 buildDir.toStdString() + "/ogre.log",
+                                 appDir.toStdString() + "/ogre.cfg",
+                                 appDir.toStdString() + "/ogre.log",
                                  "OpenGeoStudio");
 
     // Use D3D11 on Windows
@@ -152,7 +152,7 @@ void OgreWidget::initOgre()
 
     // Setup Hlms (shader system)
     {
-        QString hlmsFolder = buildDir + "/bin/";
+        QString hlmsFolder = appDir + "/";
         Ogre::String mainPath = hlmsFolder.toStdString() + "Hlms/Common";
         Ogre::String pbsPath = hlmsFolder.toStdString() + "Hlms/Pbs";
         Ogre::String unlitPath = hlmsFolder.toStdString() + "Hlms/Unlit";
