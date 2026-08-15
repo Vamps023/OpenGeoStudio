@@ -779,15 +779,24 @@ private slots:
             QLineEdit::Normal, "Untitled Project", &ok);
         if (!ok || name.isEmpty()) return;
 
-        const QString defaultDir = QStandardPaths::writableLocation(
-            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio";
-        const QString folder = QFileDialog::getExistingDirectory(
-            this, tr("Select Project Folder"), defaultDir);
-        if (folder.isEmpty()) return;
+        // Auto-create in Documents/OpenGeoStudio/Projects/{name}
+        // No folder dialog — fully automatic
+        const QString baseDir = QStandardPaths::writableLocation(
+            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
+        QDir().mkpath(baseDir);
+        const QString projectDir = baseDir + "/" + name;
 
-        const QString projectDir = folder + "/" + name;
+        // Check if project already exists
+        if (QDir(projectDir).exists()) {
+            QMessageBox::warning(this, tr("Project Exists"),
+                tr("A project named \"%1\" already exists at:\n%2\n\n"
+                   "Please choose a different name.")
+                    .arg(name, projectDir));
+            return;
+        }
+
         m_ctx->projects().createWithFolder(name, projectDir, "home");
-        m_ctx->workspaces().activate("home");
+        m_ctx->workspaces().activate("terrain");
     }
 
     void onNewProjectFromTemplate(const QString& templateId) {
@@ -797,15 +806,25 @@ private slots:
             QLineEdit::Normal, "Untitled " + templateId, &ok);
         if (!ok || name.isEmpty()) return;
 
-        const QString defaultDir = QStandardPaths::writableLocation(
-            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio";
-        const QString folder = QFileDialog::getExistingDirectory(
-            this, tr("Select Project Folder"), defaultDir);
-        if (folder.isEmpty()) return;
+        // Auto-create in Documents/OpenGeoStudio/Projects/{name}
+        // No folder dialog — fully automatic
+        const QString baseDir = QStandardPaths::writableLocation(
+            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
+        QDir().mkpath(baseDir);
+        const QString projectDir = baseDir + "/" + name;
 
-        const QString projectDir = folder + "/" + name;
+        // Check if project already exists
+        if (QDir(projectDir).exists()) {
+            QMessageBox::warning(this, tr("Project Exists"),
+                tr("A project named \"%1\" already exists at:\n%2\n\n"
+                   "Please choose a different name.")
+                    .arg(name, projectDir));
+            return;
+        }
+
         m_ctx->projects().createWithFolder(name, projectDir, templateId);
-        m_ctx->workspaces().activate(templateId);
+        // Always switch to Terrain workspace after creating a project
+        m_ctx->workspaces().activate("terrain");
     }
 
     void onOpenProject() {

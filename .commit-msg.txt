@@ -1,26 +1,15 @@
-Add project delete, fix workspace switch on project open
+Auto-create projects in default directory — no folder picker
 
-Three changes:
+Project creation no longer asks the user to select a folder.
+Just enter the project name and it's created automatically.
 
-1. Open project → Terrain workspace
-   After opening a project, the app now switches to the Terrain
-   workspace instead of the project's saved workspaceId. This
-   gives immediate access to the map for area selection.
+Default location: Documents/OpenGeoStudio/Projects/{name}
 
-2. Remove/Delete project from Home screen
-   Each recent project row now has a red ✕ button. Clicking it
-   shows a confirmation dialog and then:
-   - Removes the project from the recent list
-   - Deletes the .ogproj file from disk
-   - Deletes the entire project folder (with safety check:
-     only deletes if a .ogproj file exists in the folder)
-   - Closes the project if it's currently open
+Flow:
+  1. Click "Terrain" or "Road Studio" or "Train Studio" card
+  2. Enter project name (dialog)
+  3. Project created automatically — no folder selection
+  4. Switches to Terrain workspace
 
-3. ProjectManager::deleteProject() new API
-   bool deleteProject(filePath, deleteFolder=true)
-   - Removes from recent list
-   - Closes current project if it matches
-   - Deletes .ogproj file
-   - Deletes project folder if deleteFolder=true
-   - Safety: only deletes folder if it contains a .ogproj
-   - Publishes "project:deleted" event
+Safety: if a project with the same name already exists, shows
+a warning and asks for a different name.
