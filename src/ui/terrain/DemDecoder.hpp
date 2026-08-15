@@ -1,0 +1,356 @@
+#pragma once
+
+// ============================================================
+// DemDecoder — Decode elevation from tile formats
+// ============================================================
+//
+// QGIS doesn't have built-in terrarium/terrain-rgb decoding in core
+// (handled by GDAL raster providers), but we need to decode these
+// formats ourselves since we download raw PNG tiles.
+//
+// Supported formats:
+//   - Terrarium (AWS/Mapzen): RGB → elevation in meters
+//     Formula: height = (R * 256 + G + B / 256) - 32768
+//   - Mapbox Terrain-RGB: RGB → elevation in meters
+//     Formula: height = -10000 + ((R * 256 * 256 + G * 256 + B) * 0.1)
+//   - AAIGrid (ASCII ArcGrid): text → elevation in meters
+//   - GeoTIFF: loaded via QImage/libtiff → raw elevation values
+//
+
+#include <QImage>
+#include <QByteArray>
+#include <QString>
+#include <QStringList>
+#include <QRegularExpression>
+#include <vector>
+#include <cmath>
+#include <limits>
+#include <cstdint>
+
+namespace terrain {
+
+struct DemTile {
+    int width = 0;
+    int height = 0;
+    std::vector<float> elevations;  // Row-major, meters
+    float nodataValue = -9999.0f;
+    bool valid = false;
+};
+
+class DemDecoder {
+public:
+    // ============================================================
+    // Terrarium format (AWS/Mapzen elevation tiles)
+    // ============================================================
+    // Each pixel: (R * 256 + G + B / 256) - 32768 = elevation in meters
+    static DemTile decodeTerrarium(const QImage& img) {
+        DemTile tile;
+        tile.width = img.width();
+        tile.height = img.height();
+        tile.nodataValue = -32768.0f;
+        tile.elevations.resize(tile.width * tile.height);
+
+        QImage rgb = img.convertToFormat(QImage::Format_RGB888);
+        for (int y = 0; y < tile.height; ++y) {
+            const uint8_t* row = rgb.scanLine(y);
+            for (int x = 0; x < tile.width; ++x) {
+                int idx = (x * 3);
+                float r = row[idx];
+                float g = row[idx + 1];
+                float b = row[idx + 2];
+                // Terrarium formula
+                float elev = (r * 256.0f + g + b / 256.0f) - 32768.0f;
+                tile.elevations[y * tile.width + x] = elev;
+            }
+        }
+        tile.valid = true;
+        return tile;
+    }
+
+    // Decode Terrarium from raw PNG bytes
+    static DemTile decodeTerrarium(const QByteArray& data) {
+        QImage img;
+        if (!img.loadFromData(data)) return DemTile{};
+        return decodeTerrarium(img);
+    }
+
+    // ============================================================
+    // Mapbox Terrain-RGB format
+    // ============================================================
+    // Each pixel: -10000 + ((R * 256 * 256 + G * 256 + B) * 0.1) = elevation in meters
+    static DemTile decodeMapboxTerrainRgb(const QImage& img) {
+        DemTile tile;
+        tile.width = img.width();
+        tile.height = img.height();
+        tile.nodataValue = -9999.0f;
+        tile.elevations.resize(tile.width * tile.height);
+
+        QImage rgb = img.convertToFormat(QImage::Format_RGB888);
+        for (int y = 0; y < tile.height; ++y) {
+            const uint8_t* row = rgb.scanLine(y);
+            for (int x = 0; x < tile.width; ++x) {
+                int idx = (x * 3);
+                float r = row[idx];
+                float g = row[idx + 1];
+                float b = row[idx + 2];
+                // Mapbox Terrain-RGB formula
+                float elev = -10000.0f + ((r * 256.0f * 256.0f + g * 256.0f + b) * 0.1f);
+                tile.elevations[y * tile.width + x] = elev;
+            }
+        }
+        tile.valid = true;
+        return tile;
+    }
+
+    static DemTile decodeMapboxTerrainRgb(const QByteArray& data) {
+        QImage img;
+        if (!img.loadFromData(data)) return DemTile{};
+        return decodeMapboxTerrainRgb(img);
+    }
+
+    // ============================================================
+    // AAIGrid (ASCII ArcGrid) — OpenTopography format
+    // ============================================================
+    // Header: ncols, nrows, xllcorner, yllcorner, cellsize, NODATA_value
+    // Body: space-separated elevation values
+    static DemTile decodeAaiGrid(const QByteArray& data) {
+        DemTile tile;
+        QString text = QString::fromLatin1(data);
+        QStringList lines = text.split('\n', Qt::SkipEmptyParts);
+
+        if (lines.size() < 7) return tile;
+
+        int ncols = 0, nrows = 0;
+        double xllcorner = 0, yllcorner = 0, cellsize = 1;
+        double nodata = -9999;
+        int headerLines = 0;
+
+        static const QRegularExpression ws("\\s+");
+
+        for (int i = 0; i < lines.size() && headerLines < 6; ++i) {
+            QString line = lines[i].trimmed().toLower();
+            auto parts = line.split(ws, Qt::SkipEmptyParts);
+            if (parts.size() < 2) continue;
+
+            if (line.startsWith("ncols")) {
+                ncols = parts[1].toInt();
+                headerLines++;
+            } else if (line.startsWith("nrows")) {
+                nrows = parts[1].toInt();
+                headerLines++;
+            } else if (line.startsWith("xllcorner") || line.startsWith("xll")) {
+                xllcorner = parts[1].toDouble();
+                headerLines++;
+            } else if (line.startsWith("yllcorner") || line.startsWith("yll")) {
+                yllcorner = parts[1].toDouble();
+                headerLines++;
+            } else if (line.startsWith("cellsize")) {
+                cellsize = parts[1].toDouble();
+                headerLines++;
+            } else if (line.startsWith("nodata_value") || line.startsWith("nodata")) {
+                nodata = parts[1].toDouble();
+                headerLines++;
+            }
+        }
+
+        if (ncols <= 0 || nrows <= 0 || headerLines < 5) return tile;
+
+        tile.width = ncols;
+        tile.height = nrows;
+        tile.nodataValue = static_cast<float>(nodata);
+        tile.elevations.resize(ncols * nrows);
+
+        // Read elevation values
+        int elevIdx = 0;
+        for (int i = headerLines; i < lines.size() && elevIdx < ncols * nrows; ++i) {
+            auto vals = lines[i].split(ws, Qt::SkipEmptyParts);
+            for (const auto& v : vals) {
+                if (elevIdx >= ncols * nrows) break;
+                bool ok;
+                double e = v.toDouble(&ok);
+                if (ok) {
+                    tile.elevations[elevIdx] = static_cast<float>(e);
+                } else {
+                    tile.elevations[elevIdx] = tile.nodataValue;
+                }
+                elevIdx++;
+            }
+        }
+
+        tile.valid = (elevIdx >= ncols * nrows);
+        return tile;
+    }
+
+    // ============================================================
+    // GeoTIFF DEM (Copernicus, SRTM, etc.)
+    // ============================================================
+    // Load via QImage — works for single-band 16-bit or float32 GeoTIFFs
+    // For proper GeoTIFF reading with geotransform, use libtiff directly
+    static DemTile decodeGeoTiff(const QByteArray& data) {
+        DemTile tile;
+        QImage img;
+        if (!img.loadFromData(data)) return tile;
+
+        tile.width = img.width();
+        tile.height = img.height();
+        tile.nodataValue = -9999.0f;
+        tile.elevations.resize(tile.width * tile.height);
+
+        // Handle different image formats
+        if (img.format() == QImage::Format_Grayscale16 ||
+            img.format() == QImage::Format_RGBX64 ||
+            img.format() == QImage::Format_RGBA64) {
+
+            // 16-bit grayscale — treat as raw elevation
+            for (int y = 0; y < tile.height; ++y) {
+                for (int x = 0; x < tile.width; ++x) {
+                    QRgba64 px = img.pixelColor(x, y).rgba64();
+                    // For 16-bit DEM, the value IS the elevation (or scaled)
+                    tile.elevations[y * tile.width + x] = static_cast<float>(px.red());
+                }
+            }
+        } else {
+            // 8-bit — convert to grayscale and scale to typical elevation range
+            QImage gray = img.convertToFormat(QImage::Format_Grayscale8);
+            for (int y = 0; y < tile.height; ++y) {
+                for (int x = 0; x < tile.width; ++x) {
+                    tile.elevations[y * tile.width + x] = static_cast<float>(gray.pixelIndex(x, y));
+                }
+            }
+        }
+
+        tile.valid = true;
+        return tile;
+    }
+
+    // ============================================================
+    // Auto-detect format from data
+    // ============================================================
+    static DemTile decodeAuto(const QByteArray& data, const QString& sourceName) {
+        // Check if it's AAIGrid (text format)
+        if (data.size() > 0 && data[0] == 'n') {
+            // Starts with "ncols" — likely AAIGrid
+            DemTile tile = decodeAaiGrid(data);
+            if (tile.valid) return tile;
+        }
+
+        // Check if it's a PNG (magic bytes)
+        if (data.size() >= 8 && data[0] == 0x89 && data[1] == 'P' &&
+            data[2] == 'N' && data[3] == 'G') {
+            // It's a PNG — check source to determine encoding
+            if (sourceName.contains("terrarium", Qt::CaseInsensitive)) {
+                return decodeTerrarium(data);
+            } else if (sourceName.contains("mapbox", Qt::CaseInsensitive) &&
+                       sourceName.contains("terrain", Qt::CaseInsensitive)) {
+                return decodeMapboxTerrainRgb(data);
+            }
+            // Try terrarium as default for PNG elevation tiles
+            return decodeTerrarium(data);
+        }
+
+        // Try GeoTIFF
+        if (data.size() >= 4 && data[0] == 'I' && data[1] == 'I') {
+            // TIFF magic bytes (little-endian)
+            return decodeGeoTiff(data);
+        }
+        if (data.size() >= 4 && data[0] == 'M' && data[1] == 'M') {
+            // TIFF magic bytes (big-endian)
+            return decodeGeoTiff(data);
+        }
+
+        // Fallback: try AAIGrid
+        DemTile tile = decodeAaiGrid(data);
+        if (tile.valid) return tile;
+
+        return DemTile{};
+    }
+
+    // ============================================================
+    // Resample DEM tile to target resolution
+    // ============================================================
+    // QGIS uses nearest-neighbor or bilinear; we use bilinear for smoothness
+    static DemTile resample(const DemTile& src, int targetWidth, int targetHeight) {
+        DemTile dst;
+        dst.width = targetWidth;
+        dst.height = targetHeight;
+        dst.nodataValue = src.nodataValue;
+        dst.elevations.resize(targetWidth * targetHeight);
+
+        for (int y = 0; y < targetHeight; ++y) {
+            for (int x = 0; x < targetWidth; ++x) {
+                // Bilinear interpolation
+                double srcX = static_cast<double>(x) * src.width / targetWidth;
+                double srcY = static_cast<double>(y) * src.height / targetHeight;
+
+                int x0 = static_cast<int>(srcX);
+                int y0 = static_cast<int>(srcY);
+                int x1 = std::min(x0 + 1, src.width - 1);
+                int y1 = std::min(y0 + 1, src.height - 1);
+
+                double fx = srcX - x0;
+                double fy = srcY - y0;
+
+                float v00 = src.elevations[y0 * src.width + x0];
+                float v01 = src.elevations[y0 * src.width + x1];
+                float v10 = src.elevations[y1 * src.width + x0];
+                float v11 = src.elevations[y1 * src.width + x1];
+
+                // Skip nodata
+                if (v00 == src.nodataValue || v01 == src.nodataValue ||
+                    v10 == src.nodataValue || v11 == src.nodataValue) {
+                    dst.elevations[y * targetWidth + x] = src.nodataValue;
+                } else {
+                    double v = (1 - fx) * (1 - fy) * v00 +
+                               fx * (1 - fy) * v01 +
+                               (1 - fx) * fy * v10 +
+                               fx * fy * v11;
+                    dst.elevations[y * targetWidth + x] = static_cast<float>(v);
+                }
+            }
+        }
+        dst.valid = true;
+        return dst;
+    }
+
+    // ============================================================
+    // Convert DEM to QImage (for visualization/preview)
+    // ============================================================
+    static QImage toImage(const DemTile& tile, bool normalize = true) {
+        QImage img(tile.width, tile.height, QImage::Format_Grayscale16);
+
+        if (normalize) {
+            // Find min/max (excluding nodata)
+            float zMin = std::numeric_limits<float>::max();
+            float zMax = std::numeric_limits<float>::lowest();
+            for (float e : tile.elevations) {
+                if (e != tile.nodataValue) {
+                    zMin = std::min(zMin, e);
+                    zMax = std::max(zMax, e);
+                }
+            }
+            if (zMax <= zMin) { zMin = 0; zMax = 1; }
+            float zRange = zMax - zMin;
+
+            for (int y = 0; y < tile.height; ++y) {
+                for (int x = 0; x < tile.width; ++x) {
+                    float e = tile.elevations[y * tile.width + x];
+                    if (e == tile.nodataValue) e = zMin;
+                    uint16_t val = static_cast<uint16_t>(((e - zMin) / zRange) * 65535.0f);
+                    img.setPixel(x, y, qRgba64(val, val, val, 65535));
+                }
+            }
+        } else {
+            // Direct elevation → 16-bit (clamped to 0-65535)
+            for (int y = 0; y < tile.height; ++y) {
+                for (int x = 0; x < tile.width; ++x) {
+                    float e = tile.elevations[y * tile.width + x];
+                    uint16_t val = static_cast<uint16_t>(std::max(0.0f, std::min(65535.0f, e)));
+                    img.setPixel(x, y, qRgba64(val, val, val, 65535));
+                }
+            }
+        }
+        return img;
+    }
+};
+
+} // namespace terrain

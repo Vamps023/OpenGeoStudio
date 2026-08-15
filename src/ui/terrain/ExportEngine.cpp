@@ -1,6 +1,8 @@
 // ExportEngine — DEM and imagery download + file writing implementation
 
 #include "ExportEngine.hpp"
+#include "RasterWriter.hpp"
+#include "DemDecoder.hpp"
 
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -101,11 +103,9 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     const QString url = demUrlForTile(tile);
     if (url.isEmpty()) {
         // No URL — generate a flat heightmap as placeholder
-        QImage img(m_store->exportSettings().heightmapResolution,
-                   m_store->exportSettings().heightmapResolution,
-                   QImage::Format_Grayscale16);
-        img.fill(0);
-        img.save(outputPath);
+        const int res = m_store->exportSettings().heightmapResolution;
+        std::vector<float> flatElev(res * res, 0.0f);
+        writeDemOutput(flatElev, res, res, tile, outputPath);
         m_demDownloaded = true;
         if (m_imageryDownloaded) {
             m_completedTiles++;
@@ -133,99 +133,45 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
             return;
         }
 
-        // Save raw DEM data
         QByteArray data = reply->readAll();
         const int res = m_store->exportSettings().heightmapResolution;
 
-        // Try to parse AAIGrid format (ASCII ArcGrid)
-        QString text = QString::fromLatin1(data);
-        QStringList lines = text.split('\n', Qt::SkipEmptyParts);
+        // Determine source name for auto-detection
+        QString sourceName;
+        auto demSrc = m_store->exportSettings().demSource;
+        if (demSrc == terrain::DemSource::AWS_Terrarium ||
+            demSrc == terrain::DemSource::Mapzen_Terrarium)
+            sourceName = "terrarium";
+        else if (demSrc == terrain::DemSource::Mapbox_TerrainRGB)
+            sourceName = "mapbox-terrain";
+        else
+            sourceName = "dem";
 
-        QImage img(res, res, QImage::Format_Grayscale16);
-        img.fill(0);
+        // Decode DEM data using DemDecoder (QGIS-style auto-detection)
+        terrain::DemTile demTile = terrain::DemDecoder::decodeAuto(data, sourceName);
 
-        bool parsed = false;
-        if (lines.size() > 6) {
-            int ncols = 0, nrows = 0;
-            double xllcorner = 0, yllcorner = 0, cellsize = 1;
-            double nodata = -9999;
-            int headerLines = 0;
-            for (int i = 0; i < lines.size() && headerLines < 6; ++i) {
-                QString line = lines[i].trimmed().toLower();
-                if (line.startsWith("ncols")) { ncols = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toInt(); headerLines++; }
-                else if (line.startsWith("nrows")) { nrows = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toInt(); headerLines++; }
-                else if (line.startsWith("xllcorner") || line.startsWith("xll")) { xllcorner = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toDouble(); headerLines++; }
-                else if (line.startsWith("yllcorner") || line.startsWith("yll")) { yllcorner = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toDouble(); headerLines++; }
-                else if (line.startsWith("cellsize")) { cellsize = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toDouble(); headerLines++; }
-                else if (line.startsWith("nodata_value") || line.startsWith("nodata")) { nodata = line.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)[1].toDouble(); headerLines++; }
-            }
-            if (ncols > 0 && nrows > 0 && headerLines >= 5) {
-                std::vector<double> elevations;
-                elevations.reserve(ncols * nrows);
-                for (int i = headerLines; i < lines.size() && elevations.size() < ncols * nrows; ++i) {
-                    auto vals = lines[i].split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-                    for (const auto& v : vals) {
-                        bool ok;
-                        double e = v.toDouble(&ok);
-                        if (ok) elevations.push_back(e);
-                    }
-                }
-                if (elevations.size() >= ncols * nrows) {
-                    double zMin = std::numeric_limits<double>::max();
-                    double zMax = std::numeric_limits<double>::lowest();
-                    for (double e : elevations) {
-                        if (e != nodata) {
-                            zMin = std::min(zMin, e);
-                            zMax = std::max(zMax, e);
-                        }
-                    }
-                    if (zMax <= zMin) { zMin = 0; zMax = 1; }
-                    double zRange = zMax - zMin;
-                    for (int y = 0; y < res; ++y) {
-                        for (int x = 0; x < res; ++x) {
-                            int srcX = (x * ncols) / res;
-                            int srcY = (y * nrows) / res;
-                            double e = elevations[srcY * ncols + srcX];
-                            if (e == nodata) e = zMin;
-                            quint16 val = static_cast<quint16>(((e - zMin) / zRange) * 65535.0);
-                            img.setPixel(x, y, qRgba64(val, val, val, 65535));
-                        }
-                    }
-                    parsed = true;
-                }
-            }
-        }
-
-        if (!parsed) {
-            QImage tiffImg;
-            if (tiffImg.loadFromData(data)) {
-                img = tiffImg.convertToFormat(QImage::Format_Grayscale16)
-                         .scaled(res, res, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-                parsed = true;
-            }
-        }
-
-        if (!parsed) {
+        if (!demTile.valid) {
+            // Fallback: generate synthetic terrain
+            m_log.warn("Failed to decode DEM data, generating synthetic terrain");
+            std::vector<float> synthElev(res * res, 0.0f);
             for (int y = 0; y < res; ++y) {
                 for (int x = 0; x < res; ++x) {
                     double nx = static_cast<double>(x) / res;
                     double ny = static_cast<double>(y) / res;
-                    double h = 0;
-                    h += std::sin(nx * 6.28 * 4 + tile.bounds.west) * 50;
-                    h += std::cos(ny * 6.28 * 4 + tile.bounds.north) * 50;
-                    h += std::sin((nx + ny) * 6.28 * 8) * 25;
-                    h += 100;
-                    quint16 val = static_cast<quint16>(std::max(0.0, std::min(65535.0, h * 200)));
-                    img.setPixel(x, y, qRgba64(val, val, val, 65535));
+                    double h = std::sin(nx * 6.28 * 4 + tile.bounds.west) * 50 +
+                               std::cos(ny * 6.28 * 4 + tile.bounds.north) * 50 +
+                               std::sin((nx + ny) * 6.28 * 8) * 25 + 100;
+                    synthElev[y * res + x] = static_cast<float>(h);
                 }
             }
+            writeDemOutput(synthElev, res, res, tile, outputPath);
+        } else {
+            // Resample to target resolution (QGIS bilinear interpolation pattern)
+            if (demTile.width != res || demTile.height != res) {
+                demTile = terrain::DemDecoder::resample(demTile, res, res);
+            }
+            writeDemOutput(demTile.elevations, res, res, tile, outputPath);
         }
-
-        img.save(outputPath);
-
-        QString geotiffPath = outputPath;
-        geotiffPath.replace(".png", ".tif");
-        writeGeoTiff(geotiffPath, img, tile.bounds);
 
         m_demDownloaded = true;
         if (m_imageryDownloaded) {
@@ -252,23 +198,41 @@ void ExportEngine::loadLocalDemForTile(const terrain::Tile& tile, const QString&
         return;
     }
 
-    // Load the GeoTIFF/PNG DEM file
+    // Load the GeoTIFF/PNG DEM file using DemDecoder
     QImage srcImg(localPath);
     if (srcImg.isNull()) {
         m_log.warn("Failed to load local DEM: " + localPath);
-        QImage img(res, res, QImage::Format_Grayscale16);
-        img.fill(0);
-        img.save(outputPath);
+        std::vector<float> flatElev(res * res, 0.0f);
+        writeDemOutput(flatElev, res, res, tile, outputPath);
     } else {
-        // Convert to grayscale 16-bit and scale to target resolution
-        QImage gray = srcImg.convertToFormat(QImage::Format_Grayscale16);
-        QImage scaled = gray.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        scaled.save(outputPath);
+        // Decode as GeoTIFF DEM and resample
+        QByteArray imgData;
+        QFile f(localPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            imgData = f.readAll();
+            f.close();
+        }
+        terrain::DemTile demTile = terrain::DemDecoder::decodeGeoTiff(imgData);
+        if (!demTile.valid) {
+            // Fallback: treat as grayscale image
+            demTile.width = srcImg.width();
+            demTile.height = srcImg.height();
+            demTile.elevations.resize(demTile.width * demTile.height);
+            QImage gray = srcImg.convertToFormat(QImage::Format_Grayscale16);
+            for (int y = 0; y < demTile.height; ++y) {
+                for (int x = 0; x < demTile.width; ++x) {
+                    QRgba64 px = gray.pixelColor(x, y).rgba64();
+                    demTile.elevations[y * demTile.width + x] = static_cast<float>(px.red());
+                }
+            }
+            demTile.valid = true;
+        }
 
-        // Also write GeoTIFF version
-        QString geotiffPath = outputPath;
-        geotiffPath.replace(".png", ".tif");
-        writeGeoTiff(geotiffPath, scaled, tile.bounds);
+        // Resample to target resolution
+        if (demTile.width != res || demTile.height != res) {
+            demTile = terrain::DemDecoder::resample(demTile, res, res);
+        }
+        writeDemOutput(demTile.elevations, res, res, tile, outputPath);
     }
 
     m_demDownloaded = true;
@@ -285,7 +249,7 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
     if (localPath.isEmpty() || !QFile::exists(localPath)) {
         QImage img(res, res, QImage::Format_RGB32);
         img.fill(Qt::darkGreen);
-        img.save(outputPath);
+        writeImageryOutput(img, tile, outputPath);
         m_imageryDownloaded = true;
         if (m_demDownloaded) {
             m_completedTiles++;
@@ -299,10 +263,10 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
         m_log.warn("Failed to load local imagery: " + localPath);
         QImage img(res, res, QImage::Format_RGB32);
         img.fill(Qt::darkGreen);
-        img.save(outputPath);
+        writeImageryOutput(img, tile, outputPath);
     } else {
         QImage scaled = srcImg.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        scaled.save(outputPath);
+        writeImageryOutput(scaled, tile, outputPath);
     }
 
     m_imageryDownloaded = true;
@@ -344,7 +308,7 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
                    m_store->exportSettings().albedoResolution,
                    QImage::Format_RGB32);
         img.fill(Qt::darkGreen);
-        img.save(outputPath);
+        writeImageryOutput(img, tile, outputPath);
         m_imageryDownloaded = true;
         if (m_demDownloaded) {
             m_completedTiles++;
@@ -378,13 +342,14 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
                                     Qt::KeepAspectRatioByExpanding,
                                     Qt::SmoothTransformation);
                 }
-                img.save(outputPath);
+                // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
+                writeImageryOutput(img, tile, outputPath);
             } else {
                 QImage placeholder(m_store->exportSettings().albedoResolution,
                                    m_store->exportSettings().albedoResolution,
                                    QImage::Format_RGB32);
                 placeholder.fill(Qt::darkGreen);
-                placeholder.save(outputPath);
+                writeImageryOutput(placeholder, tile, outputPath);
             }
         }
 
@@ -534,6 +499,207 @@ void ExportEngine::writeGeoTiff(const QString& path, const QImage& heightmap,
 
     TIFFClose(tif);
 }
+// ============================================================
+// QGIS-style DEM output — uses RasterWriter for proper GeoTIFF
+// ============================================================
+terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile) const {
+    terrain::RasterExtent ext;
+    ext.west = tile.bounds.west;
+    ext.east = tile.bounds.east;
+    ext.north = tile.bounds.north;
+    ext.south = tile.bounds.south;
+
+    // Map CRS setting to GeoCrsMode
+    auto crs = m_store->exportSettings().crsSource;
+    switch (crs) {
+    case terrain::CrsSource::EPSG_4326:
+        ext.crsMode = terrain::GeoCrsMode::WGS84;
+        break;
+    case terrain::CrsSource::EPSG_3857:
+        ext.crsMode = terrain::GeoCrsMode::WebMercator;
+        break;
+    case terrain::CrsSource::EPSG_32633:
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 32633;
+        break;
+    case terrain::CrsSource::EPSG_32634:
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 32634;
+        break;
+    case terrain::CrsSource::EPSG_32635:
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 32635;
+        break;
+    case terrain::CrsSource::EPSG_25832:
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 25832;
+        break;
+    case terrain::CrsSource::EPSG_25833:
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 25833;
+        break;
+    case terrain::CrsSource::Auto_UTM:
+    default:
+        // Auto: use WGS84 for now (could calculate UTM zone from centroid)
+        ext.crsMode = terrain::GeoCrsMode::WGS84;
+        break;
+    }
+
+    return ext;
+}
+
+void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
+                                   int width, int height,
+                                   const terrain::Tile& tile,
+                                   const QString& outputPath)
+{
+    const auto& settings = m_store->exportSettings();
+    terrain::RasterExtent ext = buildRasterExtent(tile);
+
+    // Compression setting
+    terrain::Compression comp = settings.compressDeflate ?
+        terrain::Compression::Deflate : terrain::Compression::None;
+
+    // Write based on heightmap format (QGIS pattern: choose data type per format)
+    QString geotiffPath = outputPath;
+    geotiffPath.replace(".png", ".tif");
+
+    switch (settings.heightmapFormat) {
+    case terrain::HeightmapFormat::GeoTIFF_Float32:
+        // Full precision elevation — QGIS preferred for DEM
+        RasterWriter::writeFloat32GeoTiff(geotiffPath, elevations,
+            width, height, ext, -9999.0f, comp);
+        break;
+
+    case terrain::HeightmapFormat::GeoTIFF_Int16:
+        {
+            // Convert float elevations to Int16 (meters, clamped)
+            std::vector<int16_t> int16Data(width * height);
+            for (int i = 0; i < width * height; ++i) {
+                float e = elevations[i];
+                int16Data[i] = (e == -9999.0f) ? -9999 :
+                    static_cast<int16_t>(std::max(-32768.0f, std::min(32767.0f, e)));
+            }
+            RasterWriter::writeInt16GeoTiff(geotiffPath, int16Data,
+                width, height, ext, -9999, comp);
+        }
+        break;
+
+    case terrain::HeightmapFormat::GeoTIFF_UInt16:
+        {
+            // Normalize to 0-65535
+            float zMin = std::numeric_limits<float>::max();
+            float zMax = std::numeric_limits<float>::lowest();
+            for (float e : elevations) {
+                if (e != -9999.0f) {
+                    zMin = std::min(zMin, e);
+                    zMax = std::max(zMax, e);
+                }
+            }
+            if (zMax <= zMin) { zMin = 0; zMax = 1; }
+            float zRange = zMax - zMin;
+
+            std::vector<uint16_t> uint16Data(width * height);
+            for (int i = 0; i < width * height; ++i) {
+                float e = elevations[i];
+                if (e == -9999.0f) e = zMin;
+                uint16Data[i] = static_cast<uint16_t>(((e - zMin) / zRange) * 65535.0f);
+            }
+            RasterWriter::writeUInt16GeoTiff(geotiffPath, uint16Data,
+                width, height, ext, 0, comp);
+        }
+        break;
+
+    case terrain::HeightmapFormat::PNG16:
+        {
+            // PNG 16-bit + world file (QGIS layout exporter pattern)
+            float zMin = std::numeric_limits<float>::max();
+            float zMax = std::numeric_limits<float>::lowest();
+            for (float e : elevations) {
+                if (e != -9999.0f) {
+                    zMin = std::min(zMin, e);
+                    zMax = std::max(zMax, e);
+                }
+            }
+            if (zMax <= zMin) { zMin = 0; zMax = 1; }
+            float zRange = zMax - zMin;
+
+            QImage img(width, height, QImage::Format_Grayscale16);
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    float e = elevations[y * width + x];
+                    if (e == -9999.0f) e = zMin;
+                    uint16_t val = static_cast<uint16_t>(((e - zMin) / zRange) * 65535.0f);
+                    img.setPixel(x, y, qRgba64(val, val, val, 65535));
+                }
+            }
+            RasterWriter::writePngWithWorldFile(outputPath, img, ext);
+        }
+        break;
+
+    case terrain::HeightmapFormat::R16:
+        {
+            // Raw R16 binary + world file
+            QString r16Path = outputPath;
+            r16Path.replace(".png", ".r16");
+            QFile r16File(r16Path);
+            if (r16File.open(QIODevice::WriteOnly)) {
+                float zMin = std::numeric_limits<float>::max();
+                float zMax = std::numeric_limits<float>::lowest();
+                for (float e : elevations) {
+                    if (e != -9999.0f) { zMin = std::min(zMin, e); zMax = std::max(zMax, e); }
+                }
+                if (zMax <= zMin) { zMin = 0; zMax = 1; }
+                float zRange = zMax - zMin;
+                for (int y = 0; y < height; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        float e = elevations[y * width + x];
+                        if (e == -9999.0f) e = zMin;
+                        uint16_t val = static_cast<uint16_t>(((e - zMin) / zRange) * 65535.0f);
+                        r16File.write(reinterpret_cast<const char*>(&val), sizeof(uint16_t));
+                    }
+                }
+                r16File.close();
+            }
+            // Write world file for R16
+            RasterWriter::writeWorldFile(r16Path, width, height, ext);
+        }
+        break;
+
+    case terrain::HeightmapFormat::None:
+    default:
+        // No heightmap output (albedo only)
+        break;
+    }
+}
+
+void ExportEngine::writeImageryOutput(const QImage& img,
+                                       const terrain::Tile& tile,
+                                       const QString& outputPath)
+{
+    const auto& settings = m_store->exportSettings();
+    terrain::RasterExtent ext = buildRasterExtent(tile);
+
+    switch (settings.albedoFormat) {
+    case terrain::AlbedoFormat::GeoTIFF_RGB:
+        {
+            // RGB GeoTIFF with proper geo-referencing (QGIS pattern)
+            terrain::Compression comp = settings.compressDeflate ?
+                terrain::Compression::Deflate : terrain::Compression::None;
+            QString geotiffPath = outputPath;
+            geotiffPath.replace(".png", ".tif");
+            RasterWriter::writeRgbGeoTiff(geotiffPath, img, ext, comp);
+        }
+        break;
+
+    case terrain::AlbedoFormat::PNG:
+    default:
+        // PNG + world file (QGIS layout exporter pattern)
+        RasterWriter::writePngWithWorldFile(outputPath, img, ext);
+        break;
+    }
+}
+
 void ExportEngine::writeManifest(const QString& dir) {
     QJsonObject manifest;
     manifest["version"] = "1.0";

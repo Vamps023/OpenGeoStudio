@@ -11,11 +11,13 @@
 //
 
 #include "TerrainStore.hpp"
+#include "RasterWriter.hpp"
 #include "../../core/logger/Logger.hpp"
 
 #include <QObject>
 #include <QString>
 #include <QNetworkAccessManager>
+#include <vector>
 
 class ExportEngine : public QObject {
     Q_OBJECT
@@ -39,7 +41,21 @@ private:
                       const terrain::GeoBounds& bounds);
     void processNextTile();
 
-    // GeoTIFF writing using libtiff
+    // QGIS-style DEM output using RasterWriter
+    void writeDemOutput(const std::vector<float>& elevations,
+                        int width, int height,
+                        const terrain::Tile& tile,
+                        const QString& outputPath);
+
+    // QGIS-style imagery output using RasterWriter
+    void writeImageryOutput(const QImage& img,
+                            const terrain::Tile& tile,
+                            const QString& outputPath);
+
+    // Build RasterExtent from tile bounds and CRS settings
+    terrain::RasterExtent buildRasterExtent(const terrain::Tile& tile) const;
+
+    // GeoTIFF writing using libtiff (legacy, kept for compatibility)
     bool writeGeoTiffHeightmap(const QString& path, const QImage& img,
                                double north, double south, double east, double west);
     bool writeGeoTiffRgb(const QString& path, const QImage& img,
