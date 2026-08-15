@@ -1,21 +1,12 @@
-Update 3D Studio to use O3DE SDK project and pre-built editor
+Fix O3DE Editor launch — add --project-path argument
 
-O3DE project at D:/git/OpenGeoStudio3D-SDK is now built against
-the pre-built SDK at C:/O3DE/26.05 (not from source).
+O3DE Editor requires --project-path <path> argument to know which
+project to open. Previously the path was passed as a bare argument
+which the editor didn't recognize, causing it to exit immediately
+with code 2.
 
-Built successfully:
-  - OpenGeoStudio3D.GameLauncher.exe
-  - OpenGeoStudio3D.UnifiedLauncher.exe
-  - OpenGeoStudio3D.ServerLauncher.exe
-  - OpenGeoStudio3D.HeadlessServerLauncher.exe
+Fix:
+  Before: Editor.exe D:/git/OpenGeoStudio3D-SDK
+  After:  Editor.exe --project-path D:/git/OpenGeoStudio3D-SDK
 
-Studio3DWidget updated:
-  - Editor detection: checks C:/O3DE/26.05/bin/Windows/profile/Default/Editor.exe
-    (pre-built SDK) first, then falls back to from-source builds
-  - Launcher detection: checks D:/git/OpenGeoStudio3D-SDK/build/ first
-  - Default project path: D:/git/OpenGeoStudio3D-SDK (was OpenGeoStudio3D)
-
-Note: VS 2026 (v18) is installed but its STL is incompatible with
-the VS 2022 compiler that CMake's cache uses. O3DE project builds
-with VS 2022 BuildTools (MSVC 14.44). VS 2026 can be used after
-reconfiguring CMake from scratch.
+Also updated placeholder text to show the correct SDK project path.

@@ -76,7 +76,7 @@ void Studio3DWidget::setupUI() {
 
     configLayout->addWidget(new QLabel("Project path:", configGroup), 0, 0);
     m_projectPathEdit = new QLineEdit(configGroup);
-    m_projectPathEdit->setPlaceholderText("D:/git/OpenGeoStudio3D");
+    m_projectPathEdit->setPlaceholderText("D:/git/OpenGeoStudio3D-SDK");
     configLayout->addWidget(m_projectPathEdit, 0, 1);
     m_browseProjectBtn = new QPushButton("Browse...", configGroup);
     configLayout->addWidget(m_browseProjectBtn, 0, 2);
@@ -256,8 +256,9 @@ void Studio3DWidget::onLaunchEditor() {
     m_launchEditorBtn->setEnabled(false);
 
     // Launch O3DE Editor with the project
+    // O3DE Editor requires --project-path argument
     QStringList args;
-    args << projectPath;
+    args << "--project-path" << projectPath;
     m_o3deProcess->start(editorPath, args);
 }
 
