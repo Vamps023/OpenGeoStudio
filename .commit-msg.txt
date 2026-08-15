@@ -1,10 +1,19 @@
-Fix OGRE DLL deployment — copy to exe folder, use appDir paths
+Fix 3D Studio crash — OGRE-Next cameras don't attach to SceneNodes
 
-OGRE DLLs were in deploy/ogre/ subfolder but Windows looks for
-them in the same folder as the exe. Now copies all OGRE DLLs
-directly to the deploy root. Also updated OgreWidget to use
-QCoreApplication::applicationDirPath() for plugins.cfg and
-Hlms shader paths instead of hardcoded build directory.
+OGRE-Next 4.0 changed the camera API. Cameras are no longer
+MovableObjects that get attached to SceneNodes. Instead, you
+set position/lookAt directly on the camera.
+
+The crash was:
+  OGRE EXCEPTION(2:InvalidParametersException):
+  Object already attached to a SceneNode or a Bone
+  in SceneNode::attachObject
+
+Fix:
+  - Removed m_cameraNode and attachObject(m_camera)
+  - Use m_camera->setPosition() and m_camera->lookAt() directly
+  - Updated resetCamera() to use camera directly
+  - Removed m_cameraNode from header
 
 Generated with [Devin](https://devin.ai)
 

@@ -62,7 +62,6 @@ private:
     Ogre::SceneManager* m_sceneManager = nullptr;
     Ogre::Camera* m_camera = nullptr;
     Ogre::Window* m_renderWindow = nullptr;
-    Ogre::SceneNode* m_cameraNode = nullptr;
 
     // Terrain
     Ogre::Terra* m_terra = nullptr;

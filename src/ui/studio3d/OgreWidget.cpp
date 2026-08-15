@@ -129,16 +129,13 @@ void OgreWidget::initOgre()
     // Create scene manager
     m_sceneManager = m_root->createSceneManager(Ogre::ST_GENERIC, 2);
 
-    // Create camera
+    // Create camera (OGRE-Next 4.0: cameras are NOT attached to SceneNodes)
     m_camera = m_sceneManager->createCamera("MainCamera");
     m_camera->setNearClipDistance(0.5f);
     m_camera->setFarClipDistance(50000.0f);
-    m_camera->setAspectRatio(Ogre::Real(width()) / Ogre::Real(height()));
-
-    m_cameraNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
-    m_cameraNode->attachObject(m_camera);
-    m_cameraNode->setPosition(0, 300, 500);
-    m_cameraNode->lookAt(Ogre::Vector3(0, 0, 0), Ogre::Node::TS_WORLD);
+    m_camera->setAutoAspectRatio(true);
+    m_camera->setPosition(Ogre::Vector3(0, 300, 500));
+    m_camera->lookAt(Ogre::Vector3(0, 0, 0));
 
     // Setup compositor (replaces Viewport in OGRE-Next)
     Ogre::CompositorManager2* compositorManager = m_root->getCompositorManager2();
@@ -281,7 +278,7 @@ void OgreWidget::resetCamera()
     m_camTargetY = 0;
     m_camTargetZ = 0;
 
-    if (m_cameraNode) {
+    if (m_camera) {
         float yawRad = Ogre::Degree(m_camYaw).valueRadians();
         float pitchRad = Ogre::Degree(m_camPitch).valueRadians();
 
@@ -289,9 +286,8 @@ void OgreWidget::resetCamera()
         float y = m_camTargetY + m_camDist * sin(-pitchRad);
         float z = m_camTargetZ + m_camDist * cos(pitchRad) * cos(yawRad);
 
-        m_cameraNode->setPosition(x, y, z);
-        m_cameraNode->lookAt(Ogre::Vector3(m_camTargetX, m_camTargetY, m_camTargetZ),
-                              Ogre::Node::TS_WORLD);
+        m_camera->setPosition(Ogre::Vector3(x, y, z));
+        m_camera->lookAt(Ogre::Vector3(m_camTargetX, m_camTargetY, m_camTargetZ));
     }
 }
 
