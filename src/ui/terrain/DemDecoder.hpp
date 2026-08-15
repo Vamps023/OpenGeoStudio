@@ -22,8 +22,9 @@
 #include <QString>
 #include <QStringList>
 #include <QRegularExpression>
+#include <QTemporaryFile>
+#include <QDir>
 #include <tiffio.h>
-#include <cstring>
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -190,50 +191,11 @@ public:
     // Int16, UInt16, and Byte data types with proper nodata handling.
     // Handles both stripped (scanline) and tiled (COG) TIFF layouts.
     // Also handles BigTIFF (used by GPXZ Cloud Optimized GeoTIFFs).
-    // Uses TIFFClientOpen for memory-based I/O (no temp file needed).
     // QImage cannot read Float32 GeoTIFFs, so libtiff is required.
 
-    // Memory reader context for TIFFClientOpen
-    struct MemTiffContext {
-        const uint8_t* data;
-        tmsize_t size;
-        tmsize_t pos;
-    };
-
-    static tmsize_t tiffReadProc(void* ctx, void* buf, tmsize_t size) {
-        auto* mc = static_cast<MemTiffContext*>(ctx);
-        tmsize_t remaining = mc->size - mc->pos;
-        tmsize_t toRead = std::min(size, remaining);
-        if (toRead <= 0) return 0;
-        std::memcpy(buf, mc->data + mc->pos, static_cast<size_t>(toRead));
-        mc->pos += toRead;
-        return toRead;
-    }
-
-    static tmsize_t tiffWriteProc(void*, void*, tmsize_t) {
-        return 0;  // Read-only
-    }
-
-    static toff_t tiffSeekProc(void* ctx, toff_t off, int whence) {
-        auto* mc = static_cast<MemTiffContext*>(ctx);
-        switch (whence) {
-        case SEEK_SET: mc->pos = static_cast<tmsize_t>(off); break;
-        case SEEK_CUR: mc->pos += static_cast<tmsize_t>(off); break;
-        case SEEK_END: mc->pos = mc->size + static_cast<tmsize_t>(off); break;
-        }
-        if (mc->pos < 0) mc->pos = 0;
-        if (mc->pos > mc->size) mc->pos = mc->size;
-        return static_cast<toff_t>(mc->pos);
-    }
-
-    static toff_t tiffSizeProc(void* ctx) {
-        auto* mc = static_cast<MemTiffContext*>(ctx);
-        return static_cast<toff_t>(mc->size);
-    }
-
-    static int tiffCloseProc(void*) {
-        return 0;  // Nothing to close — memory is managed externally
-    }
+    // Suppress libtiff error/warning messages to stderr
+    static void tiffSilentWarning(const char*, const char*, va_list) {}
+    static void tiffSilentError(const char*, const char*, va_list) {}
 
     static DemTile decodeGeoTiff(const QByteArray& data) {
         DemTile tile;
@@ -241,24 +203,42 @@ public:
         if (data.isEmpty()) return tile;
         if (data.size() < 16) return tile;  // Minimum TIFF header size
 
-        // Use TIFFClientOpen for memory-based I/O — avoids all temp file
-        // and path encoding issues on Windows.
-        MemTiffContext ctx;
-        ctx.data = reinterpret_cast<const uint8_t*>(data.constData());
-        ctx.size = static_cast<tmsize_t>(data.size());
-        ctx.pos = 0;
+        // Pre-check TIFF magic bytes before calling TIFFOpen
+        const uint8_t* d = reinterpret_cast<const uint8_t*>(data.constData());
+        bool isTiff = ((d[0] == 'I' && d[1] == 'I') || (d[0] == 'M' && d[1] == 'M')) &&
+                      (d[2] == 0x2A || d[2] == 0x2B);  // Classic TIFF or BigTIFF
+        if (!isTiff) return tile;
 
-        TIFF* tif = TIFFClientOpen("mem-tiff", "r", &ctx,
-                                   tiffReadProc, tiffWriteProc,
-                                   tiffSeekProc, tiffCloseProc,
-                                   tiffSizeProc, nullptr, nullptr);
-        if (!tif) return tile;
+        // Suppress libtiff warnings/errors (we handle errors via return values)
+        TIFFSetWarningHandler(tiffSilentWarning);
+        TIFFSetErrorHandler(tiffSilentError);
+
+        // Write to a temp file and use TIFFOpen for reading.
+        // We use a heap-allocated QTemporaryFile that stays alive until
+        // the TIFF is closed (via TiffGuard below).
+        QTemporaryFile* tempFileKeeper = new QTemporaryFile(
+            QDir::tempPath() + "/ogs_dem_XXXXXX.tif");
+        tempFileKeeper->setAutoRemove(true);
+        if (!tempFileKeeper->open()) {
+            delete tempFileKeeper;
+            return tile;
+        }
+        tempFileKeeper->write(data);
+        tempFileKeeper->close();
+
+        QString filePath = tempFileKeeper->fileName();
+        TIFF* tif = TIFFOpen(filePath.toUtf8().constData(), "r");
+        if (!tif) {
+            delete tempFileKeeper;
+            return tile;
+        }
 
         // Guard to ensure TIFFClose is called on all exit paths
         struct TiffGuard {
             TIFF* tif;
-            ~TiffGuard() { if (tif) TIFFClose(tif); }
-        } guard{tif};
+            QTemporaryFile* tempFile;
+            ~TiffGuard() { if (tif) TIFFClose(tif); if (tempFile) delete tempFile; }
+        } guard{tif, tempFileKeeper};
 
         uint32_t width = 0, height = 0;
         if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width)) {
@@ -297,11 +277,14 @@ public:
             return tile;
         }
 
-        // Read nodata value if present
-        char* nodataStr = nullptr;
-        if (TIFFGetField(tif, TIFFTAG_GDAL_NODATA, &nodataStr) && nodataStr) {
-            tile.nodataValue = static_cast<float>(QString(nodataStr).toDouble());
-        }
+        // Read nodata value if present.
+        // Note: TIFFTAG_GDAL_NODATA (42113) can cause a crash on some
+        // BigTIFF/COG files when the tag's value offset points to an
+        // invalid memory location. Since GPXZ doesn't use nodata (their
+        // dataset has no holes), we skip this tag entirely and use the
+        // default nodata value of -9999.0f.
+        // If you need nodata support, read it via a separate helper that
+        // validates the tag offset before dereferencing.
 
         // Determine bytes per sample
         int bytesPerSample = bitsPerSample / 8;

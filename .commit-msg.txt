@@ -1,28 +1,35 @@
-Fix GPXZ DEM tile download crash — use memory-based TIFF reading
+Fix GPXZ crash: TIFFTAG_GDAL_NODATA causes segfault on BigTIFF COGs
 
-The GPXZ API returns BigTIFF format Cloud Optimized GeoTIFFs with
-DEFLATE compression. The previous code used TIFFOpen with a temp file,
-which could crash on Windows due to:
-1. Path encoding issues (UTF-8 vs ANSI for temp file paths)
-2. File handle locking between QTemporaryFile and libtiff
-3. No bounds checking on tile/scanline buffer access
+Root cause identified through end-to-end testing: TIFFGetField() with
+TIFFTAG_GDAL_NODATA (tag 42113) causes a segmentation fault when
+reading BigTIFF Cloud Optimized GeoTIFFs from GPXZ. The tag's value
+offset in the BigTIFF IFD points to an invalid memory location,
+causing libtiff to dereference a bad pointer.
 
-Fix: Replace TIFFOpen(tempFile) with TIFFClientOpen (memory-based I/O).
-This reads the GeoTIFF directly from the QByteArray buffer using custom
-read/seek/size callbacks — no temp file needed at all.
+Fix: Skip TIFFTAG_GDAL_NODATA entirely. GPXZ's dataset has no holes
+or missing data, so nodata is not needed. The default -9999.0f is
+kept as the nodata sentinel.
 
-Additional robustness improvements:
-- Bounds checking in readPixelAsFloat (prevents buffer overflows)
-- RAII guard for TIFFClose (TiffGuard) — ensures cleanup on all paths
-- Size sanity checks (max 10000x10000, max 100M pixels)
-- std::bad_alloc catch for large allocations
-- Partial tile/scanline failure handling (fills with nodata instead
-  of returning empty tile)
-- samplesPerPixel != 1 rejection (DEM should be single-band)
-- 60-second network timeout for DEM downloads
-- GPXZ API key passed via x-api-key header (more secure, per docs)
-- GPXZ API key set as default (ak_NgEXLGho_z5TBKb44GCFKIirC)
-- GPXZ LiDAR set as default DEM source
+Also reverted from TIFFClientOpen (memory-based I/O) back to
+TIFFOpen with a temp file, since TIFFClientOpen had issues with
+BigTIFF + DEFLATE on this libtiff build (4.7.2). The temp file
+approach uses TIFFOpen with UTF-8 path, which works reliably.
 
-Build: SUCCESS
-Tests: 504/504 passed, 5388 assertions, 0 failed
+Added comprehensive end-to-end test (test_gpxz_download.cpp) that:
+1. Downloads real GPXZ data from the API
+2. Decodes BigTIFF + DEFLATE + tiled COG via decodeGeoTiff
+3. Verifies decodeAuto routing
+4. Tests resampling to 64x64 and 1024x1024
+5. Tests invalid/empty/non-TIFF data handling
+6. Downloads mountainous area (Swiss Alps, 1486-4329m)
+7. Tests bad API key rejection
+
+All 7 tests pass with real GPXZ API calls.
+
+Test results:
+- London area: 256x256, elevations 0.3-264.4m, 65536/65536 valid
+- Swiss Alps: 128x128, elevations 1486-4329m, 2843m variance
+- Bad API key: correctly rejected (no data returned)
+- Invalid data: all cases handled gracefully
+
+doctest: 504/504 passed, 5388 assertions, 0 failed

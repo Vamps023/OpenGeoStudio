@@ -446,6 +446,24 @@ if(BUILD_TESTS)
     add_test(NAME geometry_segment_tests
         COMMAND geometry_segment_tests
     )
+
+    # ─── GPXZ DEM download + decode end-to-end test ───────────
+    add_executable(test_gpxz_download
+        src/ui/terrain/test_gpxz_download.cpp
+    )
+    set_target_properties(test_gpxz_download PROPERTIES AUTOMOC ON)
+    target_include_directories(test_gpxz_download PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
+    )
+    target_link_libraries(test_gpxz_download PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Network
+        TIFF::TIFF
+    )
+    if(MSVC)
+        target_compile_options(test_gpxz_download PRIVATE /EHa /bigobj)
+    endif()
 endif()
 
 # ─── Print Configuration Summary ─────────────────────────────
