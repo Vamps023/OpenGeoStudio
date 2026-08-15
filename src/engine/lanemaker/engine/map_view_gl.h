@@ -195,6 +195,22 @@ namespace LM
         QOpenGLVertexArrayObject m_bgQuadVao;
         bool m_texturedShaderInit = false;
 
+        // Sky gradient shader for 3D mode background
+        QOpenGLShaderProgram m_skyShader;
+        QOpenGLBuffer m_skyVbo;
+        QOpenGLVertexArrayObject m_skyVao;
+        bool m_skyShaderInit = false;
+        void drawSkyGradient();
+
+        // Ground grid for 3D spatial reference
+        QOpenGLShaderProgram m_gridShader;
+        QOpenGLBuffer m_gridVbo;
+        QOpenGLVertexArrayObject m_gridVao;
+        bool m_gridShaderInit = false;
+        int m_gridShaderUniformLoc = -1;
+        int m_gridColorLoc = -1;
+        void drawGroundGrid();
+
         void initTexturedShader();
         void drawMapBackground();
         void requestTile(int z, int x, int y);

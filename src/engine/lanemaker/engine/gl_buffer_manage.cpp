@@ -3,9 +3,19 @@
 #include "road.h"
 
 #include <QOpenGLShaderProgram>
+#include <QVector3D>
 
 namespace LM
 {
+    // Compute face normal from three vertices (counter-clockwise winding)
+    static QVector3D computeFaceNormal(const QVector3D& v0, const QVector3D& v1, const QVector3D& v2) {
+        QVector3D edge1 = v1 - v0;
+        QVector3D edge2 = v2 - v0;
+        QVector3D normal = QVector3D::crossProduct(edge1, edge2);
+        normal.normalize();
+        return normal;
+    }
+
     GLBufferManage::GLBufferManage(unsigned int capacity):
         m_vertexBufferData(capacity),
         m_vbo(QOpenGLBuffer::VertexBuffer),
@@ -13,6 +23,11 @@ namespace LM
     {
         shader.m_uniformNames.append("worldToView");
         shader.m_uniformNames.append("objectInfo");
+        shader.m_uniformNames.append("cameraPos");
+        shader.m_uniformNames.append("lightDir");
+        shader.m_uniformNames.append("lightColor");
+        shader.m_uniformNames.append("ambientColor");
+        shader.m_uniformNames.append("viewMode3D");
         m_vertexBufferCount = 0;
     }
 
@@ -34,10 +49,15 @@ namespace LM
         auto shaderProgramm = shader.shaderProgram();
         shaderProgramm->enableAttributeArray(0);
         shaderProgramm->setAttributeBuffer(0, GL_FLOAT, 0, 3, sizeof(Vertex));
-        shaderProgramm->enableAttributeArray(1); // array with index/id 1
-        shaderProgramm->setAttributeBuffer(1, GL_FLOAT, offsetof(Vertex, r), 3, sizeof(Vertex));
+        // attribute 1 = normals (for PBR lighting)
+        shaderProgramm->enableAttributeArray(1);
+        shaderProgramm->setAttributeBuffer(1, GL_FLOAT, offsetof(Vertex, nx), 3, sizeof(Vertex));
+        // attribute 2 = color
         shaderProgramm->enableAttributeArray(2);
-        shaderProgramm->setAttributeBuffer(2, GL_FLOAT, offsetof(Vertex, objectID), 1, sizeof(Vertex));
+        shaderProgramm->setAttributeBuffer(2, GL_FLOAT, offsetof(Vertex, r), 3, sizeof(Vertex));
+        // attribute 3 = objectID
+        shaderProgramm->enableAttributeArray(3);
+        shaderProgramm->setAttributeBuffer(3, GL_FLOAT, offsetof(Vertex, objectID), 1, sizeof(Vertex));
 
         m_objectInfo = std::make_unique<QOpenGLTexture>(QOpenGLTexture::Target1D);
         m_objectInfo->setData(QImage(MaxObjectID, 1, QImage::Format_Grayscale8));
@@ -82,24 +102,33 @@ namespace LM
             auto l0 = lBorder[i], l1 = lBorder[i + 1];
             auto r0 = rBorder[i], r1 = rBorder[i + 1];
 
+            QVector3D p_l0(l0[0], l0[1], l0[2]);
+            QVector3D p_l1(l1[0], l1[1], l1[2]);
+            QVector3D p_r0(r0[0], r0[1], r0[2]);
+            QVector3D p_r1(r1[0], r1[1], r1[2]);
+
+            // Triangle 1: l0, r0, l1
+            QVector3D n1 = computeFaceNormal(p_l0, p_r0, p_l1);
             auto v11 = m_vertexBufferCount++;
-            m_vertexBufferData[v11] = Vertex(QVector3D(l0[0], l0[1], l0[2]), color, gid, objectID);
+            m_vertexBufferData[v11] = Vertex(p_l0, n1, color, gid, objectID);
             vids.emplace(v11);
             auto v12 = m_vertexBufferCount++;
-            m_vertexBufferData[v12] = Vertex(QVector3D(r0[0], r0[1], r0[2]), color, gid, objectID);
+            m_vertexBufferData[v12] = Vertex(p_r0, n1, color, gid, objectID);
             vids.emplace(v12);
             auto v13 = m_vertexBufferCount++;
-            m_vertexBufferData[v13] = Vertex(QVector3D(l1[0], l1[1], l1[2]), color, gid, objectID);
+            m_vertexBufferData[v13] = Vertex(p_l1, n1, color, gid, objectID);
             vids.emplace(v13);
 
+            // Triangle 2: l1, r0, r1
+            QVector3D n2 = computeFaceNormal(p_l1, p_r0, p_r1);
             auto v21 = m_vertexBufferCount++;
-            m_vertexBufferData[v21] = Vertex(QVector3D(l1[0], l1[1], l1[2]), color, gid, objectID);
+            m_vertexBufferData[v21] = Vertex(p_l1, n2, color, gid, objectID);
             vids.emplace(v21);
             auto v22 = m_vertexBufferCount++;
-            m_vertexBufferData[v22] = Vertex(QVector3D(r0[0], r0[1], r0[2]), color, gid, objectID);
+            m_vertexBufferData[v22] = Vertex(p_r0, n2, color, gid, objectID);
             vids.emplace(v22);
             auto v23 = m_vertexBufferCount++;
-            m_vertexBufferData[v23] = Vertex(QVector3D(r1[0], r1[1], r1[2]), color, gid, objectID);
+            m_vertexBufferData[v23] = Vertex(p_r1, n2, color, gid, objectID);
             vids.emplace(v23);
         }
         auto ptr_v = m_vbo.mapRange(vertexBufferChangeBegin * sizeof(Vertex),
@@ -136,19 +165,25 @@ namespace LM
         for (auto tri : newTriangles)
         {
             auto p1 = boundary[std::get<0>(tri)];
+            auto p2 = boundary[std::get<1>(tri)];
+            auto p3 = boundary[std::get<2>(tri)];
+
+            QVector3D vp1(p1[0], p1[1], p1[2]);
+            QVector3D vp2(p2[0], p2[1], p2[2]);
+            QVector3D vp3(p3[0], p3[1], p3[2]);
+            QVector3D normal = computeFaceNormal(vp1, vp2, vp3);
+
             auto v1 = m_vertexBufferCount++;
             vids.emplace(v1);
-            m_vertexBufferData[v1] = Vertex(QVector3D(p1[0], p1[1], p1[2]), color, gid, objectID);
+            m_vertexBufferData[v1] = Vertex(vp1, normal, color, gid, objectID);
 
-            auto p2 = boundary[std::get<1>(tri)];
             auto v2 = m_vertexBufferCount++;
             vids.emplace(v2);
-            m_vertexBufferData[v2] = Vertex(QVector3D(p2[0], p2[1], p2[2]), color, gid, objectID);
+            m_vertexBufferData[v2] = Vertex(vp2, normal, color, gid, objectID);
 
-            auto p3 = boundary[std::get<2>(tri)];
             auto v3 = m_vertexBufferCount++;
             vids.emplace(v3);
-            m_vertexBufferData[v3] = Vertex(QVector3D(p3[0], p3[1], p3[2]), color, gid, objectID);
+            m_vertexBufferData[v3] = Vertex(vp3, normal, color, gid, objectID);
         }
 
         auto ptr_v = m_vbo.mapRange(vertexBufferChangeBegin * sizeof(Vertex),
@@ -185,31 +220,42 @@ namespace LM
         for (auto tri : capTriangles)
         {
             auto p1 = boundary[std::get<0>(tri)];
+            auto p2 = boundary[std::get<1>(tri)];
+            auto p3 = boundary[std::get<2>(tri)];
+
+            QVector3D vp1(p1[0], p1[1], p1[2]);
+            QVector3D vp2(p2[0], p2[1], p2[2]);
+            QVector3D vp3(p3[0], p3[1], p3[2]);
+            QVector3D nBottom = computeFaceNormal(vp1, vp2, vp3);
+            QVector3D nTop(-nBottom.x(), -nBottom.y(), -nBottom.z()); // flipped for top
+
             auto v1 = m_vertexBufferCount++;
             vids.emplace(v1);
-            m_vertexBufferData[v1] = Vertex(QVector3D(p1[0], p1[1], p1[2]), color, gid, objectID);
+            m_vertexBufferData[v1] = Vertex(vp1, nBottom, color, gid, objectID);
 
-            auto p2 = boundary[std::get<1>(tri)];
             auto v2 = m_vertexBufferCount++;
             vids.emplace(v2);
-            m_vertexBufferData[v2] = Vertex(QVector3D(p2[0], p2[1], p2[2]), color, gid, objectID);
+            m_vertexBufferData[v2] = Vertex(vp2, nBottom, color, gid, objectID);
 
-            auto p3 = boundary[std::get<2>(tri)];
             auto v3 = m_vertexBufferCount++;
             vids.emplace(v3);
-            m_vertexBufferData[v3] = Vertex(QVector3D(p3[0], p3[1], p3[2]), color, gid, objectID);
+            m_vertexBufferData[v3] = Vertex(vp3, nBottom, color, gid, objectID);
+
+            QVector3D vp1h(p1[0], p1[1], p1[2] + h);
+            QVector3D vp2h(p2[0], p2[1], p2[2] + h);
+            QVector3D vp3h(p3[0], p3[1], p3[2] + h);
 
             auto v1h = m_vertexBufferCount++;
             vids.emplace(v1h);
-            m_vertexBufferData[v1h] = Vertex(QVector3D(p1[0], p1[1], p1[2] + h), color, gid, objectID);
+            m_vertexBufferData[v1h] = Vertex(vp1h, nTop, color, gid, objectID);
 
             auto v2h = m_vertexBufferCount++;
             vids.emplace(v2h);
-            m_vertexBufferData[v2h] = Vertex(QVector3D(p2[0], p2[1], p2[2] + h), color, gid, objectID);
+            m_vertexBufferData[v2h] = Vertex(vp2h, nTop, color, gid, objectID);
 
             auto v3h = m_vertexBufferCount++;
             vids.emplace(v3h);
-            m_vertexBufferData[v3h] = Vertex(QVector3D(p3[0], p3[1], p3[2] + h), color, gid, objectID);
+            m_vertexBufferData[v3h] = Vertex(vp3h, nTop, color, gid, objectID);
         }
 
         // side
@@ -220,29 +266,38 @@ namespace LM
             auto p3 = odr::Vec3D{ p1[0], p1[1], p1[2] + h };
             auto p4 = odr::Vec3D{ p2[0], p2[1], p2[2] + h };
 
+            QVector3D vp1(p1[0], p1[1], p1[2]);
+            QVector3D vp2(p2[0], p2[1], p2[2]);
+            QVector3D vp3(p3[0], p3[1], p3[2]);
+            QVector3D vp4(p4[0], p4[1], p4[2]);
+
+            QVector3D nSide = computeFaceNormal(vp1, vp2, vp3);
+
             auto v1 = m_vertexBufferCount++;
             vids.emplace(v1);
-            m_vertexBufferData[v1] = Vertex(QVector3D(p1[0], p1[1], p1[2]), color, gid, objectID);
+            m_vertexBufferData[v1] = Vertex(vp1, nSide, color, gid, objectID);
 
             auto v2 = m_vertexBufferCount++;
             vids.emplace(v2);
-            m_vertexBufferData[v2] = Vertex(QVector3D(p2[0], p2[1], p2[2]), color, gid, objectID);
+            m_vertexBufferData[v2] = Vertex(vp2, nSide, color, gid, objectID);
 
             auto v3 = m_vertexBufferCount++;
             vids.emplace(v3);
-            m_vertexBufferData[v3] = Vertex(QVector3D(p3[0], p3[1], p3[2]), color, gid, objectID);
+            m_vertexBufferData[v3] = Vertex(vp3, nSide, color, gid, objectID);
+
+            QVector3D nSide2 = computeFaceNormal(vp3, vp2, vp4);
 
             auto v1_1 = m_vertexBufferCount++;
             vids.emplace(v1_1);
-            m_vertexBufferData[v1_1] = Vertex(QVector3D(p3[0], p3[1], p3[2]), color, gid, objectID);
+            m_vertexBufferData[v1_1] = Vertex(vp3, nSide2, color, gid, objectID);
 
             auto v2_1 = m_vertexBufferCount++;
             vids.emplace(v2_1);
-            m_vertexBufferData[v2_1] = Vertex(QVector3D(p2[0], p2[1], p2[2]), color, gid, objectID);
+            m_vertexBufferData[v2_1] = Vertex(vp2, nSide2, color, gid, objectID);
 
             auto v3_1 = m_vertexBufferCount++;
             vids.emplace(v3_1);
-            m_vertexBufferData[v3_1] = Vertex(QVector3D(p4[0], p4[1], p4[2]), color, gid, objectID);
+            m_vertexBufferData[v3_1] = Vertex(vp4, nSide2, color, gid, objectID);
         }
 
         auto ptr_v = m_vbo.mapRange(vertexBufferChangeBegin * sizeof(Vertex),
@@ -346,6 +401,14 @@ namespace LM
         auto shaderProgramm = shader.shaderProgram();
         shaderProgramm->bind();
         shaderProgramm->setUniformValue(shader.m_uniformIDs[0], worldToView);
+        // Lighting uniforms (indices 2-6: cameraPos, lightDir, lightColor, ambientColor, viewMode3D)
+        if (shader.m_uniformIDs.size() > 6) {
+            shaderProgramm->setUniformValue(shader.m_uniformIDs[2], m_cameraPos);
+            shaderProgramm->setUniformValue(shader.m_uniformIDs[3], m_lightDir);
+            shaderProgramm->setUniformValue(shader.m_uniformIDs[4], m_lightColor);
+            shaderProgramm->setUniformValue(shader.m_uniformIDs[5], m_ambientColor);
+            shaderProgramm->setUniformValue(shader.m_uniformIDs[6], m_viewMode3D ? 1 : 0);
+        }
         m_vao.bind();
         m_objectInfo->bind(0);
         glDrawArrays(GL_TRIANGLES, 0, m_vertexBufferCount);

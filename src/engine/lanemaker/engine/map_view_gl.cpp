@@ -704,6 +704,148 @@ namespace LM
         }
     }
 
+    void MapViewGL::drawSkyGradient()
+    {
+        // Draw a fullscreen sky gradient quad (top=zenith blue, bottom=horizon warm)
+        // Uses a simple shader with no depth testing
+        if (!m_skyShaderInit) {
+            m_skyShaderInit = true;
+            m_skyShader.addShaderFromSourceCode(QOpenGLShader::Vertex,
+                R"(#version 330 core
+                layout(location = 0) in vec2 aPos;
+                out vec2 vScreenPos;
+                void main() {
+                    vScreenPos = aPos;
+                    gl_Position = vec4(aPos, 0.999, 1.0);  // far plane
+                })");
+
+            m_skyShader.addShaderFromSourceCode(QOpenGLShader::Fragment,
+                R"(#version 330 core
+                in vec2 vScreenPos;
+                out vec4 FragColor;
+                void main() {
+                    // vScreenPos.y: -1 = bottom, +1 = top
+                    float t = clamp(vScreenPos.y * 0.5 + 0.5, 0.0, 1.0);
+                    // Zenith (top): deep sky blue
+                    vec3 zenith = vec3(0.25, 0.45, 0.75);
+                    // Horizon (bottom): warm haze
+                    vec3 horizon = vec3(0.65, 0.70, 0.78);
+                    // Ground (below horizon): warm earth
+                    vec3 ground = vec3(0.35, 0.32, 0.28);
+                    vec3 color;
+                    if (t > 0.5) {
+                        color = mix(horizon, zenith, smoothstep(0.5, 1.0, t));
+                    } else {
+                        color = mix(ground, horizon, smoothstep(0.0, 0.5, t));
+                    }
+                    FragColor = vec4(color, 1.0);
+                })");
+
+            m_skyShader.link();
+
+            // Fullscreen quad
+            float quad[] = {
+                -1, -1,  1, -1,  1,  1,
+                -1, -1,  1,  1, -1,  1,
+            };
+            m_skyVao.create();
+            m_skyVao.bind();
+            m_skyVbo.create();
+            m_skyVbo.bind();
+            m_skyVbo.allocate(quad, sizeof(quad));
+            m_skyShader.enableAttributeArray(0);
+            m_skyShader.setAttributeBuffer(0, GL_FLOAT, 0, 2, 0);
+            m_skyVbo.release();
+            m_skyVao.release();
+        }
+
+        glDisable(GL_DEPTH_TEST);
+        m_skyShader.bind();
+        m_skyVao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        m_skyVao.release();
+        m_skyShader.release();
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    void MapViewGL::drawGroundGrid()
+    {
+        // Draw a subtle ground grid centered on the camera for spatial reference
+        // Grid is drawn at z=0, extends ±gridSize around camera X/Y
+        if (!m_gridShaderInit) {
+            m_gridShaderInit = true;
+            m_gridShader.addShaderFromSourceCode(QOpenGLShader::Vertex,
+                R"(#version 330 core
+                layout(location = 0) in vec3 aPos;
+                uniform mat4 worldToView;
+                void main() {
+                    gl_Position = worldToView * vec4(aPos, 1.0);
+                })");
+
+            m_gridShader.addShaderFromSourceCode(QOpenGLShader::Fragment,
+                R"(#version 330 core
+                out vec4 FragColor;
+                uniform vec4 gridColor;
+                void main() {
+                    FragColor = gridColor;
+                })");
+
+            m_gridShader.link();
+            m_gridShaderUniformLoc = m_gridShader.uniformLocation("worldToView");
+            m_gridColorLoc = m_gridShader.uniformLocation("gridColor");
+
+            m_gridVao.create();
+            m_gridVao.bind();
+            m_gridVbo.create();
+            m_gridVbo.bind();
+            m_gridVbo.setUsagePattern(QOpenGLBuffer::DynamicDraw);
+            m_gridVbo.allocate(nullptr, 2 * 200 * 3 * sizeof(float));  // max 200 lines
+            m_gridShader.enableAttributeArray(0);
+            m_gridShader.setAttributeBuffer(0, GL_FLOAT, 0, 3, 0);
+            m_gridVbo.release();
+            m_gridVao.release();
+        }
+
+        // Build grid lines centered on camera
+        QVector3D camPos = m_camera.translation();
+        float gridSize = 200.0f;  // total extent
+        float step = 10.0f;       // grid cell size
+        float cx = camPos.x();
+        float cy = camPos.y();
+        float x0 = std::floor((cx - gridSize) / step) * step;
+        float x1 = std::ceil((cx + gridSize) / step) * step;
+        float y0 = std::floor((cy - gridSize) / step) * step;
+        float y1 = std::ceil((cy + gridSize) / step) * step;
+
+        std::vector<float> verts;
+        for (float x = x0; x <= x1; x += step) {
+            verts.push_back(x); verts.push_back(y0); verts.push_back(0);
+            verts.push_back(x); verts.push_back(y1); verts.push_back(0);
+        }
+        for (float y = y0; y <= y1; y += step) {
+            verts.push_back(x0); verts.push_back(y); verts.push_back(0);
+            verts.push_back(x1); verts.push_back(y); verts.push_back(0);
+        }
+
+        m_gridVao.bind();
+        m_gridVbo.bind();
+        m_gridVbo.write(0, verts.data(), verts.size() * sizeof(float));
+
+        m_gridShader.bind();
+        m_gridShader.setUniformValue(m_gridShaderUniformLoc, m_worldToView);
+        // Major grid lines (every 50m) brighter, minor lines subtle
+        m_gridShader.setUniformValue(m_gridColorLoc, QVector4D(0.4f, 0.42f, 0.48f, 0.3f));
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDrawArrays(GL_LINES, 0, verts.size() / 3);
+        glDisable(GL_BLEND);
+
+        m_gridShader.release();
+        m_gridVbo.release();
+        m_gridVao.release();
+    }
+
     void MapViewGL::paintGL()
     {
         // Prevent recursive paintGL calls (Qt 6 may trigger reinitialization)
@@ -731,6 +873,14 @@ namespace LM
             glClearColor(0.09f, 0.09f, 0.11f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            // 2D mode — disable 3D lighting
+            permanentBuffer->m_viewMode3D = false;
+            temporaryBuffer->m_viewMode3D = false;
+            for (auto& buff : vehicleBuffer) {
+                buff.m_viewMode3D = false;
+            }
+            backgroundBuffer->m_viewMode3D = false;
+
             // Check if camera moved enough to need new tiles
             float camX = m_camera.translation().x();
             float camY = m_camera.translation().y();
@@ -752,8 +902,27 @@ namespace LM
             m_projection.setToIdentity();
             m_projection.perspective(60.0f, aspect, 5.0f, 5000.0f);
 
+            // Sky gradient background (top = light blue, bottom = warm horizon)
+            // Replaces the old flat blue clear color
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            glClearColor(0.1f, 0.15f, 0.3f, 1.0f);
+            drawSkyGradient();
+            glClear(GL_DEPTH_BUFFER_BIT);  // clear depth after sky
+
+            // Update lighting state for all buffer managers
+            QVector3D camPos = m_camera.translation();
+            permanentBuffer->m_cameraPos = camPos;
+            permanentBuffer->m_viewMode3D = true;
+            temporaryBuffer->m_cameraPos = camPos;
+            temporaryBuffer->m_viewMode3D = true;
+            for (auto& buff : vehicleBuffer) {
+                buff.m_cameraPos = camPos;
+                buff.m_viewMode3D = true;
+            }
+            backgroundBuffer->m_cameraPos = camPos;
+            backgroundBuffer->m_viewMode3D = true;
+
+            // Draw ground reference grid
+            drawGroundGrid();
         }
 
         // update cached world2view matrix

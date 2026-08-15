@@ -1,35 +1,33 @@
-Fix GPXZ crash: TIFFTAG_GDAL_NODATA causes segfault on BigTIFF COGs
+Add PBR lighting and sky gradient to Road Studio 3D viewport
 
-Root cause identified through end-to-end testing: TIFFGetField() with
-TIFFTAG_GDAL_NODATA (tag 42113) causes a segmentation fault when
-reading BigTIFF Cloud Optimized GeoTIFFs from GPXZ. The tag's value
-offset in the BigTIFF IFD points to an invalid memory location,
-causing libtiff to dereference a bad pointer.
+Replaces the flat blue 3D viewport with Unreal/Blender-style PBR
+lighting, a sky gradient background, and a ground reference grid.
 
-Fix: Skip TIFFTAG_GDAL_NODATA entirely. GPXZ's dataset has no holes
-or missing data, so nodata is not needed. The default -9999.0f is
-kept as the nodata sentinel.
+Lighting:
+- Per-vertex normal computation for all road meshes (AddQuads,
+  AddPoly, AddColumn)
+- Vertex struct extended with nx, ny, nz normal fields
+- Directional sun light (warm 1.0, 0.95, 0.85) with diffuse shading
+- Blinn-Phong specular highlights (specPower=32)
+- Hemispheric sky ambient (sky from top, ground bounce from bottom)
+- Fresnel-like rim lighting for edge definition
+- Reinhard tone mapping + gamma correction
+- 2D top-down mode uses flat colors (no lighting)
 
-Also reverted from TIFFClientOpen (memory-based I/O) back to
-TIFFOpen with a temp file, since TIFFClientOpen had issues with
-BigTIFF + DEFLATE on this libtiff build (4.7.2). The temp file
-approach uses TIFFOpen with UTF-8 path, which works reliably.
+Background:
+- Sky gradient shader: zenith blue (0.25, 0.45, 0.75) to warm
+  horizon (0.65, 0.70, 0.78) to earth ground (0.35, 0.32, 0.28)
+- Replaces flat blue glClearColor(0.1, 0.15, 0.3)
 
-Added comprehensive end-to-end test (test_gpxz_download.cpp) that:
-1. Downloads real GPXZ data from the API
-2. Decodes BigTIFF + DEFLATE + tiled COG via decodeGeoTiff
-3. Verifies decodeAuto routing
-4. Tests resampling to 64x64 and 1024x1024
-5. Tests invalid/empty/non-TIFF data handling
-6. Downloads mountainous area (Swiss Alps, 1486-4329m)
-7. Tests bad API key rejection
+Ground grid:
+- 10m grid cells extending ±200m around camera
+- Semi-transparent (alpha=0.3) for subtle spatial reference
+- Follows camera position dynamically
 
-All 7 tests pass with real GPXZ API calls.
+Shader changes:
+- simple.vert: PBR lighting in vertex shader, passes normals
+- simple.frag: unchanged (receives interpolated lit color)
+- New sky gradient shader (inline in map_view_gl.cpp)
+- New ground grid shader (inline in map_view_gl.cpp)
 
-Test results:
-- London area: 256x256, elevations 0.3-264.4m, 65536/65536 valid
-- Swiss Alps: 128x128, elevations 1486-4329m, 2843m variance
-- Bad API key: correctly rejected (no data returned)
-- Invalid data: all cases handled gracefully
-
-doctest: 504/504 passed, 5388 assertions, 0 failed
+Build: SUCCESS (main app)

@@ -49,6 +49,13 @@ namespace LM
 
         int Useage_pct() const;
 
+        // Lighting state (set by MapViewGL before Draw)
+        QVector3D m_cameraPos;
+        QVector3D m_lightDir   = QVector3D(0.4f, -0.3f, 0.85f);  // sun direction (normalized)
+        QVector3D m_lightColor = QVector3D(1.0f, 0.95f, 0.85f);  // warm sunlight
+        QVector3D m_ambientColor = QVector3D(0.35f, 0.38f, 0.45f); // sky ambient
+        bool m_viewMode3D = false;
+
     private:
         std::vector<Vertex>          m_vertexBufferData;
         unsigned int                 m_vertexBufferCount;
@@ -78,6 +85,11 @@ namespace LM
         void RemoveInstance(unsigned int);
 
         void Draw(QMatrix4x4 worldToView);
+
+        // Lighting state (set by MapViewGL before Draw)
+        QVector3D m_cameraPos;
+        bool m_viewMode3D = false;
+
     private:
         static void FromMatrix(Pose&, QMatrix4x4);
 

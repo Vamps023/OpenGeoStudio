@@ -19,7 +19,8 @@ License    : BSD License,
 /*! A container class to store data (coordinates, normals, textures, colors) of a vertex, used for interleaved
 	storage. Expand this class as needed.
 
-	Memory layout (each char is a byte): xxxxyyyyzzzzrrrrggggbbbb = 6*4 = 24 Bytes
+	Memory layout (each char is a byte): xxxxyyyyzzzznnnnnnnnrrrrggggbbbb + gid + objID
+	= 3*4 + 3*4 + 3*4 + 4 + 4 = 36 Bytes (with padding to 40)
 
 	You can define a vector<Vertex> and use this directly as input to the vertex buffer.
 
@@ -36,6 +37,22 @@ struct Vertex {
 		x(float(coords.x())),
 		y(float(coords.y())),
 		z(float(coords.z())),
+		nx(0.0f), ny(0.0f), nz(1.0f),  // default normal points up
+		r(float(col.redF())),
+		g(float(col.greenF())),
+		b(float(col.blueF())),
+		graphicsID(gid),
+		objectID(objID)
+	{
+	}
+
+	Vertex(const QVector3D& coords, const QVector3D& normal, const QColor& col, const unsigned int gid, const unsigned int objID) :
+		x(float(coords.x())),
+		y(float(coords.y())),
+		z(float(coords.z())),
+		nx(float(normal.x())),
+		ny(float(normal.y())),
+		nz(float(normal.z())),
 		r(float(col.redF())),
 		g(float(col.greenF())),
 		b(float(col.blueF())),
@@ -45,6 +62,7 @@ struct Vertex {
 	}
 
 	float x, y, z;
+	float nx, ny, nz;    // normal vector for lighting
 	float r, g, b;
 	unsigned int graphicsID; // face
 	float objectID; // road -- INT does not work
