@@ -102,15 +102,20 @@ void ExportEngine::processNextTile() {
 void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& outputPath) {
     const QString url = demUrlForTile(tile);
     if (url.isEmpty()) {
-        // No URL — generate a flat heightmap as placeholder
-        const int res = m_store->exportSettings().heightmapResolution;
-        std::vector<float> flatElev(res * res, 0.0f);
-        writeDemOutput(flatElev, res, res, tile, outputPath);
-        m_demDownloaded = true;
-        if (m_imageryDownloaded) {
-            m_completedTiles++;
-            processNextTile();
-        }
+        // No URL available — API key missing or source not configured
+        QString reason;
+        auto src = m_store->exportSettings().demSource;
+        if (src == terrain::DemSource::Mapbox_TerrainRGB)
+            reason = "Mapbox token is required for Terrain-RGB DEM source";
+        else if (src == terrain::DemSource::GPXZ_LiDAR)
+            reason = "GPXZ API key is required for LiDAR DEM source";
+        else if (src == terrain::DemSource::Local_File)
+            reason = "Local DEM file path is not set — select a file in the export panel";
+        else
+            reason = "DEM source URL is empty — check API key and source settings";
+
+        emit finished(false, QString("DEM export failed for tile %1: %2")
+                          .arg(tile.id()).arg(reason));
         return;
     }
 
@@ -129,7 +134,8 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            emit finished(false, QString("DEM download failed: %1").arg(reply->errorString()));
+            emit finished(false, QString("DEM download failed for tile %1: %2")
+                              .arg(tile.id()).arg(reply->errorString()));
             return;
         }
 
@@ -151,27 +157,28 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         terrain::DemTile demTile = terrain::DemDecoder::decodeAuto(data, sourceName);
 
         if (!demTile.valid) {
-            // Fallback: generate synthetic terrain
-            m_log.warn("Failed to decode DEM data, generating synthetic terrain");
-            std::vector<float> synthElev(res * res, 0.0f);
-            for (int y = 0; y < res; ++y) {
-                for (int x = 0; x < res; ++x) {
-                    double nx = static_cast<double>(x) / res;
-                    double ny = static_cast<double>(y) / res;
-                    double h = std::sin(nx * 6.28 * 4 + tile.bounds.west) * 50 +
-                               std::cos(ny * 6.28 * 4 + tile.bounds.north) * 50 +
-                               std::sin((nx + ny) * 6.28 * 8) * 25 + 100;
-                    synthElev[y * res + x] = static_cast<float>(h);
-                }
+            // Decoding failed — report error with details, do NOT write fake data
+            QString dataType = "unknown";
+            if (data.size() >= 4) {
+                if (data[0] == 0x89 && data[1] == 'P') dataType = "PNG";
+                else if (data[0] == 'I' && data[1] == 'I') dataType = "TIFF (little-endian)";
+                else if (data[0] == 'M' && data[1] == 'M') dataType = "TIFF (big-endian)";
+                else if (data[0] == 'n') dataType = "AAIGrid (ASCII)";
+                else dataType = QString("unknown (first bytes: %1 %2)")
+                                    .arg(static_cast<int>(data[0]), 2, 16, QChar('0'))
+                                    .arg(static_cast<int>(data[1]), 2, 16, QChar('0'));
             }
-            writeDemOutput(synthElev, res, res, tile, outputPath);
-        } else {
-            // Resample to target resolution (QGIS bilinear interpolation pattern)
-            if (demTile.width != res || demTile.height != res) {
-                demTile = terrain::DemDecoder::resample(demTile, res, res);
-            }
-            writeDemOutput(demTile.elevations, res, res, tile, outputPath);
+            emit finished(false, QString("Failed to decode DEM data for tile %1 — "
+                              "received %2 bytes of type %3, source: %4")
+                              .arg(tile.id()).arg(data.size()).arg(dataType).arg(sourceName));
+            return;
         }
+
+        // Resample to target resolution (QGIS bilinear interpolation pattern)
+        if (demTile.width != res || demTile.height != res) {
+            demTile = terrain::DemDecoder::resample(demTile, res, res);
+        }
+        writeDemOutput(demTile.elevations, res, res, tile, outputPath);
 
         m_demDownloaded = true;
         if (m_imageryDownloaded) {
@@ -185,55 +192,51 @@ void ExportEngine::loadLocalDemForTile(const terrain::Tile& tile, const QString&
     const QString& localPath = m_store->exportSettings().localDemFilePath;
     const int res = m_store->exportSettings().heightmapResolution;
 
-    if (localPath.isEmpty() || !QFile::exists(localPath)) {
-        // No local file — generate flat placeholder
-        QImage img(res, res, QImage::Format_Grayscale16);
-        img.fill(0);
-        img.save(outputPath);
-        m_demDownloaded = true;
-        if (m_imageryDownloaded) {
-            m_completedTiles++;
-            processNextTile();
-        }
+    if (localPath.isEmpty()) {
+        emit finished(false, QString("Local DEM file path is empty — select a DEM file in the export panel"));
+        return;
+    }
+    if (!QFile::exists(localPath)) {
+        emit finished(false, QString("Local DEM file does not exist: %1").arg(localPath));
         return;
     }
 
     // Load the GeoTIFF/PNG DEM file using DemDecoder
     QImage srcImg(localPath);
     if (srcImg.isNull()) {
-        m_log.warn("Failed to load local DEM: " + localPath);
-        std::vector<float> flatElev(res * res, 0.0f);
-        writeDemOutput(flatElev, res, res, tile, outputPath);
-    } else {
-        // Decode as GeoTIFF DEM and resample
-        QByteArray imgData;
-        QFile f(localPath);
-        if (f.open(QIODevice::ReadOnly)) {
-            imgData = f.readAll();
-            f.close();
-        }
-        terrain::DemTile demTile = terrain::DemDecoder::decodeGeoTiff(imgData);
-        if (!demTile.valid) {
-            // Fallback: treat as grayscale image
-            demTile.width = srcImg.width();
-            demTile.height = srcImg.height();
-            demTile.elevations.resize(demTile.width * demTile.height);
-            QImage gray = srcImg.convertToFormat(QImage::Format_Grayscale16);
-            for (int y = 0; y < demTile.height; ++y) {
-                for (int x = 0; x < demTile.width; ++x) {
-                    QRgba64 px = gray.pixelColor(x, y).rgba64();
-                    demTile.elevations[y * demTile.width + x] = static_cast<float>(px.red());
-                }
-            }
-            demTile.valid = true;
-        }
-
-        // Resample to target resolution
-        if (demTile.width != res || demTile.height != res) {
-            demTile = terrain::DemDecoder::resample(demTile, res, res);
-        }
-        writeDemOutput(demTile.elevations, res, res, tile, outputPath);
+        emit finished(false, QString("Failed to load local DEM file (unsupported format or corrupted): %1")
+                          .arg(localPath));
+        return;
     }
+
+    // Decode as GeoTIFF DEM and resample
+    QByteArray imgData;
+    QFile f(localPath);
+    if (f.open(QIODevice::ReadOnly)) {
+        imgData = f.readAll();
+        f.close();
+    }
+    terrain::DemTile demTile = terrain::DemDecoder::decodeGeoTiff(imgData);
+    if (!demTile.valid) {
+        // Not a GeoTIFF — try as grayscale 16-bit image
+        demTile.width = srcImg.width();
+        demTile.height = srcImg.height();
+        demTile.elevations.resize(demTile.width * demTile.height);
+        QImage gray = srcImg.convertToFormat(QImage::Format_Grayscale16);
+        for (int y = 0; y < demTile.height; ++y) {
+            for (int x = 0; x < demTile.width; ++x) {
+                QRgba64 px = gray.pixelColor(x, y).rgba64();
+                demTile.elevations[y * demTile.width + x] = static_cast<float>(px.red());
+            }
+        }
+        demTile.valid = true;
+    }
+
+    // Resample to target resolution
+    if (demTile.width != res || demTile.height != res) {
+        demTile = terrain::DemDecoder::resample(demTile, res, res);
+    }
+    writeDemOutput(demTile.elevations, res, res, tile, outputPath);
 
     m_demDownloaded = true;
     if (m_imageryDownloaded) {
@@ -246,28 +249,24 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
     const QString& localPath = m_store->exportSettings().localImageryFilePath;
     const int res = m_store->exportSettings().albedoResolution;
 
-    if (localPath.isEmpty() || !QFile::exists(localPath)) {
-        QImage img(res, res, QImage::Format_RGB32);
-        img.fill(Qt::darkGreen);
-        writeImageryOutput(img, tile, outputPath);
-        m_imageryDownloaded = true;
-        if (m_demDownloaded) {
-            m_completedTiles++;
-            processNextTile();
-        }
+    if (localPath.isEmpty()) {
+        emit finished(false, QString("Local imagery file path is empty — select an imagery file in the export panel"));
+        return;
+    }
+    if (!QFile::exists(localPath)) {
+        emit finished(false, QString("Local imagery file does not exist: %1").arg(localPath));
         return;
     }
 
     QImage srcImg(localPath);
     if (srcImg.isNull()) {
-        m_log.warn("Failed to load local imagery: " + localPath);
-        QImage img(res, res, QImage::Format_RGB32);
-        img.fill(Qt::darkGreen);
-        writeImageryOutput(img, tile, outputPath);
-    } else {
-        QImage scaled = srcImg.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        writeImageryOutput(scaled, tile, outputPath);
+        emit finished(false, QString("Failed to load local imagery file (unsupported format or corrupted): %1")
+                          .arg(localPath));
+        return;
     }
+
+    QImage scaled = srcImg.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    writeImageryOutput(scaled, tile, outputPath);
 
     m_imageryDownloaded = true;
     if (m_demDownloaded) {
@@ -304,16 +303,20 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
 
     QString url = imageryTileUrl(zoom, x, y, tile);
     if (url.isEmpty()) {
-        QImage img(m_store->exportSettings().albedoResolution,
-                   m_store->exportSettings().albedoResolution,
-                   QImage::Format_RGB32);
-        img.fill(Qt::darkGreen);
-        writeImageryOutput(img, tile, outputPath);
-        m_imageryDownloaded = true;
-        if (m_demDownloaded) {
-            m_completedTiles++;
-            processNextTile();
-        }
+        // No URL — API key missing or source not configured
+        QString reason;
+        auto src = m_store->exportSettings().imagerySource;
+        if (src == terrain::ImagerySource::Mapbox_Satellite)
+            reason = "Mapbox token is required for Mapbox Satellite imagery";
+        else if (src == terrain::ImagerySource::MapTiler_Satellite)
+            reason = "MapTiler token is required for MapTiler Satellite imagery";
+        else if (src == terrain::ImagerySource::Local_File)
+            reason = "Local imagery file path is not set — select a file in the export panel";
+        else
+            reason = "Imagery source URL is empty — check source settings";
+
+        emit finished(false, QString("Imagery export failed for tile %1: %2")
+                          .arg(tile.id()).arg(reason));
         return;
     }
 
@@ -324,34 +327,30 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            // Fallback: create placeholder image
-            QImage img(m_store->exportSettings().albedoResolution,
-                       m_store->exportSettings().albedoResolution,
-                       QImage::Format_RGB32);
-            img.fill(Qt::darkGreen);
-            img.save(outputPath);
-        } else {
-            QByteArray data = reply->readAll();
-            QImage img;
-            if (img.loadFromData(data)) {
-                // Scale to requested resolution
-                if (img.width() != m_store->exportSettings().albedoResolution ||
-                    img.height() != m_store->exportSettings().albedoResolution) {
-                    img = img.scaled(m_store->exportSettings().albedoResolution,
-                                    m_store->exportSettings().albedoResolution,
-                                    Qt::KeepAspectRatioByExpanding,
-                                    Qt::SmoothTransformation);
-                }
-                // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
-                writeImageryOutput(img, tile, outputPath);
-            } else {
-                QImage placeholder(m_store->exportSettings().albedoResolution,
-                                   m_store->exportSettings().albedoResolution,
-                                   QImage::Format_RGB32);
-                placeholder.fill(Qt::darkGreen);
-                writeImageryOutput(placeholder, tile, outputPath);
-            }
+            emit finished(false, QString("Imagery download failed for tile %1: %2")
+                              .arg(tile.id()).arg(reply->errorString()));
+            return;
         }
+
+        QByteArray data = reply->readAll();
+        QImage img;
+        if (!img.loadFromData(data)) {
+            emit finished(false, QString("Failed to decode imagery image for tile %1 — "
+                              "received %2 bytes, format not recognized")
+                              .arg(tile.id()).arg(data.size()));
+            return;
+        }
+
+        // Scale to requested resolution
+        if (img.width() != m_store->exportSettings().albedoResolution ||
+            img.height() != m_store->exportSettings().albedoResolution) {
+            img = img.scaled(m_store->exportSettings().albedoResolution,
+                            m_store->exportSettings().albedoResolution,
+                            Qt::KeepAspectRatioByExpanding,
+                            Qt::SmoothTransformation);
+        }
+        // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
+        writeImageryOutput(img, tile, outputPath);
 
         m_imageryDownloaded = true;
         if (m_demDownloaded) {

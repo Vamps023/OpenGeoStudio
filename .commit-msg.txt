@@ -1,26 +1,29 @@
-Fix terrain zoom, search bar, and panel alignment
+Remove all placeholder/synthetic data from export engine
 
-Zoom (Issue 1):
-- Add wheelEvent to TerrainOverlayWidget — scroll to zoom toward cursor
-  (MapLibre/QGIS pattern: zoom + adjust center to keep cursor geo point)
-- Add zoom in/out buttons (➕/➖) to toolbar with keyboard shortcuts
-- Add "Fit" button to fit map to current selection bounds
-- Zoom clamped to 0-20 range
+Replaced every placeholder fallback with proper error reporting:
 
-Search bar (Issue 2):
-- Connect SearchBar::locationSelected signal to map — selecting a result
-  now flies the map to that location with type-specific zoom
-- Fix dropdown layout: was in QVBoxLayout which resized the search bar
-  when shown. Now uses Qt::ToolTip window flag as floating popup
-- Position dropdown below input using mapToGlobal
-- Add search icon emoji to placeholder text
-- Increase input height to 34px for visibility
-- Status bar shows "Flew to lat, lon (zoom N)" on location select
+DEM download (downloadDemForTile):
+- Empty URL: was writing flat 0.0m heightmap, now emits error with
+  specific reason (missing API key, token, or file path)
+- Decode failure: was generating synthetic sine-wave terrain, now emits
+  error with data type details (PNG/TIFF/AAIGrid), byte count, and source
 
-Panel alignment (Issue 3):
-- Increase ExportPanel max width from 320 to 400px
-- Add minimum width of 340px so form labels don't get truncated
-- This prevents combo boxes and form rows from being squished
+Local DEM (loadLocalDemForTile):
+- Missing file: was writing flat 0.0m heightmap, now emits error
+- Load failure: was writing flat heightmap, now emits error with path
+
+Local imagery (loadLocalImageryForTile):
+- Missing file: was filling darkGreen image, now emits error
+- Load failure: was filling darkGreen, now emits error with path
+
+Imagery download (downloadImageryForTile):
+- Empty URL: was filling darkGreen, now emits error with reason
+- Network error: was saving darkGreen image, now emits error
+- Decode failure: was filling darkGreen, now emits error with byte count
+
+All errors now stop the export with a descriptive message instead of
+silently writing fake data. The only intentional skip is
+HeightmapFormat::None (user chose "albedo only" — no DEM output needed).
 
 Generated with [Devin](https://devin.ai)
 
