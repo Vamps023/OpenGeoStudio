@@ -1,20 +1,28 @@
-Fix GPXZ API URL and add proper GeoTIFF DEM reading via libtiff
+Add search bar and zoom controls to Road Studio toolbar
 
-GPXZ URL fix:
-- Was: https://data.gpxz.co/api/v1/raster (wrong host — DNS fails)
-- Now: https://api.gpxz.io/v1/elevation/raster (correct per GPXZ docs)
-- Fixed parameter names: south/north/west/east → bbox_left/right/bottom/top
-- Added height_px and width_px params (required by GPXZ API)
-- API key param: key → api_key (per GPXZ docs)
+Added the same map navigation features that Terrain Studio has
+to Road Studio's LaneMaker toolbar:
 
-GeoTIFF DEM decoding (DemDecoder::decodeGeoTiff):
-- Was using QImage::loadFromData which cannot read Float32 GeoTIFFs
-  (GPXZ and Copernicus return Float32 GeoTIFF)
-- Now uses libtiff directly via TIFFOpen/TIFFReadScanline
-- Supports all data types: Float32, Int16, UInt16, Byte
-- Reads GDAL nodata tag (TIFFTAG_GDAL_NODATA)
-- Uses QTemporaryFile to pass data to libtiff
-- Falls back to QImage only for unsupported formats (e.g. RGB TIFF)
+Search bar:
+- Nominatim (OpenStreetMap) geocoding — type a location, press Enter
+- Flies the map to the result location (SetMapCenter + ResetCamera)
+- Shows the full display name in the search field after selection
+- Dark theme styling matching the rest of the toolbar
+- Clear button enabled for easy reset
+
+Zoom buttons:
+- ➕ Zoom in: 0.85x camera Z (2D) or dolly forward (3D)
+- ➖ Zoom out: 1.15x camera Z (2D) or dolly backward (3D)
+- "Fit" button: ResetCamera to default view
+- Zoom limits preserved: 20m min, 50000m max (2D mode)
+- Keyboard shortcuts: Ctrl++ / Ctrl+-
+
+Implementation:
+- Added ZoomIn()/ZoomOut() public methods to MapViewGL
+  (m_camera was private, so toolbar can't access it directly)
+- Zoom logic matches existing wheelEvent behavior exactly
+- Search uses QNetworkAccessManager with Nominatim API
+- LaneMaker road engine preserved as-is (no changes to road behavior)
 
 Generated with [Devin](https://devin.ai)
 

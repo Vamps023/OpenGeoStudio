@@ -6,6 +6,11 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QUrlQuery>
+#include <QLineEdit>
 #include <QImage>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -209,6 +214,47 @@ MainWidget::MainWidget(QWidget* parent)
     auto* drawOptionButton = makeToolbarBtn(":/icons/draw_option.png", tr("Draw options"));
     topBarLayout->addWidget(drawOptionButton);
 
+    auto* sep3 = new QFrame;
+    sep3->setFrameShape(QFrame::VLine);
+    sep3->setStyleSheet("color: #30363d;");
+    topBarLayout->addWidget(sep3);
+
+    // Zoom buttons
+    zoomInButton = new QToolButton(this);
+    zoomInButton->setText("➕");
+    zoomInButton->setToolTip(tr("Zoom in"));
+    zoomInButton->setShortcut(QKeySequence::ZoomIn);
+    topBarLayout->addWidget(zoomInButton);
+
+    zoomOutButton = new QToolButton(this);
+    zoomOutButton->setText("➖");
+    zoomOutButton->setToolTip(tr("Zoom out"));
+    zoomOutButton->setShortcut(QKeySequence::ZoomOut);
+    topBarLayout->addWidget(zoomOutButton);
+
+    fitButton = new QToolButton(this);
+    fitButton->setText("Fit");
+    fitButton->setToolTip(tr("Reset camera to default view"));
+    topBarLayout->addWidget(fitButton);
+
+    auto* sep4 = new QFrame;
+    sep4->setFrameShape(QFrame::VLine);
+    sep4->setStyleSheet("color: #30363d;");
+    topBarLayout->addWidget(sep4);
+
+    // Search bar — geocode via Nominatim, fly to location
+    searchEdit = new QLineEdit(this);
+    searchEdit->setPlaceholderText("🔍  Search location...");
+    searchEdit->setMinimumWidth(200);
+    searchEdit->setMaximumWidth(300);
+    searchEdit->setStyleSheet(
+        "QLineEdit { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;"
+        "padding: 6px 10px; color: #e6edf3; font-size: 12px; }"
+        "QLineEdit:focus { border-color: #1f6feb; }"
+        "QLineEdit::placeholder { color: #484f58; }");
+    searchEdit->setClearButtonEnabled(true);
+    topBarLayout->addWidget(searchEdit);
+
     topBarLayout->addStretch();
 
     // 2D/3D view mode toggle
@@ -283,6 +329,60 @@ MainWidget::MainWidget(QWidget* parent)
             mapViewGL->ClearMapBackground();
         }
     });
+
+    // Zoom buttons — adjust camera Z (2D) or dolly (3D)
+    connect(zoomInButton, &QToolButton::clicked, this, [this]() {
+        mapViewGL->ZoomIn();
+    });
+
+    connect(zoomOutButton, &QToolButton::clicked, this, [this]() {
+        mapViewGL->ZoomOut();
+    });
+
+    connect(fitButton, &QToolButton::clicked, this, [this]() {
+        mapViewGL->ResetCamera();
+        mapViewGL->update();
+    });
+
+    // Search bar — geocode via Nominatim, fly to location
+    auto* searchNetMgr = new QNetworkAccessManager(this);
+    connect(searchEdit, &QLineEdit::returnPressed, this, [this, searchNetMgr]() {
+        QString query = searchEdit->text().trimmed();
+        if (query.length() < 3) return;
+
+        QUrl url("https://nominatim.openstreetmap.org/search");
+        QUrlQuery q;
+        q.addQueryItem("q", query);
+        q.addQueryItem("format", "json");
+        q.addQueryItem("limit", "1");
+        url.setQuery(q);
+
+        QNetworkRequest request(url);
+        request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
+        request.setRawHeader("Accept", "application/json");
+
+        QNetworkReply* reply = searchNetMgr->get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) return;
+
+            auto doc = QJsonDocument::fromJson(reply->readAll());
+            auto arr = doc.array();
+            if (arr.isEmpty()) return;
+
+            auto obj = arr.first().toObject();
+            double lat = obj.value("lat").toString().toDouble();
+            double lon = obj.value("lon").toString().toDouble();
+
+            // Fly to location — set map center and reset camera
+            mapViewGL->SetMapCenter(lat, lon);
+            mapViewGL->ResetCamera();
+            mapViewGL->update();
+
+            searchEdit->setText(obj.value("display_name").toString());
+        });
+    });
+
     Reset();
 }
 

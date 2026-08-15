@@ -66,6 +66,10 @@ namespace LM
 		int VBufferUseage_pct() const;
 		float Zoom() const;
 
+		// Zoom controls (for toolbar buttons)
+		void ZoomIn();
+		void ZoomOut();
+
 	signals:
 		void MousePerformedAction(LM::MouseAction); // excluding view adjustment / Scene button event
         void KeyPerformedAction(LM::KeyPressAction);// excluding view adjustment, including Scene button event

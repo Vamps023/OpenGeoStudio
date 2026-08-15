@@ -1215,6 +1215,46 @@ namespace LM
         return 100 / rayOnGround.distanceToPoint(m_camera.translation());
     }
 
+    void MapViewGL::ZoomIn()
+    {
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            float curZ = m_camera.translation().z();
+            float newZ = curZ * 0.85f;
+            if (newZ < 20.0f) newZ = 20.0f;
+            m_camera.setTranslation(m_camera.translation().x(),
+                                    m_camera.translation().y(), newZ);
+        }
+        else
+        {
+            QVector3D fwd = m_camera.forward();
+            fwd.normalize();
+            float camDist = m_camera.translation().length();
+            m_camera.translate(fwd * (camDist * 0.1f));
+        }
+        update();
+    }
+
+    void MapViewGL::ZoomOut()
+    {
+        if (m_viewMode == ViewMode::TopDown2D)
+        {
+            float curZ = m_camera.translation().z();
+            float newZ = curZ * 1.15f;
+            if (newZ > 50000.0f) newZ = 50000.0f;
+            m_camera.setTranslation(m_camera.translation().x(),
+                                    m_camera.translation().y(), newZ);
+        }
+        else
+        {
+            QVector3D fwd = m_camera.forward();
+            fwd.normalize();
+            float camDist = m_camera.translation().length();
+            m_camera.translate(fwd * (-camDist * 0.1f));
+        }
+        update();
+    }
+
     void MapViewGL::SetViewFromReplay(Transform3D t)
     {
         m_camera.setTranslation(t.translation());

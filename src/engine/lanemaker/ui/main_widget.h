@@ -2,6 +2,7 @@
 #include <QFrame>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QLineEdit>
 
 #include "action_defs.h"
 
@@ -108,6 +109,10 @@ protected:
     QToolButton* createModeButton, * createLaneModeButton, * destroyModeButton, * modifyModeButton, * dragModeButton;
     QToolButton* viewModeButton;   // 2D/3D toggle
     QToolButton* loadMapButton;    // Load satellite map background
+    QToolButton* zoomInButton;     // Zoom in
+    QToolButton* zoomOutButton;    // Zoom out
+    QToolButton* fitButton;        // Fit to content
+    QLineEdit* searchEdit;         // Location search bar
 
     LaneConfigWidget* laneConfig;
     DrawOptionDialog* drawOptionDialog;
