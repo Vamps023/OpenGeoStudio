@@ -5,6 +5,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QImage>
 #include <map>
 
 // OGRE-Next forward declarations (avoid pulling in headers here)
@@ -44,6 +45,7 @@ public:
     void loadTerrain(const QString& heightmapPath, const QString& albedoPath,
                      float terrainSize = 1000.0f, float heightScale = 100.0f);
     void clearTerrain();
+    float sampleTerrainHeight(float x, float z) const;
 
     // Road loading
     void loadRoads(const QString& xodrPath);
@@ -106,6 +108,8 @@ private:
     QString m_albedoPath;
     float m_terrainSize = 1000.0f;
     float m_heightScale = 100.0f;
+    QImage m_heightmapImage;
+    bool m_hasHeightmap = false;
 
     // Roads
     Ogre::Item* m_roadItem = nullptr;

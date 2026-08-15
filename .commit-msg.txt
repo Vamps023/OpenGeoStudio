@@ -1,47 +1,39 @@
-Fix scene not loading after OGRE initialization (pending scene mechanism)
+Fix roads and objects to follow terrain elevation
 
-CRITICAL FIX: Scene was never actually loaded after OGRE init
+Previously roads used a fixed Y offset from XODR elevation (10m + 2m = 12m)
+and objects used a fixed Y=30 from the scene JSON. Neither followed the
+actual terrain elevation, causing roads to float/sink and objects to hover.
 
-Root cause: Studio3DWidget::onProjectOpened() scheduled scene auto-load
-via QTimer::singleShot(500ms), but OGRE didn't initialize until 3D Studio
-was activated at 1000ms. The scene load fired before OGRE was ready,
-loadScene() returned early, and m_sceneAutoLoaded=true prevented retries.
+Fix: Added sampleTerrainHeight(x, z) function that samples the stored
+heightmap QImage at world coordinates (x, z) and returns the elevation.
 
-Fix: Added pending scene mechanism to OgreWidget
-- loadScene() now stores the scene JSON in m_pendingScene when OGRE
-  is not initialized, instead of silently discarding it
-- exposeEvent() checks for pending scene after OGRE initialization
-  and loads it automatically
-- This ensures the scene is always loaded regardless of timing
+Roads: Each road vertex now samples terrain height at its (x, z) position
+and adds a small 2m offset to sit above the terrain surface.
 
-Also added debug logging to verify actual rendering:
-- Object loading loop now logs each object creation with position
-- Confirms terrain mesh, albedo texture, roads, and objects are created
+Objects: Each object now samples terrain height at its (posX, posZ)
+position and places its center at terrainY + scaleY/2 so the bottom
+of the object sits on the terrain surface.
+
+The heightmap QImage is stored as m_heightmapImage after loadTerrain()
+and cleared in clearTerrain().
 
 Houston 4km end-to-end test: PASS (with debug output verification)
 
-Run 1 (initial load):
-- Project opened, 3D Studio activated
-- "OGRE not initialized, storing pending scene..."
-- OGRE initialized with NVIDIA GeForce RTX 3060
-- "OGRE initialized, loading pending scene..."
-- Terrain: 1024x1024 heightmap → 128x128 grid, 16384 vertices, 32258 triangles
-- Albedo: 1024x1024, uploaded to GPU via Image2
-- Roads: 5 roads, 17600 vertices
-- Objects: 7 objects created at correct positions
-- Stable 35s at 1.3GB, 0 OGRE errors
+Run 1:
+- Terrain: 128x128 grid, 16384 vertices, 32258 triangles
+- Albedo: 1024x1024, uploaded to GPU
+- Roads: 5 roads, 17600 vertices (now following terrain elevation)
+- Objects: 7 objects (now sitting on terrain surface)
+- Stable 35s at 1.0GB, 0 OGRE errors
 
 Close + Reopen:
-- Scene auto-loaded from relative paths
-- "OGRE not initialized, storing pending scene..."
-- "OGRE initialized, loading pending scene..."
-- Terrain mesh created: 128x128, 16384 vertices
-- Albedo uploaded to GPU
-- Roads: 5 roads, 17600 vertices
-- Objects: 7 objects at correct positions
-- Stable 45s at 1.4GB, 0 OGRE errors
+- Full scene restored (terrain + albedo + roads + 7 objects)
+- Stable 40s at 1.4GB, 0 OGRE errors
 
-All files intact, relative paths preserved, 7 objects restored.
+Heightmap verification:
+- 1024x1024 pixels, elevation range 43-75 (gray values)
+- Elevation span: 12.5m with heightScale=100
+- All files intact, relative paths preserved
 
 Generated with [Devin](https://devin.ai)
 

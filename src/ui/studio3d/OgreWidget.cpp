@@ -299,6 +299,8 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
         return;
     }
     heightmap = heightmap.convertToFormat(QImage::Format_Grayscale8);
+    m_heightmapImage = heightmap;
+    m_hasHeightmap = true;
 
     int imgW = heightmap.width();
     int imgH = heightmap.height();
@@ -475,6 +477,34 @@ void OgreWidget::clearTerrain()
         m_sceneManager->destroyItem(m_terrainItem);
         m_terrainItem = nullptr;
     }
+    m_hasHeightmap = false;
+    m_heightmapImage = QImage();
+}
+
+float OgreWidget::sampleTerrainHeight(float x, float z) const
+{
+    if (!m_hasHeightmap || m_heightmapImage.isNull()) return 0.0f;
+
+    int imgW = m_heightmapImage.width();
+    int imgH = m_heightmapImage.height();
+    float halfSize = m_terrainSize * 0.5f;
+
+    // Map world (x, z) to heightmap pixel coordinates
+    // Terrain extends from -halfSize to +halfSize
+    float u = (x + halfSize) / m_terrainSize;
+    float v = (z + halfSize) / m_terrainSize;
+
+    // Clamp to valid range
+    if (u < 0.0f) u = 0.0f; if (u > 1.0f) u = 1.0f;
+    if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
+
+    int px = static_cast<int>(u * (imgW - 1));
+    int py = static_cast<int>(v * (imgH - 1));
+
+    QRgb pixel = m_heightmapImage.pixel(px, py);
+    int gray = qGray(pixel);
+    float elevation = (gray / 255.0f) * m_heightScale;
+    return elevation;
 }
 void OgreWidget::loadRoads(const QString& xodrPath)
 {
@@ -572,16 +602,16 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
             float lx0 = static_cast<float>(p0[0]) + perpX * halfWidth;
             float lz0 = static_cast<float>(p0[2]) + perpZ * halfWidth;
-            float ly0 = static_cast<float>(p0[1]) + roadYOffset;
+            float ly0 = sampleTerrainHeight(lx0, lz0) + roadYOffset;
             float rx0 = static_cast<float>(p0[0]) - perpX * halfWidth;
             float rz0 = static_cast<float>(p0[2]) - perpZ * halfWidth;
-            float ry0 = static_cast<float>(p0[1]) + roadYOffset;
+            float ry0 = sampleTerrainHeight(rx0, rz0) + roadYOffset;
             float lx1 = static_cast<float>(p1[0]) + perpX * halfWidth;
             float lz1 = static_cast<float>(p1[2]) + perpZ * halfWidth;
-            float ly1 = static_cast<float>(p1[1]) + roadYOffset;
+            float ly1 = sampleTerrainHeight(lx1, lz1) + roadYOffset;
             float rx1 = static_cast<float>(p1[0]) - perpX * halfWidth;
             float rz1 = static_cast<float>(p1[2]) - perpZ * halfWidth;
-            float ry1 = static_cast<float>(p1[1]) + roadYOffset;
+            float ry1 = sampleTerrainHeight(rx1, rz1) + roadYOffset;
 
             manual->position(lx0, ly0, lz0);
             manual->normal(0.0f, 1.0f, 0.0f);
@@ -796,7 +826,11 @@ void OgreWidget::rebuildObject(const SceneObject& obj)
     node->attachObject(item);
 
     // Set position, rotation, scale
-    node->setPosition(Ogre::Vector3(obj.posX, obj.posY, obj.posZ));
+    // Sample terrain elevation at object (x, z) so objects sit on terrain
+    float terrainY = m_hasHeightmap ? sampleTerrainHeight(obj.posX, obj.posZ) : obj.posY;
+    // Object center should be at terrainY + half the object height (scaleY/2)
+    float objectY = terrainY + obj.scaleY * 0.5f;
+    node->setPosition(Ogre::Vector3(obj.posX, objectY, obj.posZ));
     float rotRad = obj.rotY * 3.14159265358979f / 180.0f;
     node->setOrientation(Ogre::Quaternion(Ogre::Radian(rotRad), Ogre::Vector3::UNIT_Y));
     node->setScale(Ogre::Vector3(obj.scaleX, obj.scaleY, obj.scaleZ));
