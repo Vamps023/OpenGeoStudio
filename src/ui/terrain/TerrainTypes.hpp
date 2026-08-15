@@ -114,7 +114,7 @@ enum class CrsSource {
 struct ExportSettings {
     HeightmapFormat heightmapFormat = HeightmapFormat::GeoTIFF_Float32;
     AlbedoFormat albedoFormat = AlbedoFormat::PNG;
-    DemSource demSource = DemSource::OpenTopo_Copernicus_GLO30;
+    DemSource demSource = DemSource::GPXZ_LiDAR;
     ImagerySource imagerySource = ImagerySource::Google_Satellite;
     CrsSource crsSource = CrsSource::Auto_UTM;
     int heightmapResolution = 1024;
@@ -127,7 +127,7 @@ struct ExportSettings {
     QString openTopoApiKey;
     QString mapboxToken;
     QString maptilerToken;
-    QString gpxzApiKey;
+    QString gpxzApiKey = "ak_NgEXLGho_z5TBKb44GCFKIirC";
     QString stadiaApiKey;
 
     // Local file paths

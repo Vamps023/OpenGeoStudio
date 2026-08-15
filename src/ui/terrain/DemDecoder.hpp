@@ -22,8 +22,8 @@
 #include <QString>
 #include <QStringList>
 #include <QRegularExpression>
-#include <QTemporaryFile>
 #include <tiffio.h>
+#include <cstring>
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -189,29 +189,87 @@ public:
     // Uses libtiff to read GeoTIFF directly — supports Float32,
     // Int16, UInt16, and Byte data types with proper nodata handling.
     // Handles both stripped (scanline) and tiled (COG) TIFF layouts.
+    // Also handles BigTIFF (used by GPXZ Cloud Optimized GeoTIFFs).
+    // Uses TIFFClientOpen for memory-based I/O (no temp file needed).
     // QImage cannot read Float32 GeoTIFFs, so libtiff is required.
+
+    // Memory reader context for TIFFClientOpen
+    struct MemTiffContext {
+        const uint8_t* data;
+        tmsize_t size;
+        tmsize_t pos;
+    };
+
+    static tmsize_t tiffReadProc(void* ctx, void* buf, tmsize_t size) {
+        auto* mc = static_cast<MemTiffContext*>(ctx);
+        tmsize_t remaining = mc->size - mc->pos;
+        tmsize_t toRead = std::min(size, remaining);
+        if (toRead <= 0) return 0;
+        std::memcpy(buf, mc->data + mc->pos, static_cast<size_t>(toRead));
+        mc->pos += toRead;
+        return toRead;
+    }
+
+    static tmsize_t tiffWriteProc(void*, void*, tmsize_t) {
+        return 0;  // Read-only
+    }
+
+    static toff_t tiffSeekProc(void* ctx, toff_t off, int whence) {
+        auto* mc = static_cast<MemTiffContext*>(ctx);
+        switch (whence) {
+        case SEEK_SET: mc->pos = static_cast<tmsize_t>(off); break;
+        case SEEK_CUR: mc->pos += static_cast<tmsize_t>(off); break;
+        case SEEK_END: mc->pos = mc->size + static_cast<tmsize_t>(off); break;
+        }
+        if (mc->pos < 0) mc->pos = 0;
+        if (mc->pos > mc->size) mc->pos = mc->size;
+        return static_cast<toff_t>(mc->pos);
+    }
+
+    static toff_t tiffSizeProc(void* ctx) {
+        auto* mc = static_cast<MemTiffContext*>(ctx);
+        return static_cast<toff_t>(mc->size);
+    }
+
+    static int tiffCloseProc(void*) {
+        return 0;  // Nothing to close — memory is managed externally
+    }
+
     static DemTile decodeGeoTiff(const QByteArray& data) {
         DemTile tile;
 
         if (data.isEmpty()) return tile;
+        if (data.size() < 16) return tile;  // Minimum TIFF header size
 
-        // Write data to a temp file so libtiff can read it
-        QTemporaryFile tempFile;
-        tempFile.setAutoRemove(true);
-        if (!tempFile.open()) return tile;
-        tempFile.write(data);
-        tempFile.close();
+        // Use TIFFClientOpen for memory-based I/O — avoids all temp file
+        // and path encoding issues on Windows.
+        MemTiffContext ctx;
+        ctx.data = reinterpret_cast<const uint8_t*>(data.constData());
+        ctx.size = static_cast<tmsize_t>(data.size());
+        ctx.pos = 0;
 
-        TIFF* tif = TIFFOpen(tempFile.fileName().toUtf8().constData(), "r");
+        TIFF* tif = TIFFClientOpen("mem-tiff", "r", &ctx,
+                                   tiffReadProc, tiffWriteProc,
+                                   tiffSeekProc, tiffCloseProc,
+                                   tiffSizeProc, nullptr, nullptr);
         if (!tif) return tile;
 
-        uint32_t width = 0, height = 0;
-        TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width);
-        TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height);
+        // Guard to ensure TIFFClose is called on all exit paths
+        struct TiffGuard {
+            TIFF* tif;
+            ~TiffGuard() { if (tif) TIFFClose(tif); }
+        } guard{tif};
 
-        if (width == 0 || height == 0) {
-            TIFFClose(tif);
+        uint32_t width = 0, height = 0;
+        if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width)) {
             return tile;
+        }
+        if (!TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height)) {
+            return tile;
+        }
+
+        if (width == 0 || height == 0 || width > 10000 || height > 10000) {
+            return tile;  // Sanity check — DEM tiles shouldn't be huge
         }
 
         uint16_t bitsPerSample = 8, samplesPerPixel = 1, sampleFormat = SAMPLEFORMAT_UINT;
@@ -219,10 +277,25 @@ public:
         TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
         TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sampleFormat);
 
+        // Only handle 1-sample-per-pixel DEM data
+        if (samplesPerPixel != 1) {
+            return tile;
+        }
+
         tile.width = static_cast<int>(width);
         tile.height = static_cast<int>(height);
         tile.nodataValue = -9999.0f;
-        tile.elevations.resize(tile.width * tile.height);
+
+        // Safely resize — check for overflow
+        size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+        if (pixelCount > 100'000'000) {  // 100M pixels max — sanity
+            return tile;
+        }
+        try {
+            tile.elevations.resize(pixelCount);
+        } catch (const std::bad_alloc&) {
+            return tile;
+        }
 
         // Read nodata value if present
         char* nodataStr = nullptr;
@@ -232,18 +305,21 @@ public:
 
         // Determine bytes per sample
         int bytesPerSample = bitsPerSample / 8;
-        if (bitsPerSample % 8 != 0 || bytesPerSample < 1) {
-            TIFFClose(tif);
+        if (bitsPerSample % 8 != 0 || bytesPerSample < 1 || bytesPerSample > 8) {
             return tile;
         }
 
         // Determine the data type for reading
-        // GPXZ returns Float32 COG (tiled), Copernicus returns Float32 stripped,
+        // GPXZ returns Float32 COG (tiled, BigTIFF, DEFLATE), Copernicus returns Float32 stripped,
         // SRTM returns Int16 stripped.
         bool isTiled = TIFFIsTiled(tif) != 0;
 
         // Helper lambda to read a single pixel value as float
-        auto readPixelAsFloat = [&](const uint8_t* buf, uint32_t idx) -> float {
+        auto readPixelAsFloat = [&](const uint8_t* buf, size_t bufSize, uint32_t idx) -> float {
+            size_t byteOffset = idx * static_cast<size_t>(bytesPerSample);
+            if (byteOffset + static_cast<size_t>(bytesPerSample) > bufSize) {
+                return tile.nodataValue;  // Out of bounds — return nodata
+            }
             switch (sampleFormat) {
             case SAMPLEFORMAT_IEEEFP:
                 if (bitsPerSample == 32)
@@ -272,38 +348,52 @@ public:
         if (isTiled) {
             // Tiled TIFF (Cloud Optimized GeoTIFF — GPXZ, some Copernicus)
             uint32_t tileWidth = 0, tileHeight = 0;
-            TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth);
-            TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight);
-            if (tileWidth == 0 || tileHeight == 0) {
-                TIFFClose(tif);
+            if (!TIFFGetField(tif, TIFFTAG_TILEWIDTH, &tileWidth) || tileWidth == 0) {
+                return tile;
+            }
+            if (!TIFFGetField(tif, TIFFTAG_TILELENGTH, &tileHeight) || tileHeight == 0) {
                 return tile;
             }
 
             tsize_t tileBufSize = TIFFTileSize(tif);
             if (tileBufSize <= 0) {
-                TIFFClose(tif);
                 return tile;
             }
 
-            std::vector<uint8_t> tileBuf(tileBufSize);
+            std::vector<uint8_t> tileBuf;
+            try {
+                tileBuf.resize(static_cast<size_t>(tileBufSize));
+            } catch (const std::bad_alloc&) {
+                return tile;
+            }
 
             for (uint32_t ty = 0; ty < height; ty += tileHeight) {
                 for (uint32_t tx = 0; tx < width; tx += tileWidth) {
                     uint32_t tileRow = ty / tileHeight;
                     uint32_t tileCol = tx / tileWidth;
-                    if (TIFFReadTile(tif, tileBuf.data(), tileCol, tileRow, 0, 0) < 0) {
-                        TIFFClose(tif);
-                        return tile;
+                    tmsize_t bytesRead = TIFFReadTile(tif, tileBuf.data(), tileCol, tileRow, 0, 0);
+                    if (bytesRead < 0) {
+                        // Read failed — fill this tile's area with nodata
+                        uint32_t rowsInTile = std::min(tileHeight, height - ty);
+                        uint32_t colsInTile = std::min(tileWidth, width - tx);
+                        for (uint32_t py = 0; py < rowsInTile; ++py) {
+                            for (uint32_t px = 0; px < colsInTile; ++px) {
+                                uint32_t outIdx = (ty + py) * width + (tx + px);
+                                tile.elevations[outIdx] = tile.nodataValue;
+                            }
+                        }
+                        continue;
                     }
 
                     // Copy pixels from tile to output
                     uint32_t rowsInTile = std::min(tileHeight, height - ty);
                     uint32_t colsInTile = std::min(tileWidth, width - tx);
+                    size_t bufSize = static_cast<size_t>(bytesRead);
                     for (uint32_t py = 0; py < rowsInTile; ++py) {
                         for (uint32_t px = 0; px < colsInTile; ++px) {
                             uint32_t tileIdx = py * tileWidth + px;
                             uint32_t outIdx = (ty + py) * width + (tx + px);
-                            tile.elevations[outIdx] = readPixelAsFloat(tileBuf.data(), tileIdx);
+                            tile.elevations[outIdx] = readPixelAsFloat(tileBuf.data(), bufSize, tileIdx);
                         }
                     }
                 }
@@ -313,25 +403,34 @@ public:
             // Stripped TIFF (scanline-based — SRTM, some Copernicus)
             tsize_t scanlineSize = TIFFScanlineSize(tif);
             if (scanlineSize <= 0) {
-                TIFFClose(tif);
                 return tile;
             }
 
-            std::vector<uint8_t> scanlineBuf(scanlineSize);
+            std::vector<uint8_t> scanlineBuf;
+            try {
+                scanlineBuf.resize(static_cast<size_t>(scanlineSize));
+            } catch (const std::bad_alloc&) {
+                return tile;
+            }
 
             for (uint32_t y = 0; y < height; ++y) {
                 if (TIFFReadScanline(tif, scanlineBuf.data(), y, 0) < 0) {
-                    TIFFClose(tif);
-                    return tile;
+                    // Fill remaining rows with nodata
+                    for (uint32_t yy = y; yy < height; ++yy) {
+                        for (uint32_t x = 0; x < width; ++x) {
+                            tile.elevations[yy * width + x] = tile.nodataValue;
+                        }
+                    }
+                    break;
                 }
+                size_t bufSize = static_cast<size_t>(scanlineSize);
                 for (uint32_t x = 0; x < width; ++x) {
-                    tile.elevations[y * width + x] = readPixelAsFloat(scanlineBuf.data(), x);
+                    tile.elevations[y * width + x] = readPixelAsFloat(scanlineBuf.data(), bufSize, x);
                 }
             }
             tile.valid = true;
         }
 
-        TIFFClose(tif);
         return tile;
     }
 

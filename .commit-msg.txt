@@ -1,18 +1,28 @@
-Remove Circle Arc, Polyline, and Bezier creation tools
+Fix GPXZ DEM tile download crash — use memory-based TIFF reading
 
-Remove the SCANeR-style Circle Arc, Polyline, and Bezier curve creation
-tools from Road Studio, keeping only the Straight Line tool and the
-original LaneMaker Road mode.
+The GPXZ API returns BigTIFF format Cloud Optimized GeoTIFFs with
+DEFLATE compression. The previous code used TIFFOpen with a temp file,
+which could crash on Windows due to:
+1. Path encoding issues (UTF-8 vs ANSI for temp file paths)
+2. File handle locking between QTemporaryFile and libtiff
+3. No bounds checking on tile/scanline buffer access
 
-Removed:
-- Mode_CircleArc, Mode_Polyline, Mode_Bezier from EditMode enum
-- forceArc, polylineMode, bezierMode flags from RoadCreationSession
-- Arc/Bezier geometry branches from UpdateFlexGeometry()
-- arcButton, polylineButton, bezierButton from MainWidget
-- gotoCircleArcMode, gotoPolylineMode, gotoBezierMode slots
-- Mode cases from SetEditMode, SetModeFromReplay, replay_window
+Fix: Replace TIFFOpen(tempFile) with TIFFClientOpen (memory-based I/O).
+This reads the GeoTIFF directly from the QByteArray buffer using custom
+read/seek/size callbacks — no temp file needed at all.
 
-The Straight Line tool and standard Road mode remain unchanged.
+Additional robustness improvements:
+- Bounds checking in readPixelAsFloat (prevents buffer overflows)
+- RAII guard for TIFFClose (TiffGuard) — ensures cleanup on all paths
+- Size sanity checks (max 10000x10000, max 100M pixels)
+- std::bad_alloc catch for large allocations
+- Partial tile/scanline failure handling (fills with nodata instead
+  of returning empty tile)
+- samplesPerPixel != 1 rejection (DEM should be single-band)
+- 60-second network timeout for DEM downloads
+- GPXZ API key passed via x-api-key header (more secure, per docs)
+- GPXZ API key set as default (ak_NgEXLGho_z5TBKb44GCFKIirC)
+- GPXZ LiDAR set as default DEM source
 
 Build: SUCCESS
 Tests: 504/504 passed, 5388 assertions, 0 failed

@@ -6,6 +6,7 @@
 
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QTimer>
 #include <QFile>
 #include <QDir>
 #include <QImage>
@@ -120,17 +121,30 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     }
 
     QNetworkRequest request((QUrl(url)));
+    request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
     if (m_store->exportSettings().demSource == terrain::DemSource::GLAD_SRTM) {
         // GLAD uses basic auth: glad/ardpas
         QString header = "glad:ardpas";
         request.setRawHeader("Authorization", "Basic " + header.toUtf8().toBase64());
     }
     if (!m_store->exportSettings().openTopoApiKey.isEmpty() &&
-        m_store->exportSettings().demSource != terrain::DemSource::GLAD_SRTM) {
+        m_store->exportSettings().demSource != terrain::DemSource::GLAD_SRTM &&
+        m_store->exportSettings().demSource != terrain::DemSource::GPXZ_LiDAR) {
         request.setRawHeader("api-key", m_store->exportSettings().openTopoApiKey.toUtf8());
+    }
+    // GPXZ uses x-api-key header (more secure than URL parameter)
+    if (m_store->exportSettings().demSource == terrain::DemSource::GPXZ_LiDAR &&
+        !m_store->exportSettings().gpxzApiKey.isEmpty()) {
+        request.setRawHeader("x-api-key", m_store->exportSettings().gpxzApiKey.toUtf8());
     }
 
     QNetworkReply* reply = m_network->get(request);
+    // Set a 60-second timeout for DEM downloads
+    QTimer::singleShot(60000, reply, [reply]() {
+        if (reply->isRunning()) {
+            reply->abort();
+        }
+    });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
@@ -391,16 +405,16 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     case terrain::DemSource::OpenTopo_USGS_3DEP: demType = "USGS10m"; break;
     case terrain::DemSource::GPXZ_LiDAR:
         if (settings.gpxzApiKey.isEmpty()) return {};
+        // API key is passed via x-api-key header (set in downloadDemForTile)
         return QString("https://api.gpxz.io/v1/elevation/raster?"
                        "bbox_left=%1&bbox_right=%2&bbox_bottom=%3&bbox_top=%4"
-                       "&height_px=%5&width_px=%6&api_key=%7")
+                       "&height_px=%5&width_px=%6")
             .arg(tile.bounds.west, 0, 'f', 6)
             .arg(tile.bounds.east, 0, 'f', 6)
             .arg(tile.bounds.south, 0, 'f', 6)
             .arg(tile.bounds.north, 0, 'f', 6)
             .arg(settings.heightmapResolution)
-            .arg(settings.heightmapResolution)
-            .arg(settings.gpxzApiKey);
+            .arg(settings.heightmapResolution);
     case terrain::DemSource::GLAD_SRTM:
         return QString("https://glad.umd.edu/dataset/srtm-90m/%1/%2")
             .arg(tile.bounds.south, 0, 'f', 4).arg(tile.bounds.west, 0, 'f', 4);
