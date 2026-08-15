@@ -1,14 +1,14 @@
-// ═══════════════════════════════════════════════════════════
-// OpenGeoStudio — Qt Application Entry Point
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// OpenGeoStudio Ã¢â‚¬â€ Qt Application Entry Point
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 //
 // Initializes QApplication, creates the ApplicationContext,
 // and starts the Qt event loop. This is the native C++ replacement
 // for the Electron main process (app/main.ts).
 //
-// The road engine is called directly via RoadEngineService —
+// The road engine is called directly via RoadEngineService Ã¢â‚¬â€
 // no IPC, no N-API, no Node.js.
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 #include <QApplication>
 #include <QMainWindow>
@@ -36,7 +36,7 @@
 #include <QKeySequence>
 #include <QCompleter>
 
-// Road engine — direct C++ include, no N-API bridge
+// Road engine Ã¢â‚¬â€ direct C++ include, no N-API bridge
 #include "road_engine.hpp"
 
 // Core services
@@ -59,9 +59,9 @@
 #include "app/MapViewportWidget.hpp"
 #endif
 
-// ═══════════════════════════════════════════════════════════
-// SettingsDialog — API keys and project settings
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// SettingsDialog Ã¢â‚¬â€ API keys and project settings
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -130,9 +130,9 @@ public:
     }
 };
 
-// ═══════════════════════════════════════════════════════════
-// CommandPalette — Ctrl+Shift+P quick command execution
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// CommandPalette Ã¢â‚¬â€ Ctrl+Shift+P quick command execution
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 class CommandPalette : public QDialog {
     Q_OBJECT
@@ -215,9 +215,9 @@ private:
     }
 };
 
-// ═══════════════════════════════════════════════════════════
-// AppMainWindow — the application shell
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// AppMainWindow Ã¢â‚¬â€ the application shell
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 class AppMainWindow : public QMainWindow {
     Q_OBJECT
@@ -261,7 +261,7 @@ private:
     QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
-    // RoadInspector removed — LaneMaker's MainWindow has its own UI
+    // RoadInspector removed Ã¢â‚¬â€ LaneMaker's MainWindow has its own UI
 #if defined(HAVE_MAPLIBRE)
     MapViewportWidget* m_mapWidget = nullptr;
 #endif
@@ -302,7 +302,7 @@ private:
         exitAct->setShortcut(QKeySequence::Quit);
         connect(exitAct, &QAction::triggered, qApp, &QApplication::quit);
 
-        // View menu — workspace switching
+        // View menu Ã¢â‚¬â€ workspace switching
         QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
         for (const auto& ws : m_ctx->workspaces().workspaces()) {
             auto* act = viewMenu->addAction(ws.name);
@@ -459,7 +459,7 @@ private:
         logoLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #e6edf3; padding: 0 8px;");
         toolbar->addWidget(logoLabel);
 
-        // Workspace tabs (center-left) — checkable, like the Electron app
+        // Workspace tabs (center-left) Ã¢â‚¬â€ checkable, like the Electron app
         auto* wsGroup = new QActionGroup(toolbar);
         wsGroup->setExclusive(true);
         for (const auto& ws : m_ctx->workspaces().workspaces()) {
@@ -519,7 +519,7 @@ private:
             connect(m_terrainStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
                     this, [this](double lat, double lon) {
                         m_statusLabel->setText(
-                            QStringLiteral("Terrain — Clicked: %1, %2")
+                            QStringLiteral("Terrain Ã¢â‚¬â€ Clicked: %1, %2")
                                 .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
                     });
             connect(m_terrainStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
@@ -531,7 +531,7 @@ private:
         }
 #endif
 
-        // Page 2: Road Studio (LaneMaker's MainWindow — full road editor)
+        // Page 2: Road Studio (LaneMaker's MainWindow Ã¢â‚¬â€ full road editor)
         m_roadStudioWidget = new RoadStudioWidget();
         m_centerStack->addWidget(m_roadStudioWidget);
 
@@ -543,7 +543,7 @@ private:
             connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
                     this, [this](double lat, double lon) {
                         m_statusLabel->setText(
-                            QStringLiteral("Train Studio — Clicked: %1, %2")
+                            QStringLiteral("Train Studio Ã¢â‚¬â€ Clicked: %1, %2")
                                 .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
                     });
             connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
@@ -564,7 +564,7 @@ private:
     }
 
     void setupDockWidgets() {
-        // Left dock — project tree / explorer
+        // Left dock Ã¢â‚¬â€ project tree / explorer
         m_leftDock = new QDockWidget(tr("Project"), this);
         m_leftDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         m_leftDock->setStyleSheet(
@@ -575,7 +575,7 @@ private:
         m_leftDock->setWidget(leftContent);
         addDockWidget(Qt::LeftDockWidgetArea, m_leftDock);
 
-        // Right dock — inspector / properties
+        // Right dock Ã¢â‚¬â€ inspector / properties
         m_rightDock = new QDockWidget(tr("Inspector"), this);
         m_rightDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         m_rightDock->setStyleSheet(
@@ -659,7 +659,7 @@ private slots:
             m_rightDock->setWindowTitle("Inspector");
         }
 
-        setWindowTitle(QStringLiteral("OpenGeoStudio — %1").arg(ws.name));
+        setWindowTitle(QStringLiteral("OpenGeoStudio Ã¢â‚¬â€ %1").arg(ws.name));
         updateStatusBar();
 
         // Sync toolbar tab
@@ -680,13 +680,13 @@ private slots:
         updateStatusBar();
     }
 
-    // ─── Project state save/load ─────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Project state save/load Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // Serializes TerrainStore + road .xodr into the project folder
     // and .ogproj moduleState so all studios share the same project.
     //
-    // Save:  terrain state → .ogproj moduleState["terrain"]
-    //        road network  → {project}/Roads/road.xodr (auto-saved)
-    //        road path     → .ogproj moduleState["road-studio"]["xodrFile"]
+    // Save:  terrain state Ã¢â€ â€™ .ogproj moduleState["terrain"]
+    //        road network  Ã¢â€ â€™ {project}/Roads/road.xodr (auto-saved)
+    //        road path     Ã¢â€ â€™ .ogproj moduleState["road-studio"]["xodrFile"]
     //
     // Load:  terrain state restored from .ogproj
     //        road .xodr auto-loaded into LaneMaker
@@ -700,11 +700,11 @@ private slots:
 
         const QString basePath = m_ctx->projects().current().basePath;
 
-        // ── Terrain state → moduleState ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Terrain state Ã¢â€ â€™ moduleState Ã¢â€â‚¬Ã¢â€â‚¬
         QJsonObject moduleState;
         moduleState["terrain"] = m_ctx->terrain().toJson();
 
-        // ── Road network → {project}/Roads/road.xodr ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Road network Ã¢â€ â€™ {project}/Roads/road.xodr Ã¢â€â‚¬Ã¢â€â‚¬
         if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
             auto* lmw = m_roadStudioWidget->laneMakerWindow();
 
@@ -722,7 +722,7 @@ private slots:
                 qDebug() << "saveProjectState: road file saved:" << roadFile
                          << "size:" << QFileInfo(roadFile).size();
             } else {
-                qDebug() << "saveProjectState: WARNING — road file was NOT created:" << roadFile;
+                qDebug() << "saveProjectState: WARNING Ã¢â‚¬â€ road file was NOT created:" << roadFile;
             }
         } else {
             qDebug() << "saveProjectState: road studio widget not available";
@@ -744,12 +744,12 @@ private slots:
         const auto& proj = m_ctx->projects().current();
         const QJsonObject& ms = proj.moduleState;
 
-        // ── Restore terrain state ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Restore terrain state Ã¢â€â‚¬Ã¢â€â‚¬
         if (ms.contains("terrain")) {
             m_ctx->terrain().fromJson(ms["terrain"].toObject());
         }
 
-        // ── Restore road network — defer loading until Road Studio is visible ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Restore road network Ã¢â‚¬â€ defer loading until Road Studio is visible Ã¢â€â‚¬Ã¢â€â‚¬
         // Loading immediately crashes because LaneMaker's OpenGL context
         // isn't ready until the Road Studio page is actually shown.
         if (ms.contains("road-studio")) {
@@ -769,7 +769,7 @@ private slots:
             }
         }
 
-        // ── Update project bounds in terrain store ──
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Update project bounds in terrain store Ã¢â€â‚¬Ã¢â€â‚¬
         if (proj.bounds.valid) {
             terrain::GeoBounds bounds;
             bounds.south = proj.bounds.minLat;
@@ -788,7 +788,7 @@ private slots:
         if (!ok || name.isEmpty()) return;
 
         // Auto-create in Documents/OpenGeoStudio/Projects/{name}
-        // No folder dialog — fully automatic
+        // No folder dialog Ã¢â‚¬â€ fully automatic
         const QString baseDir = QStandardPaths::writableLocation(
             QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
         QDir().mkpath(baseDir);
@@ -815,7 +815,7 @@ private slots:
         if (!ok || name.isEmpty()) return;
 
         // Auto-create in Documents/OpenGeoStudio/Projects/{name}
-        // No folder dialog — fully automatic
+        // No folder dialog Ã¢â‚¬â€ fully automatic
         const QString baseDir = QStandardPaths::writableLocation(
             QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
         QDir().mkpath(baseDir);
@@ -849,9 +849,9 @@ private slots:
     }
 };
 
-// ═══════════════════════════════════════════════════════════
-// Main — application entry point
-// ═══════════════════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// Main Ã¢â‚¬â€ application entry point
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
@@ -860,7 +860,7 @@ int main(int argc, char* argv[]) {
     app.setWindowIcon(QIcon(":/icons/app.png"));
 
     // Initialize LaneMaker's Qt resources (shaders, models, icons)
-    // Required because lanemaker is a static library — Qt doesn't auto-register
+    // Required because lanemaker is a static library Ã¢â‚¬â€ Qt doesn't auto-register
     // resources from static libraries in Qt 6.
     Q_INIT_RESOURCE(shaders);
     Q_INIT_RESOURCE(images);
@@ -904,7 +904,7 @@ int main(int argc, char* argv[]) {
         "QScrollBar::add-line, QScrollBar::sub-line { border: none; height: 0; width: 0; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
 
-        // Toolbars — top bar like reference app
+        // Toolbars Ã¢â‚¬â€ top bar like reference app
         "QToolBar { background: #0d1117; border: none; border-bottom: 1px solid #30363d; spacing: 2px; padding: 4px 6px; }"
         "QToolBar::separator { width: 1px; height: 20px; background: #30363d; margin: 4px 8px; }"
         "QToolBar QToolButton { padding: 5px 12px; border-radius: 6px; color: #7d8590; font-size: 13px; }"
@@ -979,8 +979,10 @@ int main(int argc, char* argv[]) {
 
     AppMainWindow window(&ctx);
     window.show();
+    window.show();
 
-    qDebug() << "OpenGeoStudio started — Road Engine v"
+
+    qDebug() << "OpenGeoStudio started Ã¢â‚¬â€ Road Engine v"
              << QString::fromLatin1(road_engine::versionString());
 
     return app.exec();

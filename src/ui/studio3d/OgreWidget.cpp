@@ -81,6 +81,14 @@ void OgreWidget::initOgre()
     QString appDir = QCoreApplication::applicationDirPath();
     QString pluginsCfg = appDir + "/plugins.cfg";
 
+    // Debug log file â€” write directly to file so we can see where it crashes
+    QString debugLogPath = appDir + "/ogre_debug.log";
+    QFile debugLog(debugLogPath);
+    debugLog.open(QIODevice::WriteOnly | QIODevice::Append);
+    auto logStep = [&](const QString& msg) {
+        debugLog.write((QDateTime::currentDateTime().toString("hh:mm:ss.zzz ") + msg + "\n").toUtf8());
+        debugLog.flush();
+    };
     // Create plugins.cfg pointing to the app directory
     if (!QFile::exists(pluginsCfg)) {
         QString cfg = QString(
@@ -117,7 +125,6 @@ void OgreWidget::initOgre()
     }
 
     m_root->initialise(false);
-
     // Create render window using Qt's window handle
     Ogre::NameValuePairList params;
     params["externalWindowHandle"] = Ogre::StringConverter::toString(
@@ -125,20 +132,35 @@ void OgreWidget::initOgre()
 
     m_renderWindow = m_root->createRenderWindow("OgreWindow",
         width(), height(), false, &params);
+    if (!m_renderWindow) {
+        qWarning() << "[OGRE] Failed to create render window!";
+        return;
+    }
+    logStep(QString("Render window created: %1x%2").arg(width()).arg(height()));
 
-    // Create scene manager
-    m_sceneManager = m_root->createSceneManager(Ogre::ST_GENERIC, 2);
-
+    // Create scene manager â€” use instance name like the samples
+    m_sceneManager = m_root->createSceneManager(Ogre::ST_GENERIC, 2, "MainSM");
+    if (!m_sceneManager) {
+        qWarning() << "[OGRE] Failed to create scene manager!";
+        return;
+    }
     // Create camera (OGRE-Next 4.0: cameras are NOT attached to SceneNodes)
     m_camera = m_sceneManager->createCamera("MainCamera");
+    if (!m_camera) {
+        qWarning() << "[OGRE] Failed to create camera!";
+        return;
+    }
     m_camera->setNearClipDistance(0.5f);
     m_camera->setFarClipDistance(50000.0f);
     m_camera->setAutoAspectRatio(true);
     m_camera->setPosition(Ogre::Vector3(0, 300, 500));
     m_camera->lookAt(Ogre::Vector3(0, 0, 0));
-
     // Setup compositor (replaces Viewport in OGRE-Next)
     Ogre::CompositorManager2* compositorManager = m_root->getCompositorManager2();
+    if (!compositorManager) {
+        qWarning() << "[OGRE] No compositor manager!";
+        return;
+    }
     Ogre::ColourValue bgColor(0.2f, 0.4f, 0.6f, 1.0f);
     if (!compositorManager->hasWorkspaceDefinition("MainWorkspace")) {
         compositorManager->createBasicWorkspaceDef("MainWorkspace", bgColor,
@@ -146,8 +168,7 @@ void OgreWidget::initOgre()
     }
     compositorManager->addWorkspace(m_sceneManager,
         m_renderWindow->getTexture(), m_camera, "MainWorkspace", true);
-
-    // Setup Hlms (shader system) — use getDefaultPaths like the OGRE samples
+    // Setup Hlms (shader system) â€” use getDefaultPaths like the OGRE samples
     {
         QString hlmsFolder = appDir + "/";
         Ogre::String rootHlmsFolder = hlmsFolder.toStdString();
@@ -160,12 +181,14 @@ void OgreWidget::initOgre()
             Ogre::String mainFolderPath;
             Ogre::StringVector libraryFoldersPaths;
             Ogre::HlmsPbs::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
+            logStep("PBS main folder: " + QString::fromStdString(mainFolderPath));
 
             Ogre::Archive* archivePbs = archMgr.load(
                 rootHlmsFolder + mainFolderPath, "FileSystem", true);
 
             Ogre::ArchiveVec archivePbsLibraryFolders;
             for (const auto& libPath : libraryFoldersPaths) {
+                logStep("PBS lib folder: " + QString::fromStdString(libPath));
                 Ogre::Archive* archiveLibrary = archMgr.load(
                     rootHlmsFolder + libPath, "FileSystem", true);
                 archivePbsLibraryFolders.push_back(archiveLibrary);
@@ -181,12 +204,14 @@ void OgreWidget::initOgre()
             Ogre::String mainFolderPath;
             Ogre::StringVector libraryFoldersPaths;
             Ogre::HlmsUnlit::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
+            logStep("Unlit main folder: " + QString::fromStdString(mainFolderPath));
 
             Ogre::Archive* archiveUnlit = archMgr.load(
                 rootHlmsFolder + mainFolderPath, "FileSystem", true);
 
             Ogre::ArchiveVec archiveUnlitLibraryFolders;
             for (const auto& libPath : libraryFoldersPaths) {
+                logStep("Unlit lib folder: " + QString::fromStdString(libPath));
                 Ogre::Archive* archiveLibrary = archMgr.load(
                     rootHlmsFolder + libPath, "FileSystem", true);
                 archiveUnlitLibraryFolders.push_back(archiveLibrary);
@@ -197,34 +222,24 @@ void OgreWidget::initOgre()
             hlmsManager->registerHlms(hlmsUnlit);
         }
     }
-
-    // Lighting
+    // Lighting - OGRE-Next 4.0: lights MUST be attached to a SceneNode
+    // BEFORE calling setDirection() (it redirects to the node)
     m_sceneManager->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f),
                                     Ogre::ColourValue(0.1f, 0.1f, 0.1f),
                                     Ogre::Vector3(0, 1, 0));
     Ogre::Light* dirLight = m_sceneManager->createLight();
     dirLight->setType(Ogre::Light::LT_DIRECTIONAL);
-    dirLight->setDirection(Ogre::Vector3(-0.5f, -1.0f, -0.3f).normalisedCopy());
     dirLight->setDiffuseColour(Ogre::ColourValue(1.0f, 1.0f, 0.95f));
     Ogre::SceneNode* lightNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     lightNode->attachObject(dirLight);
+    lightNode->setDirection(Ogre::Vector3(-0.5f, -1.0f, -0.3f).normalisedCopy());
 
     qDebug() << "OGRE-Next initialized successfully";
 }
 
 void OgreWidget::setupScene()
 {
-    // Create a simple cube to verify rendering works
-    Ogre::Item* item = m_sceneManager->createItem(
-        "Cube.mesh",
-        Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME,
-        Ogre::SCENE_DYNAMIC);
-    if (item) {
-        Ogre::SceneNode* node = m_sceneManager->getRootSceneNode()->createChildSceneNode();
-        node->attachObject(item);
-        node->setScale(100, 100, 100);
-        node->setPosition(0, 50, 0);
-    }
+    // No mesh files deployed - terrain loaded separately via loadTerrain()
 }
 
 void OgreWidget::setupTerra()

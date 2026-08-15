@@ -1,22 +1,24 @@
-Fix 3D Studio crash — use getDefaultPaths for Hlms shader loading
+Fix 3D Studio crash — attach light to SceneNode before setDirection
 
-OGRE-Next's Hlms system expects the data folder to point to the
-render-system-specific subfolder (e.g. Hlms/Pbs/HLSL for D3D11),
-not the root Hlms/Pbs folder. The shader template files like
-VertexShader_vs.hlsl live in the HLSL subfolder.
+OGRE-Next 4.0 changed the Light API: lights MUST be attached to a
+SceneNode BEFORE calling setDirection(). The Light::setDirection()
+documentation says:
 
-The crash was:
-  OGRE EXCEPTION(6:FileNotFoundException):
-  Data folder provided contains no valid template shader files.
-  Folder: D:/git/OpenGeoStudio-Qt/build/deploy/Hlms/Pbs
+  "Light::setDirection and Light::getDirection will redirect to the
+   SceneNode and assert or crash if not attached to one."
+
+The crash was an access violation (0xc0000005) in OgreNextMain.dll
+because setDirection() was called on a light that wasn't yet attached
+to a SceneNode.
 
 Fix:
-  - Use HlmsPbs::getDefaultPaths() and HlmsUnlit::getDefaultPaths()
-    to get the correct data folder and library folder paths
-  - These functions detect the active render system (D3D11) and
-    return "Hlms/Pbs/HLSL" as the data folder
-  - Library folders include Common/Any, Pbs/Any, Pbs/Any/Main, etc.
-  - Load each archive with readOnly=true (like the OGRE samples)
+  - Reorder: create light, set type/colour, create node, attach light
+    to node, THEN call setDirection on the node
+  - Also removed setupScene() Cube.mesh creation (no mesh files
+    deployed yet — terrain loaded separately via loadTerrain())
+
+Verified: App launches, 3D Studio opens, OGRE initializes without
+crash, app stays running.
 
 Generated with [Devin](https://devin.ai)
 
