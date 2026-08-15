@@ -67,6 +67,8 @@ void LmStyleServer::onReadyRead() {
 #include "change_tracker.h"
 #include "LaneConfigWidget.h"
 #include "DrawOptionDialog.h"
+#include "RoadTypes.hpp"
+#include <QComboBox>
 
 MainWidget* MainWidget::instance = nullptr;
 
@@ -263,6 +265,34 @@ MainWidget::MainWidget(QWidget* parent)
     sep3->setStyleSheet("color: #30363d;");
     topBarLayout->addWidget(sep3);
 
+    // SCANeR-style road profile selector
+    auto* profileLabel = new QLabel("Profile:");
+    topBarLayout->addWidget(profileLabel);
+    profileCombo = new QComboBox(this);
+    profileCombo->setMinimumWidth(220);
+    profileCombo->setStyleSheet(
+        "QComboBox { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;"
+        "padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
+        "QComboBox:hover { border-color: #1f6feb; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background: #0d1117; border: 1px solid #30363d;"
+        "selection-background-color: #1f6feb; color: #e6edf3; }");
+    // Populate with all profiles from the catalog
+    {
+        auto profiles = roads::RoadProfileCatalog::all();
+        for (auto it = profiles.begin(); it != profiles.end(); ++it) {
+            profileCombo->addItem(it.key(), it.key());  // display text, userData
+        }
+        profileCombo->setCurrentText("city_2x1");
+    }
+    profileCombo->setToolTip(tr("Select a SCANeR-style road profile — sets lane width, lane count, and offsets"));
+    topBarLayout->addWidget(profileCombo);
+
+    auto* sep3b = new QFrame;
+    sep3b->setFrameShape(QFrame::VLine);
+    sep3b->setStyleSheet("color: #30363d;");
+    topBarLayout->addWidget(sep3b);
+
     // Zoom buttons
     zoomInButton = new QToolButton(this);
     zoomInButton->setText("➕");
@@ -370,6 +400,8 @@ MainWidget::MainWidget(QWidget* parent)
     connect(redoButton, &QAbstractButton::clicked, g_mainWindow, &MainWindow::redo);
     connect(drawOptionButton, &QAbstractButton::clicked, drawOptionDialog, &QDialog::open);
     connect(viewModeButton, &QAbstractButton::toggled, this, &MainWidget::toggleViewMode);
+    connect(profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWidget::onProfileChanged);
     connect(loadMapButton, &QAbstractButton::toggled, this, [this](bool checked) {
         if (checked) {
             loadMapBackground();
@@ -489,6 +521,38 @@ void MainWidget::gotoBezierMode(bool checked)
     SetEditMode(LM::Mode_Bezier);
     LM::ActionManager::Instance()->Record(LM::Mode_Create);
     laneConfig->GotoRoadMode();
+}
+
+void MainWidget::onProfileChanged(int index)
+{
+    if (index < 0) return;
+    QString key = profileCombo->itemData(index).toString();
+    roads::RoadProfile profile = roads::RoadProfileCatalog::get(key);
+
+    // Update global lane width
+    LM::LaneWidth = profile.laneWidth;
+
+    // Update lane configuration: left/right lanes and offsets
+    LM::LanePlan leftPlan, rightPlan;
+    leftPlan.laneCount = static_cast<int8_t>(profile.leftLanes);
+    leftPlan.offsetx2 = static_cast<int8_t>(profile.leftOffsetX2);
+    rightPlan.laneCount = static_cast<int8_t>(profile.rightLanes);
+    rightPlan.offsetx2 = static_cast<int8_t>(profile.rightOffsetX2);
+
+    // Apply to the lane config widget (this records the action and repaints)
+    laneConfig->SetOption(leftPlan, rightPlan);
+
+    // Update the lane width spinner to reflect the profile's lane width
+    // The spinner's valueChanged signal will also set LM::LaneWidth, but
+    // we already set it above so block signals to avoid redundant work.
+    auto* spinner = laneConfig->findChild<QDoubleSpinBox*>();
+    if (spinner) {
+        QSignalBlocker blocker(spinner);
+        spinner->setValue(profile.laneWidth);
+    }
+
+    // Force a repaint of the viewport to show updated geometry
+    if (mapViewGL) mapViewGL->update();
 }
 
 void MainWidget::gotoCreateLaneMode(bool checked)

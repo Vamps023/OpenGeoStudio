@@ -228,6 +228,7 @@ target_include_directories(lanemaker
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/traffic
         ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/test
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
 )
 
 # NOMINMAX to prevent Windows min/max macros conflicting with std::min/std::max

@@ -18,6 +18,7 @@ class QLabel;
 class QSlider;
 class QToolButton;
 class QButtonGroup;
+class QComboBox;
 class QPixmap;
 QT_END_NAMESPACE
 
@@ -89,6 +90,7 @@ private slots:
     void gotoBezierMode(bool);
     void toggleViewMode(bool checked);
     void onMapMoved();
+    void onProfileChanged(int index);
 
 private:
     static MainWidget* instance;
@@ -121,6 +123,7 @@ protected:
     QToolButton* zoomOutButton;    // Zoom out
     QToolButton* fitButton;        // Fit to content
     QLineEdit* searchEdit;         // Location search bar
+    QComboBox* profileCombo;       // SCANeR-style road profile selector
 
     LaneConfigWidget* laneConfig;
     DrawOptionDialog* drawOptionDialog;

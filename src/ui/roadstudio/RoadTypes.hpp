@@ -131,18 +131,27 @@ struct ControlPoint {
 
 // RoadProfile — SCANeR-style road profile
 struct RoadProfile {
-    QString type = "city_2x1";  // city_2x1, city_2x2, country_2x1, highway_2x3, custom
+    QString type = "city_2x1";  // profile type key
     QString surfaceTexture;
     QString markingTexture;
     double laneWidth = 3.5;
     bool hasSidewalk = false;
     bool hasCurb = false;
+    int leftLanes = 1;       // lanes on left side
+    int rightLanes = 1;      // lanes on right side
+    int leftOffsetX2 = 0;    // left offset (×2)
+    int rightOffsetX2 = 0;   // right offset (×2)
+    double speedLimit = 50;  // km/h
+    QString description;
 
     QJsonObject toJson() const {
         return {
             {"type", type}, {"surfaceTexture", surfaceTexture},
             {"markingTexture", markingTexture}, {"laneWidth", laneWidth},
-            {"hasSidewalk", hasSidewalk}, {"hasCurb", hasCurb}
+            {"hasSidewalk", hasSidewalk}, {"hasCurb", hasCurb},
+            {"leftLanes", leftLanes}, {"rightLanes", rightLanes},
+            {"leftOffsetX2", leftOffsetX2}, {"rightOffsetX2", rightOffsetX2},
+            {"speedLimit", speedLimit}, {"description", description}
         };
     }
 
@@ -154,7 +163,163 @@ struct RoadProfile {
         p.laneWidth = j["laneWidth"].toDouble(3.5);
         p.hasSidewalk = j["hasSidewalk"].toBool(false);
         p.hasCurb = j["hasCurb"].toBool(false);
+        p.leftLanes = j["leftLanes"].toInt(1);
+        p.rightLanes = j["rightLanes"].toInt(1);
+        p.leftOffsetX2 = j["leftOffsetX2"].toInt(0);
+        p.rightOffsetX2 = j["rightOffsetX2"].toInt(0);
+        p.speedLimit = j["speedLimit"].toDouble(50);
+        p.description = j["description"].toString();
         return p;
+    }
+};
+
+// ─── SCANeR-style Road Profile Catalog ──────────────────────
+// Comprehensive set of predefined road profiles based on
+// SCANeR Studio .rndProfile files and real-world road standards.
+struct RoadProfileCatalog {
+    // Get all predefined profiles as a map (key → profile)
+    static QMap<QString, RoadProfile> all() {
+        return {
+            // ─── Urban / City ───────────────────────────
+            {"city_2x1", {
+                "city_2x1", "asphalt", "marking", 3.5,
+                true, true, 1, 1, 0, 0, 50,
+                "City road — 1 lane each way, sidewalk, curb"
+            }},
+            {"city_2x2", {
+                "city_2x2", "asphalt", "marking", 3.5,
+                true, true, 2, 2, 0, 0, 50,
+                "City road — 2 lanes each way, sidewalk, curb"
+            }},
+            {"city_2x3", {
+                "city_2x3", "asphalt", "marking", 3.5,
+                true, true, 3, 3, 0, 0, 60,
+                "City boulevard — 3 lanes each way, sidewalk, curb"
+            }},
+            {"city_oneway_1x2", {
+                "city_oneway_1x2", "asphalt", "marking", 3.5,
+                true, true, 0, 2, 0, 0, 40,
+                "City one-way — 2 lanes, sidewalk, curb"
+            }},
+            {"city_oneway_1x3", {
+                "city_oneway_1x3", "asphalt", "marking", 3.5,
+                true, true, 0, 3, 0, 0, 40,
+                "City one-way — 3 lanes, sidewalk, curb"
+            }},
+
+            // ─── Rural / Country ────────────────────────
+            {"country_2x1", {
+                "country_2x1", "asphalt", "marking", 3.5,
+                false, false, 1, 1, 0, 0, 80,
+                "Country road — 1 lane each way, no sidewalk"
+            }},
+            {"country_2x2", {
+                "country_2x2", "asphalt", "marking", 3.5,
+                false, false, 2, 2, 0, 0, 80,
+                "Country road — 2 lanes each way, no sidewalk"
+            }},
+            {"rural_narrow_2x1", {
+                "rural_narrow_2x1", "asphalt", "marking", 3.0,
+                false, false, 1, 1, 0, 0, 70,
+                "Rural narrow — 1 lane each way, 3.0m lanes"
+            }},
+
+            // ─── Highway / Motorway ─────────────────────
+            {"highway_2x2", {
+                "highway_2x2", "asphalt", "marking", 3.75,
+                false, false, 2, 2, 0, 0, 120,
+                "Highway — 2 lanes each way, 3.75m lanes"
+            }},
+            {"highway_2x3", {
+                "highway_2x3", "asphalt", "marking", 3.75,
+                false, false, 3, 3, 0, 0, 120,
+                "Highway — 3 lanes each way, 3.75m lanes"
+            }},
+            {"highway_2x4", {
+                "highway_2x4", "asphalt", "marking", 3.75,
+                false, false, 4, 4, 0, 0, 120,
+                "Major highway — 4 lanes each way, 3.75m lanes"
+            }},
+
+            // ─── Ramp / Interchange ─────────────────────
+            {"ramp_1x1", {
+                "ramp_1x1", "asphalt", "marking", 4.0,
+                false, false, 1, 0, 0, 0, 60,
+                "Exit ramp — 1 lane, 4.0m width"
+            }},
+            {"ramp_1x2", {
+                "ramp_1x2", "asphalt", "marking", 4.0,
+                false, false, 2, 0, 0, 0, 50,
+                "Wide ramp — 2 lanes, 4.0m width"
+            }},
+
+            // ─── Roundabout / Circle ────────────────────
+            {"roundabout_1x1", {
+                "roundabout_1x1", "asphalt", "marking", 4.5,
+                true, true, 1, 0, 0, 0, 30,
+                "Roundabout — 1 lane, 4.5m width, sidewalk"
+            }},
+            {"roundabout_2x1", {
+                "roundabout_2x1", "asphalt", "marking", 4.5,
+                true, true, 2, 0, 0, 0, 25,
+                "Roundabout — 2 lanes, 4.5m width, sidewalk"
+            }},
+
+            // ─── Parking / Service ──────────────────────
+            {"parking_1x1", {
+                "parking_1x1", "asphalt", "marking", 3.0,
+                true, true, 1, 0, 0, 0, 15,
+                "Parking road — 1 lane, 3.0m, sidewalk"
+            }},
+            {"service_1x1", {
+                "service_1x1", "asphalt", "marking", 3.0,
+                false, false, 1, 0, 0, 0, 20,
+                "Service road — 1 lane, 3.0m"
+            }},
+
+            // ─── Asymmetric / Divided ───────────────────
+            {"divided_2x3", {
+                "divided_2x3", "asphalt", "marking", 3.5,
+                false, false, 2, 3, 0, 0, 80,
+                "Asymmetric divided — 2 left, 3 right"
+            }},
+            {"divided_1x2", {
+                "divided_1x2", "asphalt", "marking", 3.5,
+                false, false, 1, 2, 0, 0, 60,
+                "Asymmetric divided — 1 left, 2 right"
+            }},
+
+            // ─── Custom ─────────────────────────────────
+            {"custom", {
+                "custom", "asphalt", "marking", 3.5,
+                false, false, 1, 1, 0, 0, 50,
+                "Custom — user-defined configuration"
+            }},
+        };
+    }
+
+    // Get a list of (key, description) pairs for UI dropdowns
+    static QStringList profileNames() {
+        QMap<QString, RoadProfile> profiles = all();
+        QStringList names;
+        for (auto it = profiles.begin(); it != profiles.end(); ++it) {
+            names << it.key();
+        }
+        return names;
+    }
+
+    // Get profile by key, returns custom if not found
+    static RoadProfile get(const QString& key) {
+        auto profiles = all();
+        if (profiles.contains(key)) return profiles[key];
+        return profiles["custom"];
+    }
+
+    // Get human-readable label for dropdown
+    static QString label(const QString& key) {
+        auto profiles = all();
+        if (!profiles.contains(key)) return "Custom";
+        return key + " — " + profiles[key].description;
     }
 };
 

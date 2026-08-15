@@ -1,36 +1,30 @@
-Add configurable lane width and SCANeR-style creation tools
+Add SCANeR-style road profile catalog with 20+ presets
 
-Configurable Lane Width:
-- Changed LM::LaneWidth from constexpr to extern double (default 3.25m)
-- Added QDoubleSpinBox to LaneConfigWidget (1.5-5.0m, step 0.25m)
-- Spinner updates LaneWidth at runtime — affects all road creation
-  and rendering immediately
-- Increased lane count limit from 4 to 8 per side (matches Electron)
-- Label shows "Lane W:" in vertical layout, "W:" in horizontal
+Add a comprehensive RoadProfileCatalog to RoadTypes.hpp with 20+
+predefined road profiles organized by category:
+- City (2x1, 2x2, 2x3, one-way variants)
+- Country/Rural (2x1, 2x2, narrow)
+- Highway (2x2, 2x3, 2x4)
+- Ramp/Interchange (1x1, 1x2)
+- Roundabout (1x1, 2x1)
+- Parking/Service (1x1 each)
+- Asymmetric divided (2x3, 1x2)
+- Custom
 
-SCANeR-style Creation Tools:
-- 4 new tool buttons in Road Studio sidebar:
-  - "─" Straight Line (already existed)
-  - "⤴" Circle Arc — click 2 points, creates constant-radius arc
-    using FitArcOrLine (Line if collinear, Arc if curved)
-  - "⌁" Polyline — click multiple points, each creates a Line
-    segment. Space/Enter to finish, Escape to undo last segment
-  - "∼" Bezier — click 2 points, creates smooth cubic bezier
-    using FitParamPoly (smoother than default ConnectRays)
+Each profile defines: lane width, left/right lane counts, offsets,
+speed limit, sidewalk, curb, surface/marking textures, and description.
 
-Implementation:
-- Added Mode_CircleArc, Mode_Polyline, Mode_Bezier to EditMode enum
-- Added forceArc, polylineMode, bezierMode flags to RoadCreationSession
-- UpdateFlexGeometry checks flags to choose geometry type:
-  - forceArc: FitArcOrLine (Line or Arc)
-  - bezierMode: FitParamPoly (cubic bezier)
-  - polylineMode: forceStraightLine=true, no auto-complete
-  - forceStraightLine: direct odr::Line
-- Arc and Bezier auto-complete after first segment (2-click workflow)
-- Polyline stays open until user presses Space/Enter
-- All modes integrated with replay system (SetModeFromReplay + replay_window)
-- All modes use LaneConfigWidget for lane configuration
+Add a profile selector dropdown (QComboBox) to the Road Studio top
+toolbar. Selecting a profile updates:
+- Global LM::LaneWidth
+- Left/right lane plans via LaneConfigWidget::SetOption
+- Lane width spinner value
+- Viewport repaint
 
-Generated with [Devin](https://devin.ai)
+Extended RoadProfile struct with leftLanes, rightLanes, leftOffsetX2,
+rightOffsetX2, speedLimit, and description fields. Updated toJson/fromJson
+for full serialization. Added RoadProfileCatalog with all(), get(),
+profileNames(), and label() static methods.
 
-Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>
+Build: SUCCESS
+Tests: 504/504 passed, 5388 assertions, 0 failed
