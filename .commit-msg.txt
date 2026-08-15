@@ -1,29 +1,20 @@
-Remove all placeholder/synthetic data from export engine
+Fix GPXZ API URL and add proper GeoTIFF DEM reading via libtiff
 
-Replaced every placeholder fallback with proper error reporting:
+GPXZ URL fix:
+- Was: https://data.gpxz.co/api/v1/raster (wrong host — DNS fails)
+- Now: https://api.gpxz.io/v1/elevation/raster (correct per GPXZ docs)
+- Fixed parameter names: south/north/west/east → bbox_left/right/bottom/top
+- Added height_px and width_px params (required by GPXZ API)
+- API key param: key → api_key (per GPXZ docs)
 
-DEM download (downloadDemForTile):
-- Empty URL: was writing flat 0.0m heightmap, now emits error with
-  specific reason (missing API key, token, or file path)
-- Decode failure: was generating synthetic sine-wave terrain, now emits
-  error with data type details (PNG/TIFF/AAIGrid), byte count, and source
-
-Local DEM (loadLocalDemForTile):
-- Missing file: was writing flat 0.0m heightmap, now emits error
-- Load failure: was writing flat heightmap, now emits error with path
-
-Local imagery (loadLocalImageryForTile):
-- Missing file: was filling darkGreen image, now emits error
-- Load failure: was filling darkGreen, now emits error with path
-
-Imagery download (downloadImageryForTile):
-- Empty URL: was filling darkGreen, now emits error with reason
-- Network error: was saving darkGreen image, now emits error
-- Decode failure: was filling darkGreen, now emits error with byte count
-
-All errors now stop the export with a descriptive message instead of
-silently writing fake data. The only intentional skip is
-HeightmapFormat::None (user chose "albedo only" — no DEM output needed).
+GeoTIFF DEM decoding (DemDecoder::decodeGeoTiff):
+- Was using QImage::loadFromData which cannot read Float32 GeoTIFFs
+  (GPXZ and Copernicus return Float32 GeoTIFF)
+- Now uses libtiff directly via TIFFOpen/TIFFReadScanline
+- Supports all data types: Float32, Int16, UInt16, Byte
+- Reads GDAL nodata tag (TIFFTAG_GDAL_NODATA)
+- Uses QTemporaryFile to pass data to libtiff
+- Falls back to QImage only for unsupported formats (e.g. RGB TIFF)
 
 Generated with [Devin](https://devin.ai)
 

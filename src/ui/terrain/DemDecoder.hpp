@@ -22,6 +22,8 @@
 #include <QString>
 #include <QStringList>
 #include <QRegularExpression>
+#include <QTemporaryFile>
+#include <tiffio.h>
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -182,44 +184,118 @@ public:
     }
 
     // ============================================================
-    // GeoTIFF DEM (Copernicus, SRTM, etc.)
+    // GeoTIFF DEM (Copernicus, SRTM, GPXZ, etc.)
     // ============================================================
-    // Load via QImage — works for single-band 16-bit or float32 GeoTIFFs
-    // For proper GeoTIFF reading with geotransform, use libtiff directly
+    // Uses libtiff to read GeoTIFF directly — supports Float32,
+    // Int16, UInt16, and Byte data types with proper nodata handling.
+    // QImage cannot read Float32 GeoTIFFs, so libtiff is required.
     static DemTile decodeGeoTiff(const QByteArray& data) {
         DemTile tile;
-        QImage img;
-        if (!img.loadFromData(data)) return tile;
 
-        tile.width = img.width();
-        tile.height = img.height();
+        // Write data to a temp file so libtiff can read it
+        QTemporaryFile tempFile;
+        tempFile.setAutoRemove(true);
+        if (!tempFile.open()) return tile;
+        tempFile.write(data);
+        tempFile.close();
+
+        TIFF* tif = TIFFOpen(tempFile.fileName().toUtf8().constData(), "r");
+        if (!tif) return tile;
+
+        uint32_t width = 0, height = 0;
+        TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width);
+        TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height);
+
+        if (width == 0 || height == 0) {
+            TIFFClose(tif);
+            return tile;
+        }
+
+        uint16_t bitsPerSample = 8, samplesPerPixel = 1, sampleFormat = SAMPLEFORMAT_UINT;
+        TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitsPerSample);
+        TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+        TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sampleFormat);
+
+        tile.width = static_cast<int>(width);
+        tile.height = static_cast<int>(height);
         tile.nodataValue = -9999.0f;
         tile.elevations.resize(tile.width * tile.height);
 
-        // Handle different image formats
-        if (img.format() == QImage::Format_Grayscale16 ||
-            img.format() == QImage::Format_RGBX64 ||
-            img.format() == QImage::Format_RGBA64) {
+        // Read nodata value if present
+        char* nodataStr = nullptr;
+        if (TIFFGetField(tif, TIFFTAG_GDAL_NODATA, &nodataStr) && nodataStr) {
+            tile.nodataValue = static_cast<float>(QString(nodataStr).toDouble());
+        }
 
-            // 16-bit grayscale — treat as raw elevation
-            for (int y = 0; y < tile.height; ++y) {
-                for (int x = 0; x < tile.width; ++x) {
-                    QRgba64 px = img.pixelColor(x, y).rgba64();
-                    // For 16-bit DEM, the value IS the elevation (or scaled)
-                    tile.elevations[y * tile.width + x] = static_cast<float>(px.red());
+        if (sampleFormat == SAMPLEFORMAT_IEEEFP && bitsPerSample == 32) {
+            // Float32 GeoTIFF (GPXZ, Copernicus) — read as raw float
+            std::vector<float> row(width);
+            for (uint32_t y = 0; y < height; ++y) {
+                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
+                    TIFFClose(tif);
+                    return tile;
+                }
+                for (uint32_t x = 0; x < width; ++x) {
+                    tile.elevations[y * width + x] = row[x];
                 }
             }
-        } else {
-            // 8-bit — convert to grayscale and scale to typical elevation range
-            QImage gray = img.convertToFormat(QImage::Format_Grayscale8);
-            for (int y = 0; y < tile.height; ++y) {
-                for (int x = 0; x < tile.width; ++x) {
-                    tile.elevations[y * tile.width + x] = static_cast<float>(gray.pixelIndex(x, y));
+            tile.valid = true;
+        } else if (sampleFormat == SAMPLEFORMAT_INT && bitsPerSample == 16) {
+            // Int16 GeoTIFF (SRTM) — elevation in meters
+            std::vector<int16_t> row(width);
+            for (uint32_t y = 0; y < height; ++y) {
+                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
+                    TIFFClose(tif);
+                    return tile;
                 }
+                for (uint32_t x = 0; x < width; ++x) {
+                    tile.elevations[y * width + x] = static_cast<float>(row[x]);
+                }
+            }
+            tile.valid = true;
+        } else if (sampleFormat == SAMPLEFORMAT_UINT && bitsPerSample == 16) {
+            // UInt16 GeoTIFF — elevation values
+            std::vector<uint16_t> row(width);
+            for (uint32_t y = 0; y < height; ++y) {
+                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
+                    TIFFClose(tif);
+                    return tile;
+                }
+                for (uint32_t x = 0; x < width; ++x) {
+                    tile.elevations[y * width + x] = static_cast<float>(row[x]);
+                }
+            }
+            tile.valid = true;
+        } else if (sampleFormat == SAMPLEFORMAT_UINT && bitsPerSample == 8) {
+            // 8-bit grayscale
+            std::vector<uint8_t> row(width * samplesPerPixel);
+            for (uint32_t y = 0; y < height; ++y) {
+                if (TIFFReadScanline(tif, row.data(), y, 0) < 0) {
+                    TIFFClose(tif);
+                    return tile;
+                }
+                for (uint32_t x = 0; x < width; ++x) {
+                    tile.elevations[y * width + x] = static_cast<float>(row[x * samplesPerPixel]);
+                }
+            }
+            tile.valid = true;
+        } else {
+            // Unsupported format — try QImage fallback for RGB TIFFs
+            QImage img;
+            img.loadFromData(data);
+            if (!img.isNull()) {
+                QImage gray = img.convertToFormat(QImage::Format_Grayscale16);
+                for (int y = 0; y < tile.height; ++y) {
+                    for (int x = 0; x < tile.width; ++x) {
+                        QRgba64 px = gray.pixelColor(x, y).rgba64();
+                        tile.elevations[y * tile.width + x] = static_cast<float>(px.red());
+                    }
+                }
+                tile.valid = true;
             }
         }
 
-        tile.valid = true;
+        TIFFClose(tif);
         return tile;
     }
 

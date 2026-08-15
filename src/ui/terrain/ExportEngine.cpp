@@ -391,9 +391,15 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     case terrain::DemSource::OpenTopo_USGS_3DEP: demType = "USGS10m"; break;
     case terrain::DemSource::GPXZ_LiDAR:
         if (settings.gpxzApiKey.isEmpty()) return {};
-        return QString("https://data.gpxz.co/api/v1/raster?south=%1&north=%2&west=%3&east=%4&key=%5")
-            .arg(tile.bounds.south).arg(tile.bounds.north)
-            .arg(tile.bounds.west).arg(tile.bounds.east)
+        return QString("https://api.gpxz.io/v1/elevation/raster?"
+                       "bbox_left=%1&bbox_right=%2&bbox_bottom=%3&bbox_top=%4"
+                       "&height_px=%5&width_px=%6&api_key=%7")
+            .arg(tile.bounds.west, 0, 'f', 6)
+            .arg(tile.bounds.east, 0, 'f', 6)
+            .arg(tile.bounds.south, 0, 'f', 6)
+            .arg(tile.bounds.north, 0, 'f', 6)
+            .arg(settings.heightmapResolution)
+            .arg(settings.heightmapResolution)
             .arg(settings.gpxzApiKey);
     case terrain::DemSource::GLAD_SRTM:
         return QString("https://glad.umd.edu/dataset/srtm-90m/%1/%2")
