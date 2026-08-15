@@ -405,6 +405,39 @@ QString Studio3DWidget::sceneFilePath() const
     return m_ctx->projects().current().basePath + "/Scene/scene3d.json";
 }
 
+// Resolve relative paths in a scene JSON to absolute paths using project base path
+QJsonObject Studio3DWidget::resolveScenePaths(const QJsonObject& scene)
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return scene;
+    QString basePath = m_ctx->projects().current().basePath;
+    QDir baseDir(basePath);
+
+    QJsonObject resolved = scene;
+    if (resolved.contains("terrain")) {
+        QJsonObject terrain = resolved["terrain"].toObject();
+        if (terrain.contains("heightmapPath")) {
+            QString hmPath = terrain["heightmapPath"].toString();
+            if (QDir::isRelativePath(hmPath)) {
+                terrain["heightmapPath"] = baseDir.absoluteFilePath(hmPath);
+            }
+        }
+        if (terrain.contains("albedoPath")) {
+            QString albPath = terrain["albedoPath"].toString();
+            if (QDir::isRelativePath(albPath)) {
+                terrain["albedoPath"] = baseDir.absoluteFilePath(albPath);
+            }
+        }
+        resolved["terrain"] = terrain;
+    }
+    if (resolved.contains("xodrPath")) {
+        QString xodrPath = resolved["xodrPath"].toString();
+        if (QDir::isRelativePath(xodrPath)) {
+            resolved["xodrPath"] = baseDir.absoluteFilePath(xodrPath);
+        }
+    }
+    return resolved;
+}
+
 void Studio3DWidget::onSaveScene()
 {
     if (!m_ctx || !m_ctx->projects().hasProject()) {
@@ -418,6 +451,27 @@ void Studio3DWidget::onSaveScene()
     QDir().mkpath(QFileInfo(path).absolutePath());
 
     QJsonObject scene = m_ogreWidget->saveScene();
+
+    // Convert absolute paths to relative (relative to project base path)
+    QString basePath = m_ctx->projects().current().basePath;
+    QDir baseDir(basePath);
+    if (scene.contains("terrain")) {
+        QJsonObject terrain = scene["terrain"].toObject();
+        if (terrain.contains("heightmapPath")) {
+            QString hmPath = terrain["heightmapPath"].toString();
+            terrain["heightmapPath"] = baseDir.relativeFilePath(hmPath);
+        }
+        if (terrain.contains("albedoPath")) {
+            QString albPath = terrain["albedoPath"].toString();
+            terrain["albedoPath"] = baseDir.relativeFilePath(albPath);
+        }
+        scene["terrain"] = terrain;
+    }
+    if (scene.contains("xodrPath")) {
+        QString xodrPath = scene["xodrPath"].toString();
+        scene["xodrPath"] = baseDir.relativeFilePath(xodrPath);
+    }
+
     QJsonDocument doc(scene);
 
     QFile file(path);
@@ -466,7 +520,7 @@ void Studio3DWidget::onLoadScene()
         return;
     }
 
-    m_ogreWidget->loadScene(doc.object());
+    m_ogreWidget->loadScene(resolveScenePaths(doc.object()));
     appendLog("Scene loaded from: " + path);
     m_statusLabel->setText("Scene loaded");
 }
@@ -489,7 +543,7 @@ void Studio3DWidget::onProjectOpened()
             if (!doc.isNull()) {
                 // Defer to allow OGRE to initialize first
                 QTimer::singleShot(500, this, [this, doc]() {
-                    m_ogreWidget->loadScene(doc.object());
+                    m_ogreWidget->loadScene(resolveScenePaths(doc.object()));
                     appendLog("Scene auto-loaded from project.");
                 });
             }

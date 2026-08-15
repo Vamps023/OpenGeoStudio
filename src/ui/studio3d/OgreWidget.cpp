@@ -26,6 +26,10 @@
 #include "OgreMeshManager2.h"
 #include "OgreLight.h"
 #include "OgreManualObject2.h"
+#include "OgreTextureGpuManager.h"
+#include "OgreTextureGpu.h"
+#include "OgreStagingTexture.h"
+#include "OgreResourceGroupManager.h"
 
 // Math
 #include "OgreVector3.h"
@@ -276,20 +280,162 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
         return;
     }
 
-    // TODO: Load terrain using Terra system
-    // For now, just log that we received the request
-    qDebug() << "Terrain load requested:" << heightmapPath;
-    qDebug() << "  Albedo:" << albedoPath;
-    qDebug() << "  Size:" << terrainSize << "m, Height scale:" << heightScale;
+    clearTerrain();
 
+    // Load heightmap image
+    QImage heightmap(heightmapPath);
+    if (heightmap.isNull()) {
+        qWarning() << "Failed to load heightmap image:" << heightmapPath;
+        return;
+    }
+    heightmap = heightmap.convertToFormat(QImage::Format_Grayscale8);
+
+    int imgW = heightmap.width();
+    int imgH = heightmap.height();
+    qDebug() << "Terrain load:" << heightmapPath << "  " << imgW << "x" << imgH
+             << "  size=" << terrainSize << "m  hScale=" << heightScale;
+
+    // Cap grid resolution to avoid excessive vertex counts
+    const int maxGridDim = 200;
+    int gridW = imgW;
+    int gridH = imgH;
+    while (gridW > maxGridDim || gridH > maxGridDim) {
+        gridW /= 2;
+        gridH /= 2;
+    }
+    if (gridW < 2) gridW = 2;
+    if (gridH < 2) gridH = 2;
+
+    qDebug() << "  Grid resolution:" << gridW << "x" << gridH;
+
+    // Create manual object for terrain mesh
+    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
+    manual->setName("TerrainMesh");
+
+    // Create datablock — use Unlit so we can apply albedo texture
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::String dblockName = "TerrainDatablock";
+    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+    if (!dbBase) {
+        dbBase = hlmsUnlit->createDatablock(
+            Ogre::IdString(dblockName), dblockName,
+            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    }
+    Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
+
+    // Load albedo texture if available
+    if (!albedoPath.isEmpty() && QFile::exists(albedoPath)) {
+        qDebug() << "  Loading albedo:" << albedoPath;
+        // Use setTexture with filename — OGRE will load it via TextureGpuManager
+        Ogre::String texName = albedoPath.toStdString();
+        datablock->setTexture(0, texName);
+    } else {
+        datablock->setColour(Ogre::ColourValue(0.3f, 0.4f, 0.25f, 1.0f));
+    }
+
+    manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+
+    // Generate vertices — sample heightmap at grid resolution
+    float halfSize = terrainSize * 0.5f;
+    float stepX = terrainSize / (gridW - 1);
+    float stepZ = terrainSize / (gridH - 1);
+
+    for (int gz = 0; gz < gridH; gz++) {
+        for (int gx = 0; gx < gridW; gx++) {
+            int px = (gx * (imgW - 1)) / (gridW - 1);
+            int py = (gz * (imgH - 1)) / (gridH - 1);
+            
+            QRgb pixel = heightmap.pixel(px, py);
+            int gray = qGray(pixel);
+            float elevation = (gray / 255.0f) * heightScale;
+
+            float worldX = -halfSize + gx * stepX;
+            float worldZ = -halfSize + gz * stepZ;
+
+            manual->position(worldX, elevation, worldZ);
+            
+            // Compute normal from neighboring pixels
+            int pxL = (px > 0) ? px - 1 : 0;
+            int pxR = (px < imgW - 1) ? px + 1 : imgW - 1;
+            int pyU = (py > 0) ? py - 1 : 0;
+            int pyD = (py < imgH - 1) ? py + 1 : imgH - 1;
+            float hL = (qGray(heightmap.pixel(pxL, py)) / 255.0f) * heightScale;
+            float hR = (qGray(heightmap.pixel(pxR, py)) / 255.0f) * heightScale;
+            float hU = (qGray(heightmap.pixel(px, pyU)) / 255.0f) * heightScale;
+            float hD = (qGray(heightmap.pixel(px, pyD)) / 255.0f) * heightScale;
+            float nx = (hL - hR);
+            float ny = 2.0f * (stepX / terrainSize) * heightScale;
+            float nz = (hU - hD);
+            float nLen = sqrt(nx * nx + ny * ny + nz * nz);
+            if (nLen > 0.0001f) {
+                manual->normal(nx / nLen, ny / nLen, nz / nLen);
+            } else {
+                manual->normal(0.0f, 1.0f, 0.0f);
+            }
+
+            float u = (float)gx / (gridW - 1);
+            float v = (float)gz / (gridH - 1);
+            manual->textureCoord(u, v);
+        }
+    }
+
+    // Generate indices — two triangles per grid cell
+    for (int gz = 0; gz < gridH - 1; gz++) {
+        for (int gx = 0; gx < gridW - 1; gx++) {
+            uint32_t v00 = gz * gridW + gx;
+            uint32_t v10 = gz * gridW + (gx + 1);
+            uint32_t v01 = (gz + 1) * gridW + gx;
+            uint32_t v11 = (gz + 1) * gridW + (gx + 1);
+
+            manual->index(v00);
+            manual->index(v01);
+            manual->index(v10);
+            manual->index(v10);
+            manual->index(v01);
+            manual->index(v11);
+        }
+    }
+
+    manual->end();
+
+    // Convert to mesh and create scene item
+    Ogre::String meshName = "TerrainMesh_" + Ogre::StringConverter::toString((size_t)this);
+    Ogre::MeshPtr mesh = manual->convertToMesh(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    m_terrainItem = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
+    m_terrainNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+    m_terrainNode->attachObject(m_terrainItem);
+
+    m_sceneManager->destroyManualObject(manual);
+
+    qDebug() << "Terrain mesh created:" << gridW << "x" << gridH
+             << "=" << (gridW * gridH) << "vertices,"
+             << ((gridW - 1) * (gridH - 1) * 2) << "triangles";
+
+    // Frame camera on terrain
+    m_camTargetX = 0;
+    m_camTargetY = heightScale * 0.3f;
+    m_camTargetZ = 0;
+    m_camDist = terrainSize * 0.8f;
+    m_camYaw = 0;
+    m_camPitch = -30.0f;
     resetCamera();
 }
 
 void OgreWidget::clearTerrain()
 {
-    // TODO: Clear Terra terrain
+    if (m_terrainItem) {
+        if (m_terrainNode) {
+            m_terrainNode->detachObject(m_terrainItem);
+            m_sceneManager->destroySceneNode(m_terrainNode);
+            m_terrainNode = nullptr;
+        }
+        m_sceneManager->destroyItem(m_terrainItem);
+        m_terrainItem = nullptr;
+    }
 }
-
 void OgreWidget::loadRoads(const QString& xodrPath)
 {
     m_xodrPath = xodrPath;
@@ -804,6 +950,7 @@ void OgreWidget::shutdownOgre()
         killTimer(m_timerId);
         m_timerId = 0;
     }
+    clearObjects();
     clearRoads();
     clearTerrain();
     if (m_root) {

@@ -23,6 +23,8 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QSlider>
+#include <QJsonObject>
+#include <QDir>
 
 class ApplicationContext;
 class OgreWidget;
@@ -61,6 +63,7 @@ private:
     QString findAlbedoInProject();
     QString findXodrInProject();
     QString sceneFilePath() const;
+    QJsonObject resolveScenePaths(const QJsonObject& scene);
 
     ApplicationContext* m_ctx;
 
