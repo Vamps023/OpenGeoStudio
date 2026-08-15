@@ -668,8 +668,16 @@ private slots:
     }
 
     // ─── Project state save/load ─────────────────────────────
-    // Serializes TerrainStore + road file path into the .ogproj
-    // moduleState so all studios share the same project file.
+    // Serializes TerrainStore + road .xodr into the project folder
+    // and .ogproj moduleState so all studios share the same project.
+    //
+    // Save:  terrain state → .ogproj moduleState["terrain"]
+    //        road network  → {project}/Roads/road.xodr (auto-saved)
+    //        road path     → .ogproj moduleState["road-studio"]["xodrFile"]
+    //
+    // Load:  terrain state restored from .ogproj
+    //        road .xodr auto-loaded into LaneMaker
+    //
     void saveProjectState() {
         if (!m_ctx->projects().hasProject()) {
             QMessageBox::warning(this, tr("No Project"),
@@ -677,24 +685,29 @@ private slots:
             return;
         }
 
-        // Serialize terrain state into moduleState
+        const QString basePath = m_ctx->projects().current().basePath;
+
+        // ── Terrain state → moduleState ──
         QJsonObject moduleState;
         moduleState["terrain"] = m_ctx->terrain().toJson();
 
-        // Serialize road studio state — track the last saved .xodr path
+        // ── Road network → {project}/Roads/road.xodr ──
         if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
             auto* lmw = m_roadStudioWidget->laneMakerWindow();
-            QString roadFile = lmw->property("lastRoadFile").toString();
-            if (!roadFile.isEmpty()) {
-                QJsonObject roadState;
-                roadState["xodrFile"] = roadFile;
-                moduleState["road-studio"] = roadState;
-            }
+
+            // Save the road file directly to the project's Roads folder
+            QString roadsDir = basePath + "/Roads";
+            QDir().mkpath(roadsDir);
+            QString roadFile = roadsDir + "/road.xodr";
+            lmw->saveToPath(roadFile);
+
+            // Record the path in moduleState
+            QJsonObject roadState;
+            roadState["xodrFile"] = roadFile;
+            moduleState["road-studio"] = roadState;
         }
 
         // Update the project's moduleState
-        // We need const_cast because current() returns const&, but
-        // ProjectManager::save() reads from m_current internally
         const_cast<Project&>(m_ctx->projects().current()).moduleState = moduleState;
 
         // Save the project file
@@ -710,28 +723,25 @@ private slots:
         const auto& proj = m_ctx->projects().current();
         const QJsonObject& ms = proj.moduleState;
 
-        // Restore terrain state
+        // ── Restore terrain state ──
         if (ms.contains("terrain")) {
             m_ctx->terrain().fromJson(ms["terrain"].toObject());
         }
 
-        // Restore road studio — auto-load the .xodr file
+        // ── Restore road network — auto-load .xodr into LaneMaker ──
         if (ms.contains("road-studio")) {
             QJsonObject roadState = ms["road-studio"].toObject();
             QString xodrFile = roadState["xodrFile"].toString();
             if (!xodrFile.isEmpty() && QFile::exists(xodrFile) &&
                 m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
-                // Load the road file into LaneMaker
                 auto* lmw = m_roadStudioWidget->laneMakerWindow();
-                lmw->setProperty("lastRoadFile", xodrFile);
-                // LaneMaker's loadFromFile uses a file dialog, so we need
-                // to call the ChangeTracker directly for programmatic loading
-                // For now, store the path so the user can load it manually
-                m_statusLabel->setText(QStringLiteral("Road file available: %1").arg(xodrFile));
+                lmw->loadFromPath(xodrFile);
+                m_statusLabel->setText(
+                    QStringLiteral("Road network loaded: %1").arg(xodrFile));
             }
         }
 
-        // Update project bounds in terrain store if available
+        // ── Update project bounds in terrain store ──
         if (proj.bounds.valid) {
             terrain::GeoBounds bounds;
             bounds.south = proj.bounds.minLat;

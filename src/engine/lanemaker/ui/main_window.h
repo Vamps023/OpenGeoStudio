@@ -84,6 +84,14 @@ public slots:
 
     void loadFromFile();
 
+    // Save/load to a specific path without showing a file dialog.
+    // Used by the project system to auto-save/load road data.
+    void saveToPath(const QString& path);
+    void loadFromPath(const QString& path);
+
+    // Returns the path of the currently loaded road file, or empty.
+    QString loadedFilePath() const { return QString::fromStdString(loadedFileName); }
+
 private slots:
     void updateHint();
     void setFPS(QString);

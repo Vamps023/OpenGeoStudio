@@ -162,22 +162,26 @@ void MainWindow::saveToFile()
         );
     if (!s.isEmpty())
     {
-        if (!s.endsWith(".xodr")) {
-            s.append(".xodr");
-        }
-        auto loc = s.toStdString();
-        LM::ChangeTracker::Instance()->Save(loc);
-        loadedFileName = loc;
-        // Track the saved file path as a Qt property so the project
-        // save system can serialize it into the .ogproj file
-        setProperty("lastRoadFile", s);
+        saveToPath(s);
     }
+}
+
+void MainWindow::saveToPath(const QString& path)
+{
+    QString s = path;
+    if (!s.endsWith(".xodr")) {
+        s.append(".xodr");
+    }
+    auto loc = s.toStdString();
+    LM::ChangeTracker::Instance()->Save(loc);
+    loadedFileName = loc;
+    setProperty("lastRoadFile", s);
 }
 
 void MainWindow::loadFromFile()
 {
     QString s = QFileDialog::getOpenFileName(
-        this, 
+        this,
         "Choose File to Open",
         LM::DefaultSaveFolder().string().c_str(),
         "OpenDrive (*.xodr)", nullptr
@@ -187,23 +191,31 @@ void MainWindow::loadFromFile()
     );
     if (s.size() != 0)
     {
-        reset();
-        loadedFileName = s.toStdString();
-        // Track the loaded file path for project persistence
-        setProperty("lastRoadFile", s);
-
-        bool supported = LM::ChangeTracker::Instance()->Load(loadedFileName);
-        if (!supported)
-        {
-            spdlog::error("xodr map needs to contain custom LaneProfile!");
-        }
-        std::ifstream ifs(loadedFileName);
-        std::stringstream buffer;
-        buffer << ifs.rdbuf();
-        LM::ActionManager::Instance()->Record(buffer.str());
-
-        LM::g_mapViewGL->update();
+        loadFromPath(s);
     }
+}
+
+void MainWindow::loadFromPath(const QString& path)
+{
+    QString s = path;
+    if (s.isEmpty()) return;
+    if (!QFile::exists(s)) return;
+
+    reset();
+    loadedFileName = s.toStdString();
+    setProperty("lastRoadFile", s);
+
+    bool supported = LM::ChangeTracker::Instance()->Load(loadedFileName);
+    if (!supported)
+    {
+        spdlog::error("xodr map needs to contain custom LaneProfile!");
+    }
+    std::ifstream ifs(loadedFileName);
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+    LM::ActionManager::Instance()->Record(buffer.str());
+
+    LM::g_mapViewGL->update();
 }
 
 void MainWindow::undo()

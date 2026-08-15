@@ -1,13 +1,30 @@
-Export tiles directly to project Terrain folder — no save dialog
+Auto-save and auto-load road network under project folder
 
-The terrain export no longer asks where to save. When you click
-Export, tiles are saved directly to:
+Road Studio now saves and loads road data automatically with the
+project — no manual file dialog needed.
 
-  {project.basePath}/Terrain/heightmaps/
-  {project.basePath}/Terrain/albedo/
+Save (Ctrl+S or File > Save Project):
+  - Road network auto-saved to {project}/Roads/road.xodr
+  - Path recorded in .ogproj moduleState["road-studio"]["xodrFile"]
+  - No file dialog — saves directly to the project folder
 
-If no project is open, it falls back to:
-  Documents/OpenGeoStudio/Exports/
+Open (File > Open Project):
+  - .xodr file auto-loaded into LaneMaker
+  - Road network appears immediately in the editor
+  - No manual load needed
 
-This keeps all exported data inside the project folder, so
-everything is in one place and the 3D Studio can find it later.
+New LaneMaker API:
+  - MainWindow::saveToPath(QString) — save without dialog
+  - MainWindow::loadFromPath(QString) — load without dialog
+  - MainWindow::loadedFilePath() — get current file path
+
+The existing File > Save / File > Load buttons in LaneMaker still
+work with file dialogs for manual control, but the project system
+uses the new path-based API for automatic persistence.
+
+Project folder structure:
+  MyProject/
+    MyProject.ogproj       ← terrain + road state
+    Terrain/               ← heightmaps + albedo
+    Roads/road.xodr        ← road network (auto-saved)
+    Exports/               ← 3D studio exports
