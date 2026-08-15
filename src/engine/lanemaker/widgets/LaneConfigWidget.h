@@ -87,6 +87,7 @@ private slots:
 private:
     CrossSectionVisual* visual;
     QToolButton* leftMinus, * leftPlus, * rightMinus, * rightPlus;
+    QDoubleSpinBox* laneWidthSpinner;
 
     const QPixmap incLogo, decLogo;
 };

@@ -7,6 +7,9 @@
 
 namespace LM
 {
+    // Configurable lane width — defaults to 3.25m
+    double LaneWidth = DefaultLaneWidth;
+
     double to_odr_unit(type_s l) { return (double)l / 100; }
 
     double to_odr_unit(type_t l) { return (double)l / 2 * LaneWidth; }

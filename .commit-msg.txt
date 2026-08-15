@@ -1,26 +1,35 @@
-Fix GPXZ crash: handle tiled (Cloud Optimized) GeoTIFFs in DemDecoder
+Add configurable lane width and SCANeR-style creation tools
 
-Root cause: GPXZ returns Cloud Optimized GeoTIFF (COG) which uses
-TIFF tiles, not scanlines. The previous decodeGeoTiff used
-TIFFReadScanline exclusively, which crashes on tiled TIFFs because:
-  1. The scanline buffer size is wrong for tiled data
-  2. TIFFReadScanline returns -1 for tiled images
-  3. The buffer access causes a segfault
+Configurable Lane Width:
+- Changed LM::LaneWidth from constexpr to extern double (default 3.25m)
+- Added QDoubleSpinBox to LaneConfigWidget (1.5-5.0m, step 0.25m)
+- Spinner updates LaneWidth at runtime — affects all road creation
+  and rendering immediately
+- Increased lane count limit from 4 to 8 per side (matches Electron)
+- Label shows "Lane W:" in vertical layout, "W:" in horizontal
 
-Fix: Rewrote decodeGeoTiff to handle both layouts:
-  - TIFFIsTiled() check determines the layout
-  - Tiled: uses TIFFReadTile with TIFFTileSize buffer, copies
-    pixels tile-by-tile into the output grid
-  - Stripped: uses TIFFReadScanline with TIFFScanlineSize buffer
-    (also fixes buffer size to match libtiff's expectation)
+SCANeR-style Creation Tools:
+- 4 new tool buttons in Road Studio sidebar:
+  - "─" Straight Line (already existed)
+  - "⤴" Circle Arc — click 2 points, creates constant-radius arc
+    using FitArcOrLine (Line if collinear, Arc if curved)
+  - "⌁" Polyline — click multiple points, each creates a Line
+    segment. Space/Enter to finish, Escape to undo last segment
+  - "∼" Bezier — click 2 points, creates smooth cubic bezier
+    using FitParamPoly (smoother than default ConnectRays)
 
-Additional fixes:
-  - Unified data type handling via readPixelAsFloat lambda — supports
-    Float32, Float64, Int16, Int32, UInt8, UInt16, UInt32 in one path
-  - Uses TIFFScanlineSize/TIFFTileSize for correct buffer allocation
-    (was using width*sizeof(float) which is wrong for non-float data)
-  - Added safety guards in resample() for invalid/empty source tiles
-  - Added empty data check at start of decodeGeoTiff
+Implementation:
+- Added Mode_CircleArc, Mode_Polyline, Mode_Bezier to EditMode enum
+- Added forceArc, polylineMode, bezierMode flags to RoadCreationSession
+- UpdateFlexGeometry checks flags to choose geometry type:
+  - forceArc: FitArcOrLine (Line or Arc)
+  - bezierMode: FitParamPoly (cubic bezier)
+  - polylineMode: forceStraightLine=true, no auto-complete
+  - forceStraightLine: direct odr::Line
+- Arc and Bezier auto-complete after first segment (2-click workflow)
+- Polyline stays open until user presses Space/Enter
+- All modes integrated with replay system (SetModeFromReplay + replay_window)
+- All modes use LaneConfigWidget for lane configuration
 
 Generated with [Devin](https://devin.ai)
 

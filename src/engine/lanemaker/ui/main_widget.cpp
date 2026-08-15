@@ -154,10 +154,40 @@ MainWidget::MainWidget(QWidget* parent)
     straightLineButton->setCheckable(true);
     straightLineButton->setChecked(false);
 
+    arcButton = new QToolButton;
+    arcButton->setToolTip(tr("Circle Arc — Click two points for a constant-radius arc"));
+    arcButton->setText("⤴");
+    arcButton->setStyleSheet(
+        "QToolButton { font-size: 18px; font-weight: bold; }");
+    arcButton->setIconSize(largeIconSize);
+    arcButton->setCheckable(true);
+    arcButton->setChecked(false);
+
+    polylineButton = new QToolButton;
+    polylineButton->setToolTip(tr("Polyline — Click multiple points, Space to finish"));
+    polylineButton->setText("⌁");
+    polylineButton->setStyleSheet(
+        "QToolButton { font-size: 18px; font-weight: bold; }");
+    polylineButton->setIconSize(largeIconSize);
+    polylineButton->setCheckable(true);
+    polylineButton->setChecked(false);
+
+    bezierButton = new QToolButton;
+    bezierButton->setToolTip(tr("Bezier Curve — Click two points for a smooth bezier curve"));
+    bezierButton->setText("∼");
+    bezierButton->setStyleSheet(
+        "QToolButton { font-size: 18px; font-weight: bold; }");
+    bezierButton->setIconSize(largeIconSize);
+    bezierButton->setCheckable(true);
+    bezierButton->setChecked(false);
+
     pointerModeGroup = new QButtonGroup(this);
     pointerModeGroup->setExclusive(true);
     pointerModeGroup->addButton(createModeButton);
     pointerModeGroup->addButton(straightLineButton);
+    pointerModeGroup->addButton(arcButton);
+    pointerModeGroup->addButton(polylineButton);
+    pointerModeGroup->addButton(bezierButton);
     pointerModeGroup->addButton(createLaneModeButton);
     pointerModeGroup->addButton(modifyModeButton);
     pointerModeGroup->addButton(destroyModeButton);
@@ -165,6 +195,9 @@ MainWidget::MainWidget(QWidget* parent)
 
     sidebarLayout->addWidget(createModeButton);
     sidebarLayout->addWidget(straightLineButton);
+    sidebarLayout->addWidget(arcButton);
+    sidebarLayout->addWidget(polylineButton);
+    sidebarLayout->addWidget(bezierButton);
     sidebarLayout->addWidget(createLaneModeButton);
     sidebarLayout->addWidget(modifyModeButton);
     sidebarLayout->addWidget(destroyModeButton);
@@ -321,6 +354,9 @@ MainWidget::MainWidget(QWidget* parent)
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
     connect(straightLineButton, &QAbstractButton::toggled, this, &MainWidget::gotoStraightLineMode);
+    connect(arcButton, &QAbstractButton::toggled, this, &MainWidget::gotoCircleArcMode);
+    connect(polylineButton, &QAbstractButton::toggled, this, &MainWidget::gotoPolylineMode);
+    connect(bezierButton, &QAbstractButton::toggled, this, &MainWidget::gotoBezierMode);
     connect(createLaneModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateLaneMode);
     connect(destroyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDestroyMode);
     connect(modifyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoModifyMode);
@@ -427,6 +463,30 @@ void MainWidget::gotoStraightLineMode(bool checked)
 {
     if (!checked) return;
     SetEditMode(LM::Mode_StraightLine);
+    LM::ActionManager::Instance()->Record(LM::Mode_Create);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoCircleArcMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_CircleArc);
+    LM::ActionManager::Instance()->Record(LM::Mode_Create);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoPolylineMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_Polyline);
+    LM::ActionManager::Instance()->Record(LM::Mode_Create);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoBezierMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_Bezier);
     LM::ActionManager::Instance()->Record(LM::Mode_Create);
     laneConfig->GotoRoadMode();
 }
@@ -705,6 +765,15 @@ void MainWidget::SetModeFromReplay(int mode)
     case LM::Mode_StraightLine:
         straightLineButton->setChecked(true);
         break;
+    case LM::Mode_CircleArc:
+        arcButton->setChecked(true);
+        break;
+    case LM::Mode_Polyline:
+        polylineButton->setChecked(true);
+        break;
+    case LM::Mode_Bezier:
+        bezierButton->setChecked(true);
+        break;
     case LM::Mode_CreateLanes:
         createLaneModeButton->setChecked(true);
         break;
@@ -751,6 +820,30 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
         {
             auto* session = new RoadCreationSession();
             session->forceStraightLine = true;
+            session->autoCompleteAfterFirstSegment = true;
+            drawingSession = session;
+        }
+        break;
+    case LM::Mode_CircleArc:
+        {
+            auto* session = new RoadCreationSession();
+            session->forceArc = true;
+            session->autoCompleteAfterFirstSegment = true;
+            drawingSession = session;
+        }
+        break;
+    case LM::Mode_Polyline:
+        {
+            auto* session = new RoadCreationSession();
+            session->forceStraightLine = true;
+            // Polyline: don't auto-complete — user presses Space/Enter to finish
+            drawingSession = session;
+        }
+        break;
+    case LM::Mode_Bezier:
+        {
+            auto* session = new RoadCreationSession();
+            session->bezierMode = true;
             session->autoCompleteAfterFirstSegment = true;
             drawingSession = session;
         }

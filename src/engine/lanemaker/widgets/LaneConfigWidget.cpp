@@ -247,10 +247,11 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     visual(new CrossSectionVisual),
     leftMinus(new QToolButton), leftPlus(new QToolButton),
     rightMinus(new QToolButton), rightPlus(new QToolButton),
+    laneWidthSpinner(new QDoubleSpinBox),
     incLogo(":/icons/add.png"), decLogo(":/icons/minus.png")
 {
-    setMinimumWidth(550); 
-    
+    setMinimumWidth(550);
+
     int size = style()->pixelMetric(QStyle::PM_ToolBarIconSize);
     if (verticalLayout) size *= 2;
     QSize iconSize(size, size);
@@ -263,6 +264,14 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     rightPlus->setIcon(incLogo);
     rightPlus->setIconSize(iconSize);
 
+    // Lane width spinner — configurable (1.5-5.0m, step 0.25m)
+    laneWidthSpinner->setRange(1.5, 5.0);
+    laneWidthSpinner->setSingleStep(0.25);
+    laneWidthSpinner->setValue(LM::LaneWidth);
+    laneWidthSpinner->setSuffix("m");
+    laneWidthSpinner->setToolTip("Lane width in meters");
+    laneWidthSpinner->setFixedWidth(70);
+
     visual->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
 
     QBoxLayout* layout;
@@ -273,6 +282,9 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         QHBoxLayout* bottomLayout = new QHBoxLayout;
         bottomLayout->addWidget(leftMinus);
         bottomLayout->addWidget(leftPlus);
+        bottomLayout->addStretch(1);
+        bottomLayout->addWidget(new QLabel("Lane W:"));
+        bottomLayout->addWidget(laneWidthSpinner);
         bottomLayout->addStretch(1);
         bottomLayout->addWidget(rightMinus);
         bottomLayout->addWidget(rightPlus);
@@ -285,10 +297,18 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         layout->addWidget(leftMinus);
         layout->addWidget(leftPlus);
         layout->addWidget(visual);
+        layout->addWidget(new QLabel("W:"));
+        layout->addWidget(laneWidthSpinner);
         layout->addWidget(rightMinus);
         layout->addWidget(rightPlus);
     }
     setLayout(layout);
+
+    // Update LaneWidth when spinner changes
+    connect(laneWidthSpinner, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            [](double val) {
+                LM::LaneWidth = val;
+            });
 
     connect(visual, &CrossSectionVisual::OptionChangedByUser, this, &LaneConfigWidget::OnOptionChange);
     connect(leftMinus, &QAbstractButton::clicked, [this]()
@@ -306,7 +326,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         {
             auto lPlan = LeftResult();
             const auto rPlan = RightResult();
-            if (lPlan.laneCount < 4)
+            if (lPlan.laneCount < 8)
             {
                 if (lPlan.laneCount == 0)
                     lPlan.offsetx2 = std::max((int8_t)0, rPlan.offsetx2);
@@ -328,7 +348,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         {
             auto rPlan = RightResult();
             const auto lPlan = LeftResult();
-            if (rPlan.laneCount < 4)
+            if (rPlan.laneCount < 8)
             {
                 if (rPlan.laneCount == 0)
                     rPlan.offsetx2 = std::min((int8_t)0, lPlan.offsetx2);

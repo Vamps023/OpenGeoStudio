@@ -21,7 +21,9 @@ namespace LM
     typedef int8_t   type_t;
     typedef uint32_t type_s;
 
-    constexpr double LaneWidth = 3.25;
+    // Configurable lane width (default 3.25m, can be changed at runtime)
+    extern double LaneWidth;
+    constexpr double DefaultLaneWidth = 3.25;
     constexpr double MaxTransition = 20;
     const type_s     MaxTransitionS = MaxTransition * 100;
 

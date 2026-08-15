@@ -92,6 +92,15 @@ public:
     bool forceStraightLine = false;
     bool autoCompleteAfterFirstSegment = false;
 
+    // Circle Arc mode: click center + end point, creates Arc geometry
+    bool forceArc = false;
+
+    // Polyline mode: click multiple points, each creates a Line segment
+    bool polylineMode = false;
+
+    // Bezier mode: click 4 control points, creates ParamPoly3
+    bool bezierMode = false;
+
 protected:
     // Record extend / join
     virtual SnapResult SnapFirstPointToExisting(odr::Vec2D&);
