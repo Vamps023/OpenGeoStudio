@@ -1,17 +1,32 @@
-Fix O3DE project path — auto-detect valid project on startup
+Add O3DE terrain integration — Gem + terrain export
 
-The registry had the old broken project path D:/git/OpenGeoStudio3D
-saved from a previous session. Even after updating the registry,
-the running app would overwrite it on exit with the stale value.
+Created OpenGeoStudioTerrain O3DE Gem that provides a
+TerrainMeshComponent for importing heightmap + albedo data
+from OpenGeoStudio projects into O3DE.
 
-Fix: add findO3DEProject() that auto-detects a valid O3DE project
-by checking for project.json. On startup, if the saved path is
-empty or invalid (project.json doesn't exist), it auto-detects
-and saves the correct path.
+Gem structure:
+  Gems/OpenGeoStudioTerrain/
+    gem.json
+    Code/Source/TerrainMeshComponent.h/.cpp
+    Code/Source/stb_image.h (PNG loading)
+    Scripts/import_terrain.py (O3DE Python script)
 
-Detection order:
-  1. D:/git/OpenGeoStudio3D-SDK (SDK project, correct)
-  2. D:/git/OpenGeoStudio3D (from-source, may not exist)
+TerrainMeshComponent:
+  - Reads 16-bit or 8-bit PNG heightmaps
+  - Generates 3D mesh (vertices, normals, UVs, indices)
+  - Configurable terrain size and height scale
+  - Uses stb_image for file loading (no external deps)
+  - Reflects to O3DE Edit Context for in-editor configuration
 
-Also cleared the stale registry setting while the app was not
-running, so it starts fresh with the correct SDK project path.
+Qt 3D Studio improvements:
+  - Export Terrain button now copies ALL heightmaps + albedo maps
+    from the OpenGeoStudio project's Terrain folder to the O3DE
+    project's Assets/terrain/ folder
+  - Supports both PNG and TIFF formats
+  - Copies manifest.json if available
+  - Detailed logging of what was exported
+
+Build status:
+  - O3DE Gem: compiled successfully (OpenGeoStudioTerrain.Editor.dll)
+  - Qt app: compiled successfully
+  - All launchers rebuilt with Gem included

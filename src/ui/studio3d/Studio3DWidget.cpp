@@ -302,22 +302,90 @@ void Studio3DWidget::onExportTerrain() {
         return;
     }
 
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
     // Export from OpenGeoStudio project's Terrain folder to O3DE project's Assets
     QString exportDir = o3deProjectPath + "/Assets/terrain";
     QDir().mkpath(exportDir);
 
-    QString outputPath = exportDir + "/heightmap.tif";
-    appendLog("Exporting terrain heightmap to: " + outputPath);
+    // Copy heightmaps
+    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
+    QString hmDir = terrainDir + "/heightmaps";
+    QString albDir = terrainDir + "/albedo";
 
-    if (exportTerrainHeightmap(outputPath)) {
-        appendLog("Terrain export complete.");
+    int hmCount = 0, albCount = 0;
+
+    // Copy heightmap files (convert TIFF to PNG for O3DE compatibility)
+    if (QDir(hmDir).exists()) {
+        QStringList pngFiles = QDir(hmDir).entryList(QStringList() << "*.png", QDir::Files);
+        for (const auto& f : pngFiles) {
+            QString src = hmDir + "/" + f;
+            QString dst = exportDir + "/heightmap_" + f;
+            if (QFile::exists(dst)) QFile::remove(dst);
+            if (QFile::copy(src, dst)) {
+                hmCount++;
+                appendLog("Copied heightmap: " + f);
+            }
+        }
+        // Also copy TIFF files
+        QStringList tiffFiles = QDir(hmDir).entryList(QStringList() << "*.tif" << "*.tiff", QDir::Files);
+        for (const auto& f : tiffFiles) {
+            QString src = hmDir + "/" + f;
+            QString dst = exportDir + "/heightmap_" + f;
+            if (QFile::exists(dst)) QFile::remove(dst);
+            if (QFile::copy(src, dst)) {
+                hmCount++;
+                appendLog("Copied heightmap: " + f);
+            }
+        }
+    }
+
+    // Copy albedo files
+    if (QDir(albDir).exists()) {
+        QStringList pngFiles = QDir(albDir).entryList(QStringList() << "*.png", QDir::Files);
+        for (const auto& f : pngFiles) {
+            QString src = albDir + "/" + f;
+            QString dst = exportDir + "/albedo_" + f;
+            if (QFile::exists(dst)) QFile::remove(dst);
+            if (QFile::copy(src, dst)) {
+                albCount++;
+                appendLog("Copied albedo: " + f);
+            }
+        }
+        QStringList tiffFiles = QDir(albDir).entryList(QStringList() << "*.tif" << "*.tiff", QDir::Files);
+        for (const auto& f : tiffFiles) {
+            QString src = albDir + "/" + f;
+            QString dst = exportDir + "/albedo_" + f;
+            if (QFile::exists(dst)) QFile::remove(dst);
+            if (QFile::copy(src, dst)) {
+                albCount++;
+                appendLog("Copied albedo: " + f);
+            }
+        }
+    }
+
+    // Copy manifest if it exists
+    QString manifestSrc = terrainDir + "/manifest.json";
+    if (QFile::exists(manifestSrc)) {
+        QString manifestDst = exportDir + "/manifest.json";
+        if (QFile::exists(manifestDst)) QFile::remove(manifestDst);
+        QFile::copy(manifestSrc, manifestDst);
+        appendLog("Copied terrain manifest");
+    }
+
+    if (hmCount > 0) {
+        appendLog(QString("Terrain export complete: %1 heightmaps, %2 albedo maps").arg(hmCount).arg(albCount));
         QMessageBox::information(this, "Export Complete",
-            "Terrain heightmap exported to:\n" + outputPath);
+            QString("Exported %1 heightmap(s) and %2 albedo map(s) to:\n%3")
+                .arg(hmCount).arg(albCount).arg(exportDir));
     } else {
-        appendLog("Terrain export failed — no terrain data available.");
+        appendLog("Terrain export failed — no terrain data found.");
         QMessageBox::warning(this, "Export Failed",
-            "No terrain data available.\n"
-            "Download terrain in Terrain Studio first.");
+            "No terrain data found in project.\n"
+            "Export terrain in Terrain Studio first.");
     }
 }
 
