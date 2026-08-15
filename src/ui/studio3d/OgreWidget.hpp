@@ -11,7 +11,7 @@ namespace Ogre {
     class Camera;
     class Window;
     class SceneNode;
-    class Terra;
+    class Item;
     class HlmsPbs;
     class HlmsUnlit;
 }
@@ -27,6 +27,10 @@ public:
     void loadTerrain(const QString& heightmapPath, const QString& albedoPath,
                      float terrainSize = 1000.0f, float heightScale = 100.0f);
     void clearTerrain();
+
+    // Road loading
+    void loadRoads(const QString& xodrPath);
+    void clearRoads();
 
     // Camera controls
     void resetCamera();
@@ -64,12 +68,17 @@ private:
     Ogre::Window* m_renderWindow = nullptr;
 
     // Terrain
-    Ogre::Terra* m_terra = nullptr;
-    Ogre::SceneNode* m_terraNode = nullptr;
+    Ogre::Item* m_terrainItem = nullptr;
+    Ogre::SceneNode* m_terrainNode = nullptr;
     QString m_heightmapPath;
     QString m_albedoPath;
     float m_terrainSize = 1000.0f;
     float m_heightScale = 100.0f;
+
+    // Roads
+    Ogre::Item* m_roadItem = nullptr;
+    Ogre::SceneNode* m_roadNode = nullptr;
+    QString m_xodrPath;
 
     // Camera state
     float m_camYaw = 0.0f;

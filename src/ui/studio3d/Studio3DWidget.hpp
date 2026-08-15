@@ -37,6 +37,7 @@ public:
 private slots:
     void onLoadTerrain();
     void onClearTerrain();
+    void onLoadRoads();
     void onResetCamera();
     void onExportTerrain();
     void onExportRoads();
@@ -47,6 +48,7 @@ private:
     void appendLog(const QString& msg);
     QString findHeightmapInProject();
     QString findAlbedoInProject();
+    QString findXodrInProject();
 
     ApplicationContext* m_ctx;
 
@@ -56,6 +58,7 @@ private:
     // Controls
     QPushButton* m_loadTerrainBtn = nullptr;
     QPushButton* m_clearTerrainBtn = nullptr;
+    QPushButton* m_loadRoadsBtn = nullptr;
     QPushButton* m_resetCameraBtn = nullptr;
     QPushButton* m_exportTerrainBtn = nullptr;
     QPushButton* m_exportRoadsBtn = nullptr;

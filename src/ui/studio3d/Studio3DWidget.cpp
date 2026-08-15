@@ -71,6 +71,19 @@ void Studio3DWidget::setupUI()
     connect(m_clearTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearTerrain);
     terrainLayout->addWidget(m_clearTerrainBtn);
 
+    // Roads section
+    auto* roadsGroup = new QGroupBox("Roads", sidePanel);
+    auto* roadsLayout = new QVBoxLayout(roadsGroup);
+    m_loadRoadsBtn = new QPushButton("Load Roads from Project", roadsGroup);
+    m_loadRoadsBtn->setStyleSheet(
+        "QPushButton { background-color: #a6e3a1; color: #1e1e2e; "
+        "font-weight: bold; padding: 10px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #b4e3b4; }");
+    m_loadRoadsBtn->setToolTip("Load road network (XODR) from the current project's Roads folder");
+    connect(m_loadRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadRoads);
+    roadsLayout->addWidget(m_loadRoadsBtn);
+    sideLayout->addWidget(roadsGroup);
+
     // Height scale slider
     auto* hsLayout = new QHBoxLayout();
     auto* hsLabel = new QLabel("Height Scale:", terrainGroup);
@@ -207,7 +220,17 @@ void Studio3DWidget::onLoadTerrain()
     QString albedoPath = findAlbedoInProject();
 
     float heightScale = static_cast<float>(m_heightScaleSlider->value());
-    float terrainSize = 1000.0f; // meters
+    // Use 4000m for 4km terrain areas, or derive from project bounds if available
+    float terrainSize = 4000.0f; // 4km default for Houston-scale terrain
+    if (m_ctx && m_ctx->projects().hasProject() && m_ctx->projects().current().bounds.valid) {
+        auto& b = m_ctx->projects().current().bounds;
+        // Calculate approximate meters from lat/lon bounds
+        double latMid = (b.minLat + b.maxLat) / 2.0;
+        double latM = (b.maxLat - b.minLat) * 111320.0;  // meters per degree lat
+        double lonM = (b.maxLon - b.minLon) * 111320.0 * cos(latMid * 3.14159265358979 / 180.0);
+        terrainSize = static_cast<float>(std::max(latM, lonM));
+        if (terrainSize < 10.0f) terrainSize = 4000.0f;  // fallback
+    }
 
     appendLog("Loading terrain...");
     appendLog("  Heightmap: " + heightmapPath);
@@ -227,6 +250,47 @@ void Studio3DWidget::onClearTerrain()
     m_ogreWidget->clearTerrain();
     m_statusLabel->setText("Terrain cleared");
     appendLog("Terrain cleared.");
+}
+
+QString Studio3DWidget::findXodrInProject()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
+
+    QString roadDir = m_ctx->projects().current().basePath + "/Roads";
+
+    if (QDir(roadDir).exists()) {
+        QStringList filters;
+        filters << "*.xodr";
+        QStringList files = QDir(roadDir).entryList(filters, QDir::Files);
+        if (!files.isEmpty()) return roadDir + "/" + files.first();
+    }
+
+    return QString();
+}
+
+void Studio3DWidget::onLoadRoads()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString xodrPath = findXodrInProject();
+    if (xodrPath.isEmpty()) {
+        QMessageBox::warning(this, "No Road Data",
+            "No XODR file found in project.\n"
+            "Create roads in Road Studio first.");
+        return;
+    }
+
+    appendLog("Loading roads...");
+    appendLog("  XODR: " + xodrPath);
+
+    m_statusLabel->setText("Loading roads...");
+    m_ogreWidget->loadRoads(xodrPath);
+
+    m_statusLabel->setText("Roads loaded");
+    appendLog("Roads loaded successfully.");
 }
 
 void Studio3DWidget::onResetCamera()

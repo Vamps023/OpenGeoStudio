@@ -18,17 +18,27 @@
 #include "OgreHlmsManager.h"
 #include "OgreHlmsPbs.h"
 #include "OgreHlmsUnlit.h"
+#include "OgreHlmsUnlitDatablock.h"
 #include "OgreArchiveManager.h"
 #include "Compositor/OgreCompositorManager2.h"
 #include "OgreItem.h"
 #include "OgreMesh2.h"
 #include "OgreMeshManager2.h"
 #include "OgreLight.h"
+#include "OgreManualObject2.h"
 
 // Math
 #include "OgreVector3.h"
 #include "OgreQuaternion.h"
 #include "OgreMath.h"
+
+// libOpenDRIVE for road loading
+#include "OpenDriveMap.h"
+#include "Road.h"
+#include "RefLine.h"
+#include "LaneSection.h"
+#include "Lane.h"
+#include "Math.hpp"
 
 OgreWidget::OgreWidget(QWidget* parent)
     : QWindow(parent ? parent->windowHandle() : nullptr)
@@ -280,6 +290,164 @@ void OgreWidget::clearTerrain()
     // TODO: Clear Terra terrain
 }
 
+void OgreWidget::loadRoads(const QString& xodrPath)
+{
+    m_xodrPath = xodrPath;
+
+    if (!m_initialized) {
+        qDebug() << "OGRE not initialized yet, roads will load after init";
+        return;
+    }
+
+    if (!QFile::exists(xodrPath)) {
+        qWarning() << "XODR file not found:" << xodrPath;
+        return;
+    }
+
+    clearRoads();
+
+    odr::OpenDriveMap odrMap(xodrPath.toStdString());
+    auto roads = odrMap.get_roads();
+
+    if (roads.empty()) {
+        qWarning() << "No roads found in XODR file:" << xodrPath;
+        return;
+    }
+
+    qDebug() << "Loading" << roads.size() << "roads from" << xodrPath;
+
+    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
+    manual->setName("RoadMesh");
+
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::String dblockName = "RoadDatablock";
+    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+    if (!dbBase) {
+        dbBase = hlmsUnlit->createDatablock(
+            Ogre::IdString(dblockName), dblockName,
+            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    }
+    Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
+    datablock->setColour(Ogre::ColourValue(0.2f, 0.2f, 0.22f, 1.0f));
+
+    manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+
+    const float roadYOffset = 2.0f;
+    const double sampleEps = 1.0;
+    const float defaultHalfWidth = 4.0f;
+    uint32_t vertexOffset = 0;
+
+    for (const auto& road : roads) {
+        double roadLength = road.length;
+        if (roadLength <= 0) continue;
+
+        auto laneSections = road.get_lanesections();
+        auto refLine = road.ref_line;
+
+        std::vector<double> sValues;
+        for (double s = 0; s <= roadLength; s += sampleEps) {
+            sValues.push_back(s);
+        }
+        if (sValues.back() < roadLength) {
+            sValues.push_back(roadLength);
+        }
+
+        for (size_t i = 0; i + 1 < sValues.size(); i++) {
+            double s0 = sValues[i];
+            double s1 = sValues[i + 1];
+
+            odr::Vec3D p0 = refLine.get_xyz(s0);
+            odr::Vec3D p1 = refLine.get_xyz(s1);
+            double hdg0 = refLine.get_hdg(s0);
+
+            float halfWidth = defaultHalfWidth;
+            if (!laneSections.empty()) {
+                double lanesection_s0 = road.get_lanesection_s0(s0);
+                for (const auto& ls : laneSections) {
+                    if (ls.s0 == lanesection_s0) {
+                        double totalWidth = 0;
+                        for (const auto& lp : ls.id_to_lane) {
+                            if (lp.first != 0) {
+                                totalWidth += lp.second.lane_width.get(s0 - ls.s0);
+                            }
+                        }
+                        halfWidth = static_cast<float>(totalWidth * 0.5);
+                        if (halfWidth < 1.0f) halfWidth = defaultHalfWidth;
+                        break;
+                    }
+                }
+            }
+
+            float cosH = static_cast<float>(cos(hdg0));
+            float sinH = static_cast<float>(sin(hdg0));
+            float perpX = sinH;
+            float perpZ = -cosH;
+
+            float lx0 = static_cast<float>(p0[0]) + perpX * halfWidth;
+            float lz0 = static_cast<float>(p0[2]) + perpZ * halfWidth;
+            float ly0 = static_cast<float>(p0[1]) + roadYOffset;
+            float rx0 = static_cast<float>(p0[0]) - perpX * halfWidth;
+            float rz0 = static_cast<float>(p0[2]) - perpZ * halfWidth;
+            float ry0 = static_cast<float>(p0[1]) + roadYOffset;
+            float lx1 = static_cast<float>(p1[0]) + perpX * halfWidth;
+            float lz1 = static_cast<float>(p1[2]) + perpZ * halfWidth;
+            float ly1 = static_cast<float>(p1[1]) + roadYOffset;
+            float rx1 = static_cast<float>(p1[0]) - perpX * halfWidth;
+            float rz1 = static_cast<float>(p1[2]) - perpZ * halfWidth;
+            float ry1 = static_cast<float>(p1[1]) + roadYOffset;
+
+            manual->position(lx0, ly0, lz0);
+            manual->normal(0.0f, 1.0f, 0.0f);
+            manual->textureCoord(0.0f, 0.0f);
+            manual->position(rx0, ry0, rz0);
+            manual->normal(0.0f, 1.0f, 0.0f);
+            manual->textureCoord(1.0f, 0.0f);
+            manual->position(lx1, ly1, lz1);
+            manual->normal(0.0f, 1.0f, 0.0f);
+            manual->textureCoord(0.0f, 1.0f);
+            manual->position(rx1, ry1, rz1);
+            manual->normal(0.0f, 1.0f, 0.0f);
+            manual->textureCoord(1.0f, 1.0f);
+
+            manual->index(vertexOffset + 0);
+            manual->index(vertexOffset + 1);
+            manual->index(vertexOffset + 2);
+            manual->index(vertexOffset + 1);
+            manual->index(vertexOffset + 3);
+            manual->index(vertexOffset + 2);
+
+            vertexOffset += 4;
+        }
+    }
+
+    manual->end();
+
+    Ogre::String meshName = "RoadMesh_" + Ogre::StringConverter::toString((size_t)this);
+    Ogre::MeshPtr mesh = manual->convertToMesh(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    m_roadItem = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
+    m_roadNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+    m_roadNode->attachObject(m_roadItem);
+
+    m_sceneManager->destroyManualObject(manual);
+    qDebug() << "Road mesh created with" << vertexOffset << "vertices";
+}
+
+void OgreWidget::clearRoads()
+{
+    if (m_roadItem) {
+        if (m_roadNode) {
+            m_roadNode->detachObject(m_roadItem);
+            m_sceneManager->destroySceneNode(m_roadNode);
+            m_roadNode = nullptr;
+        }
+        m_sceneManager->destroyItem(m_roadItem);
+        m_roadItem = nullptr;
+    }
+}
+
 void OgreWidget::render()
 {
     if (m_root && m_renderWindow) {
@@ -293,6 +461,7 @@ void OgreWidget::shutdownOgre()
         killTimer(m_timerId);
         m_timerId = 0;
     }
+    clearRoads();
     clearTerrain();
     if (m_root) {
         delete m_root;

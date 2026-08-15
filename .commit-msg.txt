@@ -1,24 +1,28 @@
-Fix 3D Studio crash — attach light to SceneNode before setDirection
+Implement terrain rendering + road visualization in 3D Studio
 
-OGRE-Next 4.0 changed the Light API: lights MUST be attached to a
-SceneNode BEFORE calling setDirection(). The Light::setDirection()
-documentation says:
+Terrain rendering:
+- OgreWidget::loadTerrain() now creates a real OGRE mesh from a
+  heightmap image (PNG/TIFF) with elevation and albedo texture
+- Uses ManualObject to build a grid mesh (up to 256x256 vertices)
+  sampled from the heightmap, with UV coordinates for albedo
+- Albedo texture loaded via TextureGpuManager and applied to an
+  Unlit datablock
+- Camera auto-frames based on terrain size and height scale
+- Terrain size derived from project bounds (4km for Houston-scale)
 
-  "Light::setDirection and Light::getDirection will redirect to the
-   SceneNode and assert or crash if not attached to one."
+Road visualization:
+- OgreWidget::loadRoads() loads XODR via libOpenDRIVE
+- Samples each road's reference line at 1m intervals
+- Calculates road width from lane widths
+- Generates a triangle strip mesh for the road surface
+- Roads placed slightly above terrain (2m offset) to avoid z-fighting
 
-The crash was an access violation (0xc0000005) in OgreNextMain.dll
-because setDirection() was called on a light that wasn't yet attached
-to a SceneNode.
+UI:
+- Added "Load Roads from Project" button in 3D Studio
+- Finds XODR files in project's Roads/ folder
 
-Fix:
-  - Reorder: create light, set type/colour, create node, attach light
-    to node, THEN call setDirection on the node
-  - Also removed setupScene() Cube.mesh creation (no mesh files
-    deployed yet — terrain loaded separately via loadTerrain())
-
-Verified: App launches, 3D Studio opens, OGRE initializes without
-crash, app stays running.
+Verified: App launches, 3D Studio opens without crash, OGRE
+initializes successfully.
 
 Generated with [Devin](https://devin.ai)
 
