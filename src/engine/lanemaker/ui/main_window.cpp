@@ -247,39 +247,39 @@ void MainWindow::loadFromPath(const QString& path)
 
     reset();
 
-    // Try loading directly first (works for ASCII paths)
-    auto loc = s.toStdString();
-    bool loaded = LM::ChangeTracker::Instance()->Load(loc);
-
-    if (!loaded) {
-        // Direct load failed — likely a Unicode path issue.
-        // Copy to a temp file in an ASCII-safe location, then load from there.
-        QString tempFile = QDir::tempPath() + "/road_load_temp.xodr";
-        if (QFile::exists(tempFile)) QFile::remove(tempFile);
-        if (QFile::copy(s, tempFile)) {
-            auto tempLoc = tempFile.toStdString();
-            loaded = LM::ChangeTracker::Instance()->Load(tempLoc);
-            if (loaded) {
-                spdlog::info("loadFromPath: loaded via temp copy from: {}", s.toStdString());
-            }
-            QFile::remove(tempFile);
-        }
-    } else {
-        spdlog::info("loadFromPath: loaded directly from: {}", s.toStdString());
-    }
-
-    loadedFileName = loc;
-    setProperty("lastRoadFile", s);
-
-    if (!loaded) {
-        spdlog::error("loadFromPath: failed to load road file: {}", s.toStdString());
+    // std::ifstream can't handle Unicode paths on Windows.
+    // Always copy to a temp file in an ASCII-safe location first,
+    // then load from there. This is simpler and more reliable than
+    // trying to detect whether the path is ASCII or not.
+    QString tempFile = QDir::tempPath() + "/road_load_temp.xodr";
+    if (QFile::exists(tempFile)) QFile::remove(tempFile);
+    if (!QFile::copy(s, tempFile)) {
+        spdlog::error("loadFromPath: failed to copy to temp file: {}", s.toStdString());
         return;
     }
 
-    std::ifstream ifs(loc);
-    std::stringstream buffer;
-    buffer << ifs.rdbuf();
-    LM::ActionManager::Instance()->Record(buffer.str());
+    auto tempLoc = tempFile.toStdString();
+    bool loaded = LM::ChangeTracker::Instance()->Load(tempLoc);
+    QFile::remove(tempFile);
+
+    if (!loaded) {
+        spdlog::error("loadFromPath: ChangeTracker::Load failed for: {}", s.toStdString());
+        return;
+    }
+
+    spdlog::info("loadFromPath: loaded successfully from: {}", s.toStdString());
+
+    // Read the file content for action history recording
+    // Use QFile (handles Unicode) then convert to std::string
+    QFile qfile(s);
+    if (qfile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QByteArray content = qfile.readAll();
+        qfile.close();
+        LM::ActionManager::Instance()->Record(content.toStdString());
+    }
+
+    loadedFileName = s.toStdString();
+    setProperty("lastRoadFile", s);
 
     if (LM::g_mapViewGL) {
         LM::g_mapViewGL->update();

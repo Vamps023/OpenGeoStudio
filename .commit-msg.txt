@@ -1,21 +1,25 @@
-Fix road .xodr not saving with Unicode paths — use temp file fallback
+Fix road not loading on project open — std::ifstream Unicode issue
 
-Root cause: GetShortPathNameW returns 0 for non-existent files.
-When saving a new road.xodr, the file doesn't exist yet, so the
-short path conversion fails. The fallback returns the original
-Unicode path, which pugixml's save_file (using fopen) can't handle.
+The road file was being saved correctly (33KB, verified) but
+not loading when reopening the project.
 
-Fix: two-step save approach:
-  1. Try saving directly to the target path (works for ASCII paths)
-  2. If that fails, save to a temp file in QDir::tempPath() (always
-     ASCII-safe), then copy to the final destination using QFile::copy
-     (Qt handles Unicode paths natively)
+Root cause: OpenDriveMap::Load() uses std::ifstream to read the
+.xodr file. std::ifstream on Windows cannot handle Unicode paths
+(like OneDrive/文档/...). The file was opened as empty, pugixml
+printed "Err{} No document element found", and no roads were
+loaded into the engine.
 
-Same approach for loadFromPath:
-  1. Try loading directly from the path
-  2. If that fails, copy to temp file and load from there
+The previous "try direct first, fallback to temp" approach didn't
+work because Load() returned true even when parsing failed (it
+only checks if roads were added, not if XML parsing succeeded).
 
-This handles all cases:
-  - ASCII paths: direct save/load (fast)
-  - Unicode paths: temp file fallback (correct)
-  - New files: temp file is created first, then copied
+Fix: always copy the .xodr to a temp file in QDir::tempPath()
+(ASCII-safe) using QFile::copy (Qt handles Unicode), then load
+from the temp file. Also read the file content via QFile for
+ActionManager recording instead of std::ifstream.
+
+Log output now shows:
+  loadFromPath: loaded successfully from: .../road.xodr
+Instead of the misleading:
+  Err{} No document element found
+  loadFromPath: loaded directly from: ...
