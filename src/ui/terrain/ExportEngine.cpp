@@ -392,12 +392,24 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
         if (settings.mapboxToken.isEmpty()) return {};
         return QString("https://api.mapbox.com/v4/mapbox.terrain-rgb/%1/%2/%3.png?access_token=%4")
             .arg(15).arg(tile.col).arg(tile.row).arg(settings.mapboxToken);
-    case terrain::DemSource::NASA_EarthData_Copernicus:
-        // Copernicus DEM GLO-30 via NASA EarthData (free, no key)
-        return QString("https://copernicus-dem-30m.s3.amazonaws.com/data/"
-                       "Copernicus_DSM_COG_10_N%1_00_E%2_00_DEM.tif")
-            .arg(static_cast<int>(tile.bounds.north), 2, 10, QChar('0'))
-            .arg(static_cast<int>(tile.bounds.east), 3, 10, QChar('0'));
+    case terrain::DemSource::NASA_EarthData_Copernicus: {
+        // Copernicus DEM GLO-30 via AWS S3 (free, no key)
+        // Tiles are named by SOUTHWEST (lower-left) corner, 1x1 degree grid
+        // Format: Copernicus_DSM_COG_10_[N|S]xx_00_[E|W]xxx_00_DEM
+        // S3 path: {tile_name}/{tile_name}.tif
+        int lat = static_cast<int>(std::floor(tile.bounds.south));
+        int lon = static_cast<int>(std::floor(tile.bounds.west));
+        QString latStr = (lat >= 0)
+            ? QString("N%1_00").arg(lat, 2, 10, QChar('0'))
+            : QString("S%1_00").arg(-lat, 2, 10, QChar('0'));
+        QString lonStr = (lon >= 0)
+            ? QString("E%1_00").arg(lon, 3, 10, QChar('0'))
+            : QString("W%1_00").arg(-lon, 3, 10, QChar('0'));
+        QString tileName = QString("Copernicus_DSM_COG_10_%1_%2_DEM")
+            .arg(latStr, lonStr);
+        return QString("https://copernicus-dem-30m.s3.amazonaws.com/%1/%2.tif")
+            .arg(tileName, tileName);
+    }
     // OpenTopography API sources
     case terrain::DemSource::OpenTopo_SRTM_GL1: demType = "SRTMGL1"; break;
     case terrain::DemSource::OpenTopo_SRTM_GL3: demType = "SRTMGL3"; break;

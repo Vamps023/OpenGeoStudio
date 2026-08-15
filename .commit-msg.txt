@@ -1,23 +1,20 @@
-Fix Unicode path crash in GeoTIFF export (OneDrive/Chinese folders)
+Fix Copernicus DEM download URL (404 error)
 
-libtiff's TIFFOpen uses fopen() on Windows, which cannot handle
-Unicode paths (e.g. Chinese characters in OneDrive folder names
-like Documents/文档/OpenGeoStudio/...).
+Three bugs in the Copernicus DEM GLO-30 URL:
 
-Fix: new PathHelper utility converts Unicode paths to Windows 8.3
-short paths (GetShortPathNameW) before passing to TIFFOpen.
-Short paths are ASCII-safe and work with fopen().
+1. Wrong corner: tiles are named by SOUTHWEST (lower-left) corner,
+   not north/east. Was using tile.bounds.north/east, now uses
+   floor(tile.bounds.south/west).
 
-Example:
-  Input:  C:\Users\nares\OneDrive\文档\OpenGeoStudio\Projects\Test\Terrain\...
-  Output: C:\Users\nares\OneDrive\73EC~1\OPENGE~1\Projects\Test\Terrain\...
+2. Wrong path: S3 key includes a subdirectory with the same name
+   as the file. Was: /data/{name}.tif
+   Now: {name}/{name}.tif
 
-Files fixed (all TIFFOpen calls):
-  - RasterWriter.cpp (2 calls — main GeoTIFF writer)
-  - ExportEngine.cpp (3 calls — legacy GeoTIFF writer)
-  - DemDecoder.hpp (1 call — reading downloaded DEM tiles)
+3. Missing N/S, E/W handling: negative coordinates (southern/western
+   hemisphere) now get S/W prefix instead of negative numbers.
 
-PathHelper.hpp:
-  - NOMINMAX defined to prevent windows.h min/max macro conflict
-  - toTiffPath(QString) → short path on Windows, UTF-8 on other platforms
-  - toTiffString(QString) → std::string version
+Example (Mumbai area, tile covering 18-19N, 72-73E):
+  Before: .../data/Copernicus_DSM_COG_10_N19_00_E073_00_DEM.tif → 404
+  After:  .../Copernicus_DSM_COG_10_N18_00_E072_00_DEM/Copernicus_DSM_COG_10_N18_00_E072_00_DEM.tif → 200 OK
+
+Verified with curl: HTTP 200 OK, file exists on S3.
