@@ -1,19 +1,22 @@
-Fix 3D Studio crash — OGRE-Next cameras don't attach to SceneNodes
+Fix 3D Studio crash — use getDefaultPaths for Hlms shader loading
 
-OGRE-Next 4.0 changed the camera API. Cameras are no longer
-MovableObjects that get attached to SceneNodes. Instead, you
-set position/lookAt directly on the camera.
+OGRE-Next's Hlms system expects the data folder to point to the
+render-system-specific subfolder (e.g. Hlms/Pbs/HLSL for D3D11),
+not the root Hlms/Pbs folder. The shader template files like
+VertexShader_vs.hlsl live in the HLSL subfolder.
 
 The crash was:
-  OGRE EXCEPTION(2:InvalidParametersException):
-  Object already attached to a SceneNode or a Bone
-  in SceneNode::attachObject
+  OGRE EXCEPTION(6:FileNotFoundException):
+  Data folder provided contains no valid template shader files.
+  Folder: D:/git/OpenGeoStudio-Qt/build/deploy/Hlms/Pbs
 
 Fix:
-  - Removed m_cameraNode and attachObject(m_camera)
-  - Use m_camera->setPosition() and m_camera->lookAt() directly
-  - Updated resetCamera() to use camera directly
-  - Removed m_cameraNode from header
+  - Use HlmsPbs::getDefaultPaths() and HlmsUnlit::getDefaultPaths()
+    to get the correct data folder and library folder paths
+  - These functions detect the active render system (D3D11) and
+    return "Hlms/Pbs/HLSL" as the data folder
+  - Library folders include Common/Any, Pbs/Any, Pbs/Any/Main, etc.
+  - Load each archive with readOnly=true (like the OGRE samples)
 
 Generated with [Devin](https://devin.ai)
 

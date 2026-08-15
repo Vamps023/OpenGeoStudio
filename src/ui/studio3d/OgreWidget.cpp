@@ -147,36 +147,53 @@ void OgreWidget::initOgre()
     compositorManager->addWorkspace(m_sceneManager,
         m_renderWindow->getTexture(), m_camera, "MainWorkspace", true);
 
-    // Setup Hlms (shader system)
+    // Setup Hlms (shader system) — use getDefaultPaths like the OGRE samples
     {
         QString hlmsFolder = appDir + "/";
-        Ogre::String mainPath = hlmsFolder.toStdString() + "Hlms/Common";
-        Ogre::String pbsPath = hlmsFolder.toStdString() + "Hlms/Pbs";
-        Ogre::String unlitPath = hlmsFolder.toStdString() + "Hlms/Unlit";
+        Ogre::String rootHlmsFolder = hlmsFolder.toStdString();
 
         Ogre::ArchiveManager& archMgr = Ogre::ArchiveManager::getSingleton();
-
-        Ogre::Archive* libCommon = archMgr.load(mainPath, "FileSystem", true);
-        Ogre::Archive* libPbs = archMgr.load(pbsPath, "FileSystem", true);
-        Ogre::Archive* libUnlit = archMgr.load(unlitPath, "FileSystem", true);
-
         Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
 
         // PBS
         {
-            Ogre::ArchiveVec libVec;
-            libVec.push_back(libCommon);
-            Ogre::HlmsPbs* hlmsPbs = new Ogre::HlmsPbs(
-                archMgr.load(pbsPath, "FileSystem", false), &libVec);
+            Ogre::String mainFolderPath;
+            Ogre::StringVector libraryFoldersPaths;
+            Ogre::HlmsPbs::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
+
+            Ogre::Archive* archivePbs = archMgr.load(
+                rootHlmsFolder + mainFolderPath, "FileSystem", true);
+
+            Ogre::ArchiveVec archivePbsLibraryFolders;
+            for (const auto& libPath : libraryFoldersPaths) {
+                Ogre::Archive* archiveLibrary = archMgr.load(
+                    rootHlmsFolder + libPath, "FileSystem", true);
+                archivePbsLibraryFolders.push_back(archiveLibrary);
+            }
+
+            Ogre::HlmsPbs* hlmsPbs = OGRE_NEW Ogre::HlmsPbs(
+                archivePbs, &archivePbsLibraryFolders);
             hlmsManager->registerHlms(hlmsPbs);
         }
 
         // Unlit
         {
-            Ogre::ArchiveVec libVec;
-            libVec.push_back(libCommon);
-            Ogre::HlmsUnlit* hlmsUnlit = new Ogre::HlmsUnlit(
-                archMgr.load(unlitPath, "FileSystem", false), &libVec);
+            Ogre::String mainFolderPath;
+            Ogre::StringVector libraryFoldersPaths;
+            Ogre::HlmsUnlit::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
+
+            Ogre::Archive* archiveUnlit = archMgr.load(
+                rootHlmsFolder + mainFolderPath, "FileSystem", true);
+
+            Ogre::ArchiveVec archiveUnlitLibraryFolders;
+            for (const auto& libPath : libraryFoldersPaths) {
+                Ogre::Archive* archiveLibrary = archMgr.load(
+                    rootHlmsFolder + libPath, "FileSystem", true);
+                archiveUnlitLibraryFolders.push_back(archiveLibrary);
+            }
+
+            Ogre::HlmsUnlit* hlmsUnlit = OGRE_NEW Ogre::HlmsUnlit(
+                archiveUnlit, &archiveUnlitLibraryFolders);
             hlmsManager->registerHlms(hlmsUnlit);
         }
     }
