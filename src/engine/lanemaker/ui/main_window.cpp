@@ -1,6 +1,8 @@
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QFile>
 #include <QStatusBar>
 #include <QApplication>
 #include <QScreen>
@@ -201,6 +203,13 @@ void MainWindow::loadFromPath(const QString& path)
     if (s.isEmpty()) return;
     if (!QFile::exists(s)) return;
 
+    // Check file is not empty
+    QFileInfo fi(s);
+    if (fi.size() == 0) {
+        spdlog::warn("loadFromPath: file is empty, skipping: {}", s.toStdString());
+        return;
+    }
+
     reset();
     loadedFileName = s.toStdString();
     setProperty("lastRoadFile", s);
@@ -215,7 +224,9 @@ void MainWindow::loadFromPath(const QString& path)
     buffer << ifs.rdbuf();
     LM::ActionManager::Instance()->Record(buffer.str());
 
-    LM::g_mapViewGL->update();
+    if (LM::g_mapViewGL) {
+        LM::g_mapViewGL->update();
+    }
 }
 
 void MainWindow::undo()

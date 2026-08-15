@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QDialog>
+#include <QTimer>
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QComboBox>
@@ -256,6 +257,7 @@ private:
     TrainStudioWidget* m_trainStudioWidget = nullptr;
     TerrainStudioWidget* m_terrainStudioWidget = nullptr;
     Studio3DWidget* m_studio3DWidget = nullptr;
+    QString m_pendingRoadFile;  // deferred road file to load when Road Studio is activated
     QDockWidget* m_leftDock = nullptr;
     QDockWidget* m_rightDock = nullptr;
     QWidget* m_rightDockPlaceholder = nullptr;
@@ -627,6 +629,17 @@ private slots:
             // Add Road Studio menus to the main app menu bar
             setupRoadStudioMenus();
             showRoadStudioMenus(true);
+            // Load pending road file if one was queued by project open
+            if (!m_pendingRoadFile.isEmpty() &&
+                m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
+                // Defer to next event loop iteration so the OpenGL context is ready
+                QString path = m_pendingRoadFile;
+                m_pendingRoadFile.clear();
+                QTimer::singleShot(100, this, [this, path]() {
+                    if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow())
+                        m_roadStudioWidget->laneMakerWindow()->loadFromPath(path);
+                });
+            }
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
             // Train Studio: no docks (matching reference)
@@ -728,16 +741,23 @@ private slots:
             m_ctx->terrain().fromJson(ms["terrain"].toObject());
         }
 
-        // ── Restore road network — auto-load .xodr into LaneMaker ──
+        // ── Restore road network — defer loading until Road Studio is visible ──
+        // Loading immediately crashes because LaneMaker's OpenGL context
+        // isn't ready until the Road Studio page is actually shown.
         if (ms.contains("road-studio")) {
             QJsonObject roadState = ms["road-studio"].toObject();
             QString xodrFile = roadState["xodrFile"].toString();
-            if (!xodrFile.isEmpty() && QFile::exists(xodrFile) &&
-                m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
-                auto* lmw = m_roadStudioWidget->laneMakerWindow();
-                lmw->loadFromPath(xodrFile);
-                m_statusLabel->setText(
-                    QStringLiteral("Road network loaded: %1").arg(xodrFile));
+            if (!xodrFile.isEmpty() && QFile::exists(xodrFile)) {
+                m_pendingRoadFile = xodrFile;
+                // If Road Studio is already active, load now.
+                // Otherwise, load when the user switches to Road Studio.
+                if (m_ctx->workspaces().activeId() == "road-studio" &&
+                    m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
+                    m_roadStudioWidget->laneMakerWindow()->loadFromPath(xodrFile);
+                    m_pendingRoadFile.clear();
+                    m_statusLabel->setText(
+                        QStringLiteral("Road network loaded: %1").arg(xodrFile));
+                }
             }
         }
 

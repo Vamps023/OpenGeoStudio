@@ -1,30 +1,19 @@
-Auto-save and auto-load road network under project folder
+Fix crash when opening recent project with road data
 
-Road Studio now saves and loads road data automatically with the
-project — no manual file dialog needed.
+The crash happened because loadFromPath() was called during
+project open, before LaneMaker's OpenGL context was initialized
+(the Road Studio page wasn't visible yet).
 
-Save (Ctrl+S or File > Save Project):
-  - Road network auto-saved to {project}/Roads/road.xodr
-  - Path recorded in .ogproj moduleState["road-studio"]["xodrFile"]
-  - No file dialog — saves directly to the project folder
+Fix: defer road file loading until Road Studio workspace is
+actually activated. The project open stores the .xodr path in
+m_pendingRoadFile, and when the user switches to Road Studio,
+the file is loaded via QTimer::singleShot(100ms) to ensure the
+OpenGL context is ready.
 
-Open (File > Open Project):
-  - .xodr file auto-loaded into LaneMaker
-  - Road network appears immediately in the editor
-  - No manual load needed
+Additional safety:
+  - Check for empty files before loading
+  - Null-check g_mapViewGL before calling update()
+  - If Road Studio is already active when project opens, load
+    immediately (context is ready)
 
-New LaneMaker API:
-  - MainWindow::saveToPath(QString) — save without dialog
-  - MainWindow::loadFromPath(QString) — load without dialog
-  - MainWindow::loadedFilePath() — get current file path
-
-The existing File > Save / File > Load buttons in LaneMaker still
-work with file dialogs for manual control, but the project system
-uses the new path-based API for automatic persistence.
-
-Project folder structure:
-  MyProject/
-    MyProject.ogproj       ← terrain + road state
-    Terrain/               ← heightmaps + albedo
-    Roads/road.xodr        ← road network (auto-saved)
-    Exports/               ← 3D studio exports
+Build: SUCCESS
