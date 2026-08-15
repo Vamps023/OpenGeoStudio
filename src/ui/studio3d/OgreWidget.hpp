@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QWindow>
@@ -127,6 +127,10 @@ private:
     float m_camTargetX = 0.0f;
     float m_camTargetY = 0.0f;
     float m_camTargetZ = 0.0f;
+
+    // Pending scene to load after OGRE initialization
+    QJsonObject m_pendingScene;
+    bool m_hasPendingScene = false;
 
     // Mouse state
     bool m_mouseDown = false;

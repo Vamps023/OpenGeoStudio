@@ -1,4 +1,4 @@
-#include "OgreWidget.hpp"
+﻿#include "OgreWidget.hpp"
 
 #include <QApplication>
 #include <QMouseEvent>
@@ -72,6 +72,15 @@ void OgreWidget::exposeEvent(QExposeEvent* event)
         setupScene();
         m_timerId = startTimer(16);
         m_initialized = true;
+
+        // Load pending scene if one was stored before OGRE init
+        if (m_hasPendingScene) {
+            qDebug() << "OGRE initialized, loading pending scene...";
+            QJsonObject pending = m_pendingScene;
+            m_hasPendingScene = false;
+            m_pendingScene = QJsonObject();
+            loadScene(pending);
+        }
     }
 }
 
@@ -910,7 +919,9 @@ QJsonObject OgreWidget::saveScene() const
 void OgreWidget::loadScene(const QJsonObject& scene)
 {
     if (!m_initialized) {
-        qDebug() << "OGRE not initialized, scene will load after init";
+        qDebug() << "OGRE not initialized, storing pending scene...";
+        m_pendingScene = scene;
+        m_hasPendingScene = true;
         return;
     }
 
@@ -939,12 +950,15 @@ void OgreWidget::loadScene(const QJsonObject& scene)
 
     // Load objects
     QJsonArray objArray = scene["objects"].toArray();
+    qDebug() << "Loading" << objArray.size() << "objects from scene...";
     for (const auto& val : objArray) {
         SceneObject obj = SceneObject::fromJson(val.toObject());
         if (!obj.id.isEmpty()) {
             rebuildObject(obj);
+            qDebug() << "  Object created:" << obj.id << "at" << obj.posX << obj.posY << obj.posZ;
         }
     }
+    qDebug() << "Objects loaded:" << m_objects.size();
 
     // Restore camera
     QJsonObject camera = scene["camera"].toObject();
