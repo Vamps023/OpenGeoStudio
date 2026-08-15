@@ -1,21 +1,21 @@
-Fix road .xodr not saving/loading with Unicode project paths
+Fix road .xodr not saving with Unicode paths — use temp file fallback
 
-The road file was not being saved to the project folder because
-LaneMaker's saveToPath/loadFromPath used QString::toStdString()
-which produces garbage for Unicode paths on Windows (e.g.
-OneDrive/文档/...).
+Root cause: GetShortPathNameW returns 0 for non-existent files.
+When saving a new road.xodr, the file doesn't exist yet, so the
+short path conversion fails. The fallback returns the original
+Unicode path, which pugixml's save_file (using fopen) can't handle.
 
-Fix: use PathHelper::toTiffPath() to convert Unicode paths to
-Windows 8.3 short paths before converting to std::string for
-ChangeTracker::Save/Load.
+Fix: two-step save approach:
+  1. Try saving directly to the target path (works for ASCII paths)
+  2. If that fails, save to a temp file in QDir::tempPath() (always
+     ASCII-safe), then copy to the final destination using QFile::copy
+     (Qt handles Unicode paths natively)
 
-Also added:
-  - Logging in saveToPath/loadFromPath (spdlog)
-  - Verification in saveProjectState: checks if road.xodr was
-    actually created after saveToPath, logs warning if not
-  - Logging in loadProjectState via qDebug
-  - Better error messages in loadFromPath
+Same approach for loadFromPath:
+  1. Try loading directly from the path
+  2. If that fails, copy to temp file and load from there
 
-Files changed:
-  - main_window.cpp: saveToPath and loadFromPath use PathHelper
-  - main.cpp: saveProjectState verifies road file creation
+This handles all cases:
+  - ASCII paths: direct save/load (fast)
+  - Unicode paths: temp file fallback (correct)
+  - New files: temp file is created first, then copied

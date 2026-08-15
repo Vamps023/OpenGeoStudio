@@ -175,13 +175,41 @@ void MainWindow::saveToPath(const QString& path)
     if (!s.endsWith(".xodr")) {
         s.append(".xodr");
     }
-    // Convert to short path for Windows Unicode paths (e.g. OneDrive/Chinese)
-    QString safePath = PathHelper::toTiffPath(s);
-    auto loc = safePath.toStdString();
+
+    // Ensure the parent directory exists (Qt handles Unicode paths)
+    QDir().mkpath(QFileInfo(s).absolutePath());
+
+    // Try saving directly first (works for ASCII paths)
+    auto loc = s.toStdString();
     LM::ChangeTracker::Instance()->Save(loc);
+
+    // Check if the file was created
+    if (!QFile::exists(s)) {
+        // Direct save failed — likely a Unicode path issue.
+        // Save to a temp file in an ASCII-safe location, then copy.
+        QString tempDir = QDir::tempPath();
+        QString tempFile = tempDir + "/road_temp.xodr";
+        auto tempLoc = tempFile.toStdString();
+        LM::ChangeTracker::Instance()->Save(tempLoc);
+
+        if (QFile::exists(tempFile)) {
+            // Copy from temp to final destination (Qt handles Unicode)
+            if (QFile::exists(s)) QFile::remove(s);
+            if (QFile::copy(tempFile, s)) {
+                QFile::remove(tempFile);
+                spdlog::info("saveToPath: saved via temp copy to: {}", s.toStdString());
+            } else {
+                spdlog::error("saveToPath: failed to copy temp file to: {}", s.toStdString());
+            }
+        } else {
+            spdlog::error("saveToPath: failed to save temp file: {}", tempFile.toStdString());
+        }
+    } else {
+        spdlog::info("saveToPath: saved directly to: {}", s.toStdString());
+    }
+
     loadedFileName = loc;
     setProperty("lastRoadFile", s);
-    spdlog::info("saveToPath: saved road file to: {} (safe: {})", s.toStdString(), safePath.toStdString());
 }
 
 void MainWindow::loadFromFile()
@@ -217,22 +245,38 @@ void MainWindow::loadFromPath(const QString& path)
         return;
     }
 
-    // Convert to short path for Windows Unicode paths
-    QString safePath = PathHelper::toTiffPath(s);
-    auto safeLoc = safePath.toStdString();
-
     reset();
-    loadedFileName = safeLoc;
+
+    // Try loading directly first (works for ASCII paths)
+    auto loc = s.toStdString();
+    bool loaded = LM::ChangeTracker::Instance()->Load(loc);
+
+    if (!loaded) {
+        // Direct load failed — likely a Unicode path issue.
+        // Copy to a temp file in an ASCII-safe location, then load from there.
+        QString tempFile = QDir::tempPath() + "/road_load_temp.xodr";
+        if (QFile::exists(tempFile)) QFile::remove(tempFile);
+        if (QFile::copy(s, tempFile)) {
+            auto tempLoc = tempFile.toStdString();
+            loaded = LM::ChangeTracker::Instance()->Load(tempLoc);
+            if (loaded) {
+                spdlog::info("loadFromPath: loaded via temp copy from: {}", s.toStdString());
+            }
+            QFile::remove(tempFile);
+        }
+    } else {
+        spdlog::info("loadFromPath: loaded directly from: {}", s.toStdString());
+    }
+
+    loadedFileName = loc;
     setProperty("lastRoadFile", s);
 
-    spdlog::info("loadFromPath: loading road file: {} (safe: {})", s.toStdString(), safePath.toStdString());
-
-    bool supported = LM::ChangeTracker::Instance()->Load(loadedFileName);
-    if (!supported)
-    {
-        spdlog::error("xodr map needs to contain custom LaneProfile!");
+    if (!loaded) {
+        spdlog::error("loadFromPath: failed to load road file: {}", s.toStdString());
+        return;
     }
-    std::ifstream ifs(loadedFileName);
+
+    std::ifstream ifs(loc);
     std::stringstream buffer;
     buffer << ifs.rdbuf();
     LM::ActionManager::Instance()->Record(buffer.str());
