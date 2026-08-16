@@ -134,14 +134,13 @@ void ExportPanel::setupUi() {
     basicLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     basicLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    // Heightmap format
+    // Heightmap format — only 32-bit Float GeoTIFF is supported for
+    // Unigine / QGIS interoperability.
     m_heightmapFormatCombo = new QComboBox();
-    m_heightmapFormatCombo->addItems({
-        "None (Albedo only)", "PNG 16-bit", "R16 Raw",
-        "GeoTIFF Int16 (DEM)", "GeoTIFF UInt16 (normalized)", "GeoTIFF Float32 (full precision)"
-    });
-    connect(m_heightmapFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        m_store->setHeightmapFormat(static_cast<terrain::HeightmapFormat>(idx));
+    m_heightmapFormatCombo->addItem("GeoTIFF Float32 (full precision)");
+    m_store->setHeightmapFormat(terrain::HeightmapFormat::GeoTIFF_Float32);
+    connect(m_heightmapFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int /*idx*/) {
+        m_store->setHeightmapFormat(terrain::HeightmapFormat::GeoTIFF_Float32);
     });
     basicLayout->addRow("Heightmap:", m_heightmapFormatCombo);
 

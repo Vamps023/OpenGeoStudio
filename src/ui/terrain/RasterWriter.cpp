@@ -32,14 +32,14 @@
 // and count for each tag.
 
 static const TIFFFieldInfo kGeoTiffFieldInfo[] = {
-    // Use distinct td_field bits (24-29) to avoid colliding with libtiff's
-    // standard fields while still staying inside the 32-bit td_field mask.
-    { 33550, -1, -1, TIFF_DOUBLE, 24, true, true, const_cast<char*>("ModelPixelScale") },
-    { 33922, -1, -1, TIFF_DOUBLE, 25, true, true, const_cast<char*>("ModelTiepoint") },
-    { 34735, -1, -1, TIFF_SHORT,  26, true, true, const_cast<char*>("GeoKeyDirectory") },
-    { 34736, -1, -1, TIFF_DOUBLE, 27, true, true, const_cast<char*>("GeoDoubleParams") },
-    { 34737, -1, -1, TIFF_ASCII,  28, true, true, const_cast<char*>("GeoAsciiParams") },
-    { 42113, -1, -1, TIFF_ASCII,  29, true, true, const_cast<char*>("GDAL_NODATA") },
+    // FIELD_CUSTOM is the reserved libtiff bit for custom tags. It lives
+    // outside the standard tag bit range so it does not collide with them.
+    { 33550, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelPixelScale") },
+    { 33922, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelTiepoint") },
+    { 34735, -1, -1, TIFF_SHORT,  FIELD_CUSTOM, true, true, const_cast<char*>("GeoKeyDirectory") },
+    { 34736, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("GeoDoubleParams") },
+    { 34737, -1, -1, TIFF_ASCII,  FIELD_CUSTOM, true, true, const_cast<char*>("GeoAsciiParams") },
+    { 42113, -1, -1, TIFF_ASCII,  FIELD_CUSTOM, true, true, const_cast<char*>("GDAL_NODATA") },
 };
 
 static void tiffSilentWarning(const char*, const char*, va_list) {}
