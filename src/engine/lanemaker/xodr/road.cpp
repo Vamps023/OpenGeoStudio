@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <sstream>
+#include <limits>
 
 #include "Geometries/Line.h"
 #include "Geometries/ParamPoly3.h"
@@ -446,7 +447,24 @@ namespace LM
             }
         }
         // Make sure result is deterministic in case multiple overlap at the same point
-        std::sort(rtn.begin(), rtn.end(), [](const Road::RoadsOverlap& a, const Road::RoadsOverlap& b)
+        auto roadIdRank = [](const std::weak_ptr<Road>& w) -> long
+        {
+            auto r = w.lock();
+            if (r == nullptr)
+            {
+                return std::numeric_limits<long>::max();
+            }
+            try
+            {
+                return std::stol(r->ID());
+            }
+            catch (...)
+            {
+                // Non-numeric road IDs are legal in OpenDRIVE
+                return std::numeric_limits<long>::max() - 1;
+            }
+        };
+        std::sort(rtn.begin(), rtn.end(), [&roadIdRank](const Road::RoadsOverlap& a, const Road::RoadsOverlap& b)
         {
            if (a.sBegin1 != b.sBegin1)
            {
@@ -456,7 +474,7 @@ namespace LM
            {
                return a.sBegin2 < b.sBegin2;
            }
-           return std::stoi(a.road2.lock()->ID()) < std::stoi(b.road2.lock()->ID());
+           return roadIdRank(a.road2) < roadIdRank(b.road2);
         });
         
         return rtn;

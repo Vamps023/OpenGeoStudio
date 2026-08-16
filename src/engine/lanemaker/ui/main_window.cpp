@@ -565,3 +565,9 @@ bool MainWindow::isRailMode() const
 {
     return mainWidget && mainWidget->IsRailMode();
 }
+
+void MainWindow::useSharedSatelliteView(double lat, double lon, double zoom)
+{
+    if (mainWidget)
+        mainWidget->UseSharedSatelliteView(lat, lon, zoom);
+}

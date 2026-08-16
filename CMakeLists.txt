@@ -436,6 +436,9 @@ if(EXISTS "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib")
         # Also keep ogre/ subfolder for plugins.cfg compatibility
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${OGRE_NEXT_BUILD}/bin" "$<TARGET_FILE_DIR:OpenGeoStudio>/ogre"
+        # Rail material used by Train Studio XML export and 3D rail assets
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:OpenGeoStudio>/assets"
     )
 else()
     message(WARNING "OGRE-Next not found at ${OGRE_NEXT_BUILD}, building without 3D viewport")

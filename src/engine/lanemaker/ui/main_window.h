@@ -45,6 +45,9 @@ public:
     void setRailMode(bool railMode);
     bool isRailMode() const;
 
+    // Match Terrain Studio's Esri imagery center and slippy-map zoom.
+    void useSharedSatelliteView(double lat, double lon, double zoom);
+
 protected:
     void resizeEvent(QResizeEvent*) override;
 

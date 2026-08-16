@@ -67,8 +67,20 @@ public:
         leftSep->setStyleSheet("color: #30363d;");
         contentLayout->addWidget(leftSep);
 
-        m_viewport = new TerrainViewport(ctx, m_store, this);
-        contentLayout->addWidget(m_viewport, 3);
+        auto* canvasFrame = new QFrame(contentWidget);
+        canvasFrame->setObjectName(QStringLiteral("terrainCanvasFrame"));
+        canvasFrame->setStyleSheet(
+            "QFrame#terrainCanvasFrame { background: #161b22; border: 1px solid #30363d;"
+            "border-radius: 6px; }");
+        canvasFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        auto* canvasLayout = new QVBoxLayout(canvasFrame);
+        canvasLayout->setContentsMargins(8, 8, 8, 8);
+        canvasLayout->setSpacing(0);
+
+        m_viewport = new TerrainViewport(ctx, m_store, canvasFrame);
+        m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        canvasLayout->addWidget(m_viewport, 1);
+        contentLayout->addWidget(canvasFrame, 3);
 
         // Separator
         auto* rightSep = new QFrame();

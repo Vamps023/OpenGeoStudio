@@ -70,6 +70,9 @@ public:
     void SetRailMode(bool railMode);
     bool IsRailMode() const;
 
+    // Use the same Esri satellite appearance and slippy-map zoom as Terrain Studio.
+    void UseSharedSatelliteView(double lat, double lon, double zoom);
+
     LM::MapViewGL* mapViewGL;
 
 signals:

@@ -52,6 +52,8 @@ namespace LM
 
 		// Map background — dynamic tile-based satellite imagery
 		void SetMapCenter(double lat, double lon);
+		// Match the MapLibre viewport's slippy-map zoom level in 2D mode.
+		void SetMapZoom(double zoom);
 		void ClearMapBackground();
 		void UpdateMapTiles(); // called on pan/zoom to load visible tiles
 
@@ -177,6 +179,7 @@ namespace LM
         double m_mapCenterLat = 18.52;
         double m_mapCenterLon = 73.85;
         int m_mapZoom = 16;
+        double m_requestedMapZoom = 15.0;
         bool m_mapEnabled = false;
         QNetworkAccessManager* m_tileNam = nullptr;
         int m_lastTileZoom = -1;

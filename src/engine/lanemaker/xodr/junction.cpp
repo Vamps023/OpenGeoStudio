@@ -745,10 +745,26 @@ namespace LM
     void DirectJunction::AttachNoRegenerate(ConnectionInfo conn)
     {
         auto road = conn.road.lock();
+
+        // A direct junction loaded from a file may carry no connections;
+        // without them there is nothing to recover, so just record the link.
+        if (generated.id_to_connection.empty())
+        {
+            AbstractJunction::AttachNoRegenerate(conn);
+            return;
+        }
+
         auto interfaceProvider = IDGenerator::ForType(IDType::Road)->GetByID<Road>(generated.id_to_connection.begin()->second.incoming_road);
+        if (interfaceProvider == nullptr)
+        {
+            spdlog::warn("DirectJunction {}: incoming road {} not found, skipping lane recovery",
+                ID(), generated.id_to_connection.begin()->second.incoming_road);
+            AbstractJunction::AttachNoRegenerate(conn);
+            return;
+        }
         bool isInterfaceProvider = interfaceProvider->ID() == conn.road.lock()->ID();
         bool connIsSide = road->generated.rr_profile.HasSide(-1) && road->generated.rr_profile.HasSide(1);
-        if (!isInterfaceProvider && 
+        if (!isInterfaceProvider &&
             !connIsSide)
         {
             // Recover skipProviderLanes from laneLink info
@@ -763,27 +779,47 @@ namespace LM
             }
             else
             {
-                throw;
+                spdlog::warn("DirectJunction {}: provider road {} is not linked to this junction, skipping lane recovery",
+                    ID(), interfaceProvider->ID());
+                AbstractJunction::AttachNoRegenerate(conn);
+                return;
             }
-            auto touchingSection = interfaceProvider->generated.get_lanesection(sectionS);
 
             bool recovered = false;
-            for (auto idAndConn : generated.id_to_connection)
+            try
             {
-                if (idAndConn.second.connecting_road == conn.road.lock()->ID())
+                auto touchingSection = interfaceProvider->generated.get_lanesection(sectionS);
+                for (auto idAndConn : generated.id_to_connection)
                 {
-                    int innerMostLinkedABS = 255;
-                    for (auto laneLink : idAndConn.second.lane_links)
+                    if (idAndConn.second.connecting_road == conn.road.lock()->ID())
                     {
-                        innerMostLinkedABS = std::min(innerMostLinkedABS, std::abs(laneLink.from));
-                    }
+                        if (idAndConn.second.lane_links.empty())
+                        {
+                            break;
+                        }
+                        int innerMostLinkedABS = 255;
+                        for (auto laneLink : idAndConn.second.lane_links)
+                        {
+                            innerMostLinkedABS = std::min(innerMostLinkedABS, std::abs(laneLink.from));
+                        }
 
-                    int interfaceProvideSide = idAndConn.second.lane_links.begin()->from < 0 ? -1 : 1;
-                    int innerMostLane = touchingSection.get_sorted_driving_lanes(interfaceProvideSide).begin()->id;
-                    conn.skipProviderLanes = std::abs(innerMostLinkedABS - std::abs(innerMostLane));
-                    recovered = true;
-                    break;
+                        int interfaceProvideSide = idAndConn.second.lane_links.begin()->from < 0 ? -1 : 1;
+                        auto providerDrivingLanes = touchingSection.get_sorted_driving_lanes(interfaceProvideSide);
+                        if (providerDrivingLanes.empty())
+                        {
+                            break;
+                        }
+                        int innerMostLane = providerDrivingLanes.begin()->id;
+                        conn.skipProviderLanes = std::abs(innerMostLinkedABS - std::abs(innerMostLane));
+                        recovered = true;
+                        break;
+                    }
                 }
+            }
+            catch (const std::exception& e)
+            {
+                spdlog::warn("DirectJunction {}: no lane section at s={} on road {} ({}), skipping lane recovery",
+                    ID(), sectionS, interfaceProvider->ID(), e.what());
             }
             assert(recovered);
         }
@@ -862,7 +898,13 @@ namespace LM
             auto segmentOnB = generated.boundary[j];
             auto roadA = IDGenerator::ForType(IDType::Road)->GetByID<Road>(segmentOnA.road);
             auto roadB = IDGenerator::ForType(IDType::Road)->GetByID<Road>(segmentOnB.road);
-            
+            if (roadA == nullptr || roadB == nullptr)
+            {
+                spdlog::warn("DirectJunction {}: boundary references unknown road {}/{}, skipping segment",
+                    ID(), segmentOnA.road, segmentOnB.road);
+                continue;
+            }
+
             // LMTODO: why can sbegin/sEnd exceed road Length when loading from xodr?
             segmentOnA.sBegin = std::max(0.0, std::min(roadA->Length(), segmentOnA.sBegin));
             segmentOnA.sEnd = std::max(0.0, std::min(roadA->Length(), segmentOnA.sEnd));
@@ -872,16 +914,29 @@ namespace LM
             odr::Line3D aSideLine, bSideLine;
             int npoints = std::ceil(std::max(std::abs(segmentOnA.sBegin - segmentOnA.sEnd),
                 std::abs(segmentOnB.sBegin - segmentOnB.sEnd)) / Resolution);
+            npoints = std::max(npoints, 1); // avoid 0/0 NaN when sBegin == sEnd
             {
                 for (int p = 0; p <= npoints; ++p)
                 {
                     double fracA = static_cast<double>(p) / npoints;
                     double sA = fracA * segmentOnA.sEnd + (1 - fracA) * segmentOnA.sBegin;
-                    auto pA = roadA->generated.get_boundary_xyz(segmentOnA.side, sA);
-
                     double fracB = static_cast<double>(p) / npoints;
                     double sB = fracB * segmentOnB.sEnd + (1 - fracB) * segmentOnB.sBegin;
-                    auto pB = roadB->generated.get_boundary_xyz(segmentOnB.side, sB);
+
+                    odr::Vec3D pA, pB;
+                    try
+                    {
+                        pA = roadA->generated.get_boundary_xyz(segmentOnA.side, sA);
+                        pB = roadB->generated.get_boundary_xyz(segmentOnB.side, sB);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        // s outside every lane section of the road (common on
+                        // foreign files); keep what was sampled so far
+                        spdlog::warn("DirectJunction {}: boundary sampling failed on road {}/{} ({}), truncating segment",
+                            ID(), segmentOnA.road, segmentOnB.road, e.what());
+                        break;
+                    }
 
                     if (std::abs(pA[2] - pB[2]) < ElevationStep)
                     {

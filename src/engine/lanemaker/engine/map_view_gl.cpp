@@ -7,6 +7,8 @@
 #include <QNetworkReply>
 #include <QImage>
 #include <QTimer>
+#include <algorithm>
+#include <cmath>
 
 #include "MapSubsystem.hpp"
 
@@ -115,6 +117,26 @@ namespace LM
         m_mapCenterLon = lon;
         m_mapEnabled = true;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
+        m_lastCameraZ = -1; // force tile update on next paint
+        update();
+    }
+
+    void MapViewGL::SetMapZoom(double zoom)
+    {
+        if (m_viewMode != ViewMode::TopDown2D) return;
+        m_requestedMapZoom = std::clamp(zoom, 2.0, 19.0);
+        // The widget can be zero-sized while LaneMaker is being constructed.
+        // Defer the camera-height calculation until the first resize event.
+        if (height() <= 0) return;
+        // MapViewGL derives its slippy-map zoom from the visible vertical
+        // extent. Set camera height so it matches MapLibre's zoom level.
+        const double mpp = metersPerPixel(m_mapCenterLat,
+                                          int(std::round(m_requestedMapZoom)));
+        const float viewportHeight = float(height());
+        const float cameraHeight = float(mpp * viewportHeight / 1.2);
+        auto translation = m_camera.translation();
+        translation.setZ(std::max(10.0f, cameraHeight));
+        m_camera.setTranslation(translation);
         m_lastCameraZ = -1; // force tile update on next paint
         update();
     }
@@ -701,6 +723,10 @@ namespace LM
                 /* near */           5.0f,
                 /* far */            2000.0f
             );
+        }
+        else if (height > 0)
+        {
+            SetMapZoom(m_requestedMapZoom);
         }
     }
 

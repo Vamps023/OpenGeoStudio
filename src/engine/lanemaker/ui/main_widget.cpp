@@ -595,6 +595,23 @@ bool MainWidget::IsRailMode() const
     return laneConfig && laneConfig->RailMode();
 }
 
+void MainWidget::UseSharedSatelliteView(double lat, double lon, double zoom)
+{
+    // Keep Road Studio and Train Studio visually aligned with Terrain Studio:
+    // Esri World Imagery, the same geographic center, and the same zoom.
+    if (!viewModeButton->isChecked()) {
+        viewModeButton->setChecked(true);
+    } else {
+        mapViewGL->SetViewMode(LM::MapViewGL::ViewMode::TopDown2D);
+    }
+    if (!loadMapButton->isChecked()) {
+        loadMapButton->setChecked(true);
+    }
+    mapViewGL->SetMapCenter(lat, lon);
+    mapViewGL->SetMapZoom(zoom);
+    mapViewGL->update();
+}
+
 void MainWidget::gotoCreateLaneMode(bool checked)
 {
     if (!checked) return;

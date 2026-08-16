@@ -14,6 +14,7 @@
 
 #include "../../core/osm/RailImportPipeline.hpp"
 #include "../../core/osm/OsmExporter.hpp"
+#include "../../core/osm/RailNetworkDefinitionExporter.hpp"
 
 #include <QDialog>
 #include <QVBoxLayout>
@@ -33,6 +34,8 @@
 #include <QApplication>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QCoreApplication>
+#include <QDir>
 
 namespace osm {
 
@@ -51,6 +54,33 @@ public:
     const RailImportResult& result() const { return m_result; }
 
 private slots:
+    void onSelectTexture() {
+        const QString path = QFileDialog::getOpenFileName(
+            this, "Select Trackbed Texture", m_textureEdit->text(),
+            "DDS Textures (*.dds);;All Files (*.*)");
+        if (!path.isEmpty()) m_textureEdit->setText(path);
+    }
+
+    void onExportWorldBuilderXml() {
+        if (!m_result.success) return;
+        const QString output = QFileDialog::getExistingDirectory(
+            this, "Select XML Output Directory");
+        if (output.isEmpty()) return;
+
+        const auto exportResult = RailNetworkDefinitionExporter::exportProject(
+            output, m_result, m_textureEdit->text().trimmed());
+        if (!exportResult.success) {
+            QMessageBox::critical(this, "XML Export Failed", exportResult.errorMessage);
+            return;
+        }
+        QMessageBox::information(this, "Rail XML Exported",
+            QString("Exported WorldBuilder rail XML:\n\n%1\n%2\n%3\n\nTracks: %4\nConnections: %5")
+                .arg(exportResult.baseNetworkPath)
+                .arg(exportResult.helperPath)
+                .arg(exportResult.trackNamesPath)
+                .arg(exportResult.segmentCount)
+                .arg(exportResult.connectionCount));
+    }
     void onSelectFile() {
         QString path = QFileDialog::getOpenFileName(
             this, "Select OSM File",
@@ -136,6 +166,17 @@ private slots:
     }
 
 private:
+    static QString defaultTexturePath() {
+        const QString sourcePath = QStringLiteral(
+            "D:/git/OpenGeoStudio-Qt/assets/trackbed_alb.dds");
+        if (QFileInfo::exists(sourcePath)) return sourcePath;
+        const QString deployedPath = QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("assets/trackbed_alb.dds"));
+        if (QFileInfo::exists(deployedPath)) return deployedPath;
+        return QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("../assets/trackbed_alb.dds"));
+    }
+
     void setupUi() {
         auto* mainLayout = new QVBoxLayout(this);
 
@@ -149,6 +190,18 @@ private:
         fileLayout->addWidget(m_fileEdit);
         fileLayout->addWidget(browseBtn);
         mainLayout->addWidget(fileGroup);
+
+        // Rail material
+        auto* materialGroup = new QGroupBox("Rail Material");
+        auto* materialLayout = new QHBoxLayout(materialGroup);
+        m_textureEdit = new QLineEdit(defaultTexturePath());
+        m_textureEdit->setToolTip("Trackbed ballast albedo texture used by the rail XML export");
+        auto* textureBrowseBtn = new QPushButton("Browse...");
+        connect(textureBrowseBtn, &QPushButton::clicked,
+                this, &RailOsmImportDialog::onSelectTexture);
+        materialLayout->addWidget(m_textureEdit);
+        materialLayout->addWidget(textureBrowseBtn);
+        mainLayout->addWidget(materialGroup);
 
         // Settings
         auto* settingsGroup = new QGroupBox("Import Settings");
@@ -228,6 +281,14 @@ private:
         connect(m_exportGeoButton, &QPushButton::clicked, this, &RailOsmImportDialog::onExportGeoJson);
         exportLayout->addWidget(m_exportGeoButton);
 
+        m_exportXmlButton = new QPushButton("Export WorldBuilder XML...");
+        m_exportXmlButton->setVisible(false);
+        m_exportXmlButton->setToolTip(
+            "Export base_network.xml, helper.xml, and track_names.xml");
+        connect(m_exportXmlButton, &QPushButton::clicked,
+                this, &RailOsmImportDialog::onExportWorldBuilderXml);
+        exportLayout->addWidget(m_exportXmlButton);
+
         mainLayout->addLayout(exportLayout);
 
         // Close button
@@ -243,6 +304,7 @@ private:
         m_tabs->setVisible(true);
         m_exportOdrButton->setVisible(true);
         m_exportGeoButton->setVisible(true);
+        m_exportXmlButton->setVisible(true);
 
         m_summaryText->setHtml(
             QString("<h3>Rail Import Successful</h3>"
@@ -315,6 +377,8 @@ private:
     QTextEdit* m_validationText = nullptr;
     QPushButton* m_exportOdrButton = nullptr;
     QPushButton* m_exportGeoButton = nullptr;
+    QPushButton* m_exportXmlButton = nullptr;
+    QLineEdit* m_textureEdit = nullptr;
 
     RailImportResult m_result;
 };

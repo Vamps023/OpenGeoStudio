@@ -10,6 +10,7 @@
 #include "spatial_indexer.h"
 
 #include <spdlog/spdlog.h>
+#include <exception>
 
 extern UserPreference g_preference;
 
@@ -67,20 +68,44 @@ namespace LM
         {
             if (road->generated.successor.type == odr::RoadLink::Type_Junction)
             {
-                auto rrJunction = id2RRJunction.at(road->generated.successor.id);
-                rrJunction->AttachNoRegenerate(LM::ConnectionInfo{ road, odr::RoadLink::ContactPoint_End });
+                auto rrJunctionIt = id2RRJunction.find(road->generated.successor.id);
+                if (rrJunctionIt == id2RRJunction.end())
+                {
+                    spdlog::warn("Road {} successor references undefined junction {}, skipping link",
+                        road->ID(), road->generated.successor.id);
+                }
+                else
+                {
+                    rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo{ road, odr::RoadLink::ContactPoint_End });
+                }
             }
             if (road->generated.predecessor.type == odr::RoadLink::Type_Junction)
             {
-                auto rrJunction = id2RRJunction.at(road->generated.predecessor.id);
-                rrJunction->AttachNoRegenerate(LM::ConnectionInfo(road, odr::RoadLink::ContactPoint_Start));
+                auto rrJunctionIt = id2RRJunction.find(road->generated.predecessor.id);
+                if (rrJunctionIt == id2RRJunction.end())
+                {
+                    spdlog::warn("Road {} predecessor references undefined junction {}, skipping link",
+                        road->ID(), road->generated.predecessor.id);
+                }
+                else
+                {
+                    rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo(road, odr::RoadLink::ContactPoint_Start));
+                }
             }
         }
-        
+
         std::cout << "Generating junction graphics ";
         for (auto& idAndjunc : TQDM(id2RRJunction))
         {
-            idAndjunc.second->GenerateGraphics();
+            try
+            {
+                idAndjunc.second->GenerateGraphics();
+            }
+            catch (const std::exception& e)
+            {
+                spdlog::warn("Junction {} graphics generation failed, skipping: {}",
+                    idAndjunc.second->ID(), e.what());
+            }
         }
 
         while (!redoStack.empty())
@@ -208,7 +233,16 @@ namespace LM
         {
             return false;
         }
-        PostLoadActions();
+        try
+        {
+            PostLoadActions();
+        }
+        catch (const std::exception& e)
+        {
+            spdlog::error("Failed to build map from {}: {}", path, e.what());
+            Clear();
+            return false;
+        }
         return true;
     }
 
@@ -218,7 +252,16 @@ namespace LM
         {
             return false;
         }
-        PostLoadActions();
+        try
+        {
+            PostLoadActions();
+        }
+        catch (const std::exception& e)
+        {
+            spdlog::error("Failed to build map from content: {}", e.what());
+            Clear();
+            return false;
+        }
         return true;
     }
 
