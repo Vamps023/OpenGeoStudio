@@ -12,12 +12,16 @@
 
 #include "OpenDriveMap.h"
 
+#include "../../core/world/WorldBuilder.hpp"
+#include "../../core/world/SplineEditor.hpp"
+
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QDir>
 #include <QFile>
 #include <QString>
 #include <QDebug>
+#include <QTemporaryDir>
 #include <iostream>
 #include <vector>
 #include <functional>
@@ -283,6 +287,177 @@ TEST(test_houston_xodr_reload_with_libopendrive) {
     }
     qDebug() << "[houston] Roads with geometry:" << roadsWithGeometry;
     CHECK(roadsWithGeometry > 0, "At least some roads should have geometry");
+}
+
+// ─── Test 5: Complete Houston workflow — terrain + roads + content,
+// ─── save, close, reopen, verify full restoration ───
+TEST(test_houston_full_workflow_restoration) {
+    QString osmPath = resolveOsmPath();
+    if (osmPath.isEmpty()) {
+        std::cout << "    SKIP: Houston OSM file not found" << std::endl;
+        return;
+    }
+
+    // ─── Step 1: Import Houston roads from OSM ───
+    ImportSettings settings;
+    settings.autoDetectReference = true;
+    settings.runValidation = true;
+    settings.autoRepair = true;
+    ImportResult roadResult = OsmImportPipeline::importFromFile(osmPath, settings);
+    CHECK(roadResult.success, "Houston OSM import should succeed");
+    CHECK(roadResult.stats.roadsCreated > 1000, "Houston should have thousands of roads");
+    if (!roadResult.success || roadResult.stats.roadsCreated <= 0) return;
+
+    // ─── Step 2: Export roads to OpenDRIVE (saved as project artifact) ───
+    QTemporaryDir tmpDir;
+    QString projectDir = tmpDir.path() + "/HoustonProject";
+    QDir().mkpath(projectDir + "/Roads");
+    QString xodrPath = projectDir + "/Roads/houston.xodr";
+    OsmExporter::OpenDriveParams params;
+    QString exportError;
+    bool exported = OsmExporter::exportToOpenDrive(
+        xodrPath, roadResult.network, roadResult.junctions,
+        roadResult.converter, params, &exportError);
+    CHECK(exported, "OpenDRIVE export should succeed");
+    if (!exported) return;
+    CHECK(QFileInfo::exists(xodrPath), "XODR artifact should exist on disk");
+    int xodrRoadCount = int(roadResult.network.roads.size());
+
+    // ─── Step 3: Verify the XODR artifact is reloadable (libOpenDRIVE) ───
+    odr::OpenDriveMap odrMap;
+    bool odrLoaded = odrMap.Load(xodrPath.toStdString());
+    CHECK(odrLoaded, "Saved XODR should reload with libOpenDRIVE");
+    if (odrLoaded) {
+        auto roads = odrMap.get_roads();
+        CHECK(!roads.empty(), "Reloaded XODR should contain roads");
+        // Count <road> elements in the file itself (some network roads may be
+        // skipped during export if their length is <= 0)
+        QFile xf(xodrPath);
+        int fileRoadCount = 0;
+        if (xf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            fileRoadCount = xf.readAll().count("<road ");
+            xf.close();
+        }
+        CHECK(int(roads.size()) == fileRoadCount,
+              "Reloaded road count should match roads in the XODR file");
+        CHECK(fileRoadCount > 0, "XODR file should contain roads");
+        std::cout << "[houston] XODR reload OK:" << roads.size()
+                  << " roads (file has " << fileRoadCount << ")" << std::endl;
+    }
+
+    // ─── Step 4: Build the World (terrain + roads + content) ───
+    world::WorldBuilder builder;
+    builder.createWorld("Houston 4km", 4000.0f);
+    builder.importTerrain("/project/Terrain/heightmap.png",
+                          "/project/Terrain/albedo.png", 100.0f);
+    builder.generateMasks();
+
+    // Roads from the imported network (sample a few for the world model)
+    int roadsAdded = 0;
+    for (const auto& road : roadResult.network.roads) {
+        if (road.numSegments() < 1) continue;
+        QList<QPair<float, float>> points;
+        for (int i = 0; i < road.numSegments() && i < 16; i++) {
+            const auto& seg = road.segment(i);
+            points.append({float(seg.startPoint().x), float(seg.startPoint().y)});
+        }
+        if (points.size() >= 2) {
+            builder.createRoad(QString::fromStdString(road.name), points,
+                               8.0f, std::max(1, int(road.laneCount)));
+            roadsAdded++;
+        }
+        if (roadsAdded >= 5) break;  // sample a few roads for the world model
+    }
+    CHECK(roadsAdded >= 1, "Should add at least one road spline to the world");
+
+    // Buildings along roads
+    builder.generateBuildingsAlongRoads(50.0f, 20.0f);
+    // PCG vegetation
+    builder.createVegetationPCG("Forest_PCG", "/meshes/tree.obj", 0.01f);
+    builder.generateVegetation("Forest_PCG", 42);
+    // Water + lighting
+    builder.addLake("Lake_Houston", 500, 500, 300, 300, 50);
+    builder.addSunLight(45.0f, 60.0f, 3.0f);
+    builder.addSkyLight(1.0f);
+
+    // Record expected state
+    int expectedActors = builder.world.actorCount();
+    int expectedBuildings = builder.world.actorCountByType(world::ActorType::Building);
+    int expectedTrees = builder.world.actorCountByType(world::ActorType::Tree);
+    int expectedSplines = builder.world.splineCount();
+    int expectedPcg = builder.world.pcgGraphCount();
+    int expectedWater = builder.world.waterCount();
+    int expectedMasks = builder.world.maskCount();
+    QString expectedName = builder.world.settings.name;
+    float expectedSize = builder.world.settings.terrainSize;
+    QString expectedHeightmap = builder.world.settings.heightmapPath;
+
+    CHECK(expectedActors > 0, "World should have actors");
+    CHECK(expectedBuildings > 0, "World should have buildings");
+    CHECK(expectedTrees > 0, "World should have vegetation");
+    CHECK(expectedSplines >= 1, "World should have road splines");
+    CHECK(expectedWater == 1, "World should have one lake");
+    CHECK(expectedMasks >= 2, "World should have masks");
+
+    // ─── Step 5: Save world ───
+    QString worldPath = projectDir + "/World/houston.world";
+    bool saved = builder.save(worldPath);
+    CHECK(saved, "World save should succeed");
+    if (!saved) return;
+    CHECK(QFileInfo::exists(worldPath), "World file should exist on disk");
+    qint64 worldSize = QFileInfo(worldPath).size();
+    CHECK(worldSize > 0, "World file should not be empty");
+
+    // ─── Step 6: Close (destroy all state) ───
+    {
+        world::WorldBuilder closed;  // fresh builder — simulates app close
+        Q_UNUSED(closed);
+    }
+
+    // ─── Step 7: Reopen and verify complete restoration ───
+    world::WorldBuilder reopened;
+    bool loaded = reopened.load(worldPath);
+    CHECK(loaded, "World reload should succeed");
+    if (!loaded) return;
+
+    bool restored =
+        reopened.world.settings.name == expectedName &&
+        reopened.world.settings.terrainSize == expectedSize &&
+        reopened.world.settings.heightmapPath == expectedHeightmap &&
+        reopened.world.actorCount() == expectedActors &&
+        reopened.world.actorCountByType(world::ActorType::Building) == expectedBuildings &&
+        reopened.world.actorCountByType(world::ActorType::Tree) == expectedTrees &&
+        reopened.world.splineCount() == expectedSplines &&
+        reopened.world.pcgGraphCount() == expectedPcg &&
+        reopened.world.waterCount() == expectedWater &&
+        reopened.world.maskCount() == expectedMasks;
+
+    CHECK(restored, "Full world restoration should match exactly");
+    if (!restored) {
+        std::cout << "[houston] RESTORATION MISMATCH:"
+                  << " name=" << (reopened.world.settings.name == expectedName)
+                  << " size=" << (reopened.world.settings.terrainSize == expectedSize)
+                  << " heightmap=" << (reopened.world.settings.heightmapPath == expectedHeightmap)
+                  << " actors=" << reopened.world.actorCount() << "/" << expectedActors
+                  << " buildings=" << reopened.world.actorCountByType(world::ActorType::Building) << "/" << expectedBuildings
+                  << " trees=" << reopened.world.actorCountByType(world::ActorType::Tree) << "/" << expectedTrees
+                  << " splines=" << reopened.world.splineCount() << "/" << expectedSplines
+                  << " pcg=" << reopened.world.pcgGraphCount() << "/" << expectedPcg
+                  << " water=" << reopened.world.waterCount() << "/" << expectedWater
+                  << " masks=" << reopened.world.maskCount() << "/" << expectedMasks
+                  << std::endl;
+    }
+
+    // Validate restored world
+    auto errors = reopened.validate();
+    CHECK(errors.empty(), "Restored world should pass validation");
+
+    std::cout << "[houston] FULL WORKFLOW OK: terrain + "
+              << roadsAdded << " road splines + "
+              << expectedBuildings << " buildings + "
+              << expectedTrees << " trees + lake + lighting"
+              << " restored exactly (" << worldSize << " bytes world file)"
+              << std::endl;
 }
 
 int main(int argc, char* argv[]) {
