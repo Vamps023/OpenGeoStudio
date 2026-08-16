@@ -179,55 +179,67 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         }
 
         QByteArray data = reply->readAll();
-        const int res = m_store->exportSettings().heightmapResolution;
+        m_log.info("DEM download for tile", tile.id(), ":", data.size(), "bytes");
 
-        // Determine source name for auto-detection
-        QString sourceName;
-        auto demSrc = m_store->exportSettings().demSource;
-        if (demSrc == terrain::DemSource::AWS_Terrarium ||
-            demSrc == terrain::DemSource::Mapzen_Terrarium)
-            sourceName = "terrarium";
-        else if (demSrc == terrain::DemSource::Mapbox_TerrainRGB)
-            sourceName = "mapbox-terrain";
-        else
-            sourceName = "dem";
+        try {
+            const int res = m_store->exportSettings().heightmapResolution;
 
-        // Decode DEM data using DemDecoder (QGIS-style auto-detection)
-        terrain::DemTile demTile = terrain::DemDecoder::decodeAuto(data, sourceName);
+            // Determine source name for auto-detection
+            QString sourceName;
+            auto demSrc = m_store->exportSettings().demSource;
+            if (demSrc == terrain::DemSource::AWS_Terrarium ||
+                demSrc == terrain::DemSource::Mapzen_Terrarium)
+                sourceName = "terrarium";
+            else if (demSrc == terrain::DemSource::Mapbox_TerrainRGB)
+                sourceName = "mapbox-terrain";
+            else
+                sourceName = "dem";
 
-        if (!demTile.valid) {
-            // Decoding failed — report error with details, do NOT write fake data
-            QString dataType = "unknown";
-            if (data.size() >= 4) {
-                if (data[0] == 0x89 && data[1] == 'P') dataType = "PNG";
-                else if (data[0] == 'I' && data[1] == 'I') dataType = "TIFF (little-endian)";
-                else if (data[0] == 'M' && data[1] == 'M') dataType = "TIFF (big-endian)";
-                else if (data[0] == 'n') dataType = "AAIGrid (ASCII)";
-                else dataType = QString("unknown (first bytes: %1 %2)")
-                                    .arg(static_cast<int>(data[0]), 2, 16, QChar('0'))
-                                    .arg(static_cast<int>(data[1]), 2, 16, QChar('0'));
+            // Decode DEM data using DemDecoder (QGIS-style auto-detection)
+            terrain::DemTile demTile = terrain::DemDecoder::decodeAuto(data, sourceName);
+
+            if (!demTile.valid) {
+                // Decoding failed — report error with details, do NOT write fake data
+                QString dataType = "unknown";
+                if (data.size() >= 4) {
+                    if (data[0] == 0x89 && data[1] == 'P') dataType = "PNG";
+                    else if (data[0] == 'I' && data[1] == 'I') dataType = "TIFF (little-endian)";
+                    else if (data[0] == 'M' && data[1] == 'M') dataType = "TIFF (big-endian)";
+                    else if (data[0] == 'n') dataType = "AAIGrid (ASCII)";
+                    else dataType = QString("unknown (first bytes: %1 %2)")
+                                        .arg(static_cast<int>(data[0]), 2, 16, QChar('0'))
+                                        .arg(static_cast<int>(data[1]), 2, 16, QChar('0'));
+                }
+                emit finished(false, QString("Failed to decode DEM data for tile %1 — "
+                                  "received %2 bytes of type %3, source: %4")
+                                  .arg(tile.id()).arg(data.size()).arg(dataType).arg(sourceName));
+                return;
             }
-            emit finished(false, QString("Failed to decode DEM data for tile %1 — "
-                              "received %2 bytes of type %3, source: %4")
-                              .arg(tile.id()).arg(data.size()).arg(dataType).arg(sourceName));
-            return;
-        }
 
-        // Resample to target resolution (QGIS bilinear interpolation pattern)
-        if (demTile.width != res || demTile.height != res) {
-            demTile = terrain::DemDecoder::resample(demTile, res, res);
-        }
-        if (!writeDemOutput(demTile.elevations, res, res, tile, outputPath)) {
-            emit finished(false, QString("Failed to write DEM output for tile %1: %2")
-                              .arg(tile.id(), outputPath));
-            return;
-        }
+            // Resample to target resolution (QGIS bilinear interpolation pattern)
+            if (demTile.width != res || demTile.height != res) {
+                demTile = terrain::DemDecoder::resample(demTile, res, res);
+            }
+            if (!writeDemOutput(demTile.elevations, res, res, tile, outputPath)) {
+                emit finished(false, QString("Failed to write DEM output for tile %1: %2")
+                                  .arg(tile.id(), outputPath));
+                return;
+            }
 
-        m_tileDemData[tile.id()] = std::move(demTile.elevations);
-        m_demDownloaded = true;
-        if (m_imageryDownloaded) {
-            m_completedTiles++;
-            processNextTile();
+            m_tileDemData[tile.id()] = std::move(demTile.elevations);
+            m_demDownloaded = true;
+            if (m_imageryDownloaded) {
+                m_completedTiles++;
+                processNextTile();
+            }
+        } catch (const std::exception& e) {
+            m_log.error("DEM processing exception for tile", tile.id(), ":", e.what());
+            emit finished(false, QString("DEM processing crashed for tile %1: %2")
+                              .arg(tile.id()).arg(QString::fromUtf8(e.what())));
+        } catch (...) {
+            m_log.error("Unknown DEM processing exception for tile", tile.id());
+            emit finished(false, QString("DEM processing crashed for tile %1 (unknown exception)")
+                              .arg(tile.id()));
         }
     });
 }
@@ -387,34 +399,46 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
         }
 
         QByteArray data = reply->readAll();
-        QImage img;
-        if (!img.loadFromData(data)) {
-            emit finished(false, QString("Failed to decode imagery image for tile %1 — "
-                              "received %2 bytes, format not recognized")
-                              .arg(tile.id()).arg(data.size()));
-            return;
-        }
+        m_log.info("Imagery download for tile", tile.id(), ":", data.size(), "bytes");
 
-        // Scale to requested resolution
-        if (img.width() != m_store->exportSettings().albedoResolution ||
-            img.height() != m_store->exportSettings().albedoResolution) {
-            img = img.scaled(m_store->exportSettings().albedoResolution,
-                            m_store->exportSettings().albedoResolution,
-                            Qt::KeepAspectRatioByExpanding,
-                            Qt::SmoothTransformation);
-        }
-        // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
-        if (!writeImageryOutput(img, tile, outputPath)) {
-            emit finished(false, QString("Failed to write imagery output for tile %1: %2")
-                              .arg(tile.id(), outputPath));
-            return;
-        }
+        try {
+            QImage img;
+            if (!img.loadFromData(data)) {
+                emit finished(false, QString("Failed to decode imagery image for tile %1 — "
+                                  "received %2 bytes, format not recognized")
+                                  .arg(tile.id()).arg(data.size()));
+                return;
+            }
 
-        m_tileAlbedoData[tile.id()] = img;
-        m_imageryDownloaded = true;
-        if (m_demDownloaded) {
-            m_completedTiles++;
-            processNextTile();
+            // Scale to requested resolution
+            if (img.width() != m_store->exportSettings().albedoResolution ||
+                img.height() != m_store->exportSettings().albedoResolution) {
+                img = img.scaled(m_store->exportSettings().albedoResolution,
+                                m_store->exportSettings().albedoResolution,
+                                Qt::KeepAspectRatioByExpanding,
+                                Qt::SmoothTransformation);
+            }
+            // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
+            if (!writeImageryOutput(img, tile, outputPath)) {
+                emit finished(false, QString("Failed to write imagery output for tile %1: %2")
+                                  .arg(tile.id(), outputPath));
+                return;
+            }
+
+            m_tileAlbedoData[tile.id()] = img;
+            m_imageryDownloaded = true;
+            if (m_demDownloaded) {
+                m_completedTiles++;
+                processNextTile();
+            }
+        } catch (const std::exception& e) {
+            m_log.error("Imagery processing exception for tile", tile.id(), ":", e.what());
+            emit finished(false, QString("Imagery processing crashed for tile %1: %2")
+                              .arg(tile.id()).arg(QString::fromUtf8(e.what())));
+        } catch (...) {
+            m_log.error("Unknown imagery processing exception for tile", tile.id());
+            emit finished(false, QString("Imagery processing crashed for tile %1 (unknown exception)")
+                              .arg(tile.id()));
         }
     });
 }
