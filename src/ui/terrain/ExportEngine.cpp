@@ -517,7 +517,9 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
             double widthM = (tile.bounds.east - tile.bounds.west) * 111320.0 * std::cos(latMid * M_PI / 180.0);
             double heightM = (tile.bounds.north - tile.bounds.south) * 111320.0;
             double tileSizeM = std::max(widthM, heightM);
-            double resM = tileSizeM / settings.heightmapResolution;
+            // GPXZ limits output to < 2500 px, so cap the requested source size.
+            int srcPixels = std::min(settings.heightmapResolution, 2490);
+            double resM = tileSizeM / srcPixels;
             if (resM < 0.5) resM = 0.5;
             if (resM > 1000.0) resM = 1000.0;
             return QString("https://api.gpxz.io/v1/elevation/raster?"
