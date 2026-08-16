@@ -22,14 +22,14 @@
 #include <QString>
 #include <QStringList>
 #include <QRegularExpression>
-#include <QTemporaryFile>
-#include <QDir>
 #include <tiffio.h>
-#include "../../core/PathHelper.hpp"
 #include <vector>
 #include <cmath>
 #include <limits>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
 
 namespace terrain {
 
@@ -40,6 +40,53 @@ struct DemTile {
     float nodataValue = -9999.0f;
     bool valid = false;
 };
+
+// In-memory libtiff client for reading a GeoTIFF from a QByteArray.
+// This avoids writing a temp file to disk and the Unicode-path issues
+// that come with TIFFOpen on Windows.
+struct TiffMemoryClient {
+    const QByteArray* data = nullptr;
+    tmsize_t pos = 0;
+};
+
+static tmsize_t tiffMemRead(thandle_t handle, void* buf, tmsize_t size) {
+    TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
+    if (!c || !c->data) return 0;
+    tmsize_t remaining = c->data->size() - c->pos;
+    tmsize_t toRead = (size < remaining) ? size : remaining;
+    if (toRead > 0) {
+        std::memcpy(buf, c->data->constData() + c->pos, static_cast<size_t>(toRead));
+        c->pos += toRead;
+    }
+    return toRead;
+}
+
+static tmsize_t tiffMemWrite(thandle_t, void*, tmsize_t) { return 0; }
+
+static toff_t tiffMemSeek(thandle_t handle, toff_t off, int whence) {
+    TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
+    if (!c || !c->data) return 0;
+    tmsize_t size = c->data->size();
+    toff_t newPos = 0;
+    if (whence == SEEK_SET) newPos = off;
+    else if (whence == SEEK_CUR) newPos = c->pos + off;
+    else if (whence == SEEK_END) newPos = size + off;
+    if (newPos < 0) newPos = 0;
+    if (newPos > (toff_t)size) newPos = (toff_t)size;
+    c->pos = (tmsize_t)newPos;
+    return (toff_t)c->pos;
+}
+
+static int tiffMemClose(thandle_t handle) {
+    TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
+    if (c) delete c;
+    return 0;
+}
+
+static toff_t tiffMemSize(thandle_t handle) {
+    TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
+    return c && c->data ? (toff_t)c->data->size() : 0;
+}
 
 class DemDecoder {
 public:
@@ -214,32 +261,23 @@ public:
         TIFFSetWarningHandler(tiffSilentWarning);
         TIFFSetErrorHandler(tiffSilentError);
 
-        // Write to a temp file and use TIFFOpen for reading.
-        // We use a heap-allocated QTemporaryFile that stays alive until
-        // the TIFF is closed (via TiffGuard below).
-        QTemporaryFile* tempFileKeeper = new QTemporaryFile(
-            QDir::tempPath() + "/ogs_dem_XXXXXX.tif");
-        tempFileKeeper->setAutoRemove(true);
-        if (!tempFileKeeper->open()) {
-            delete tempFileKeeper;
-            return tile;
-        }
-        tempFileKeeper->write(data);
-        tempFileKeeper->close();
-
-        QString filePath = tempFileKeeper->fileName();
-        TIFF* tif = TIFFOpen(PathHelper::toTiffPath(filePath).toUtf8().constData(), "r");
+        // Open the TIFF from memory — no temp file, no Unicode-path issues.
+        TiffMemoryClient* client = new TiffMemoryClient{&data, 0};
+        TIFF* tif = TIFFClientOpen("memory", "r", client,
+                                   tiffMemRead, tiffMemWrite,
+                                   tiffMemSeek, tiffMemClose,
+                                   tiffMemSize, nullptr, nullptr);
         if (!tif) {
-            delete tempFileKeeper;
+            delete client;
             return tile;
         }
 
-        // Guard to ensure TIFFClose is called on all exit paths
+        // Guard to ensure TIFFClose is called on all exit paths.
+        // TIFFClose will invoke tiffMemClose, which deletes the client.
         struct TiffGuard {
             TIFF* tif;
-            QTemporaryFile* tempFile;
-            ~TiffGuard() { if (tif) TIFFClose(tif); if (tempFile) delete tempFile; }
-        } guard{tif, tempFileKeeper};
+            ~TiffGuard() { if (tif) TIFFClose(tif); }
+        } guard{tif};
 
         uint32_t width = 0, height = 0;
         if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width)) {
