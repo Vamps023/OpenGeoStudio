@@ -12,6 +12,7 @@
 
 #include "../../core/world/World.hpp"
 #include "../../core/world/UndoRedo.hpp"
+#include "../../core/world/WorldBuilder.hpp"
 
 // OGRE-Next forward declarations
 namespace Ogre {
@@ -124,6 +125,19 @@ public:
     bool screenToWorld(int screenX, int screenY, WorldPos& worldPos);
     QString pickActor(int screenX, int screenY);
 
+    // ─── World authoring (WorldBuilder-driven procedural generation) ───
+    // Generates actors into the world model and syncs them to rendering.
+    void generateBuildings(int count);
+    void generateVegetation(int count, float density = 0.01f);
+    void addLake(const QString& name, float x, float z,
+                 float sizeX, float sizeZ, float level);
+    void addSunLight(float yaw = 45.0f, float pitch = 60.0f, float intensity = 3.0f);
+    void addSkyLight(float intensity = 1.0f);
+    void buildRoadSpline(const QString& name,
+                         const QList<QPair<float, float>>& points,
+                         float width = 8.0f, int laneCount = 2);
+    world::WorldBuilder* worldBuilder() { return &m_builder; }
+
 signals:
     void actorSelected(const QString& id);
     void actorTransformed(const QString& id);
@@ -201,6 +215,10 @@ private:
     // World model (the single source of truth)
     world::World m_world;
     QUndoStack m_undoStack;
+
+    // WorldBuilder — high-level world authoring API
+    world::WorldBuilder m_builder;
+    void syncBuilderToWorld();
 
     // Transform gizmo
     TransformMode m_transformMode = TransformMode::None;

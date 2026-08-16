@@ -837,6 +837,95 @@ void OgreWidget::syncAllActors()
 }
 
 // ============================================================
+// World authoring — WorldBuilder-driven procedural generation
+// ============================================================
+
+// Copy the WorldBuilder's world into the render world and rebuild renderables.
+void OgreWidget::syncBuilderToWorld()
+{
+    m_world = m_builder.world;
+    syncAllActors();
+    emit worldChanged();
+    emit sceneChanged();
+}
+
+void OgreWidget::generateBuildings(int count)
+{
+    // Bind terrain height sampling so buildings sit on the ground
+    m_builder.sampleHeight = [this](float x, float z) {
+        return sampleTerrainHeight(x, z);
+    };
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    m_builder.generateBuildings(count);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Generated", count, "buildings");
+}
+
+void OgreWidget::generateVegetation(int count, float density)
+{
+    m_builder.sampleHeight = [this](float x, float z) {
+        return sampleTerrainHeight(x, z);
+    };
+    m_builder.sampleSlope = [this](float x, float z) {
+        Q_UNUSED(x); Q_UNUSED(z);
+        return 0.0f;
+    };
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    QString graphName = "Vegetation";
+    m_builder.createVegetationPCG(graphName, "", density, m_terrainSize);
+    m_builder.generateVegetation(graphName);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Generated vegetation, total actors:", m_world.actorCount());
+}
+
+void OgreWidget::addLake(const QString& name, float x, float z,
+                         float sizeX, float sizeZ, float level)
+{
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    m_builder.addLake(name, x, z, sizeX, sizeZ, level);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Added lake:", name);
+}
+
+void OgreWidget::addSunLight(float yaw, float pitch, float intensity)
+{
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    m_builder.addSunLight(yaw, pitch, intensity);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Added sun light");
+}
+
+void OgreWidget::addSkyLight(float intensity)
+{
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    m_builder.addSkyLight(intensity);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Added sky light");
+}
+
+void OgreWidget::buildRoadSpline(const QString& name,
+                                 const QList<QPair<float, float>>& points,
+                                 float width, int laneCount)
+{
+    if (m_builder.world.settings.name.isEmpty()) {
+        m_builder.createWorld("3D Studio World", m_terrainSize);
+    }
+    m_builder.createRoad(name, points, width, laneCount);
+    syncBuilderToWorld();
+    appLog().info("[OgreWidget] Built road spline:", name);
+}
+
+// ============================================================
 // Layer management
 // ============================================================
 
@@ -1320,6 +1409,9 @@ bool OgreWidget::loadWorld(const QString& path)
         return false;
     }
     m_world = loaded;
+    // Keep the WorldBuilder in sync so procedural generation
+    // continues on top of the loaded world
+    m_builder.world = m_world;
     syncAllActors();
     updateGizmo();
     emit worldChanged();

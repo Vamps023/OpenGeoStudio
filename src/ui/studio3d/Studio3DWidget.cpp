@@ -180,6 +180,46 @@ void Studio3DWidget::setupUI()
 
     sideLayout->addWidget(objGroup);
 
+    // ─── World Authoring (WorldBuilder procedural generation) ───
+    auto* worldGroup = new QGroupBox("World Authoring", sidePanel);
+    auto* worldLayout = new QVBoxLayout(worldGroup);
+
+    auto* worldHint = new QLabel("Procedural world generation (WorldBuilder):", worldGroup);
+    worldHint->setWordWrap(true);
+    worldHint->setStyleSheet("QLabel { color: #888; font-size: 10px; }");
+    worldLayout->addWidget(worldHint);
+
+    m_genBuildingsBtn = new QPushButton("Generate Buildings (100)", worldGroup);
+    m_genBuildingsBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    m_genBuildingsBtn->setToolTip("Generate 100 buildings at terrain height via WorldBuilder");
+    connect(m_genBuildingsBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateBuildings);
+    worldLayout->addWidget(m_genBuildingsBtn);
+
+    m_genVegetationBtn = new QPushButton("Generate Vegetation (PCG)", worldGroup);
+    m_genVegetationBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    m_genVegetationBtn->setToolTip("Run the PCG vegetation graph (scatter, height/slope filters)");
+    connect(m_genVegetationBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateVegetation);
+    worldLayout->addWidget(m_genVegetationBtn);
+
+    auto* worldBtnRow = new QHBoxLayout();
+    m_addLakeBtn = new QPushButton("Add Lake", worldGroup);
+    m_addLakeBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addLakeBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddLake);
+    worldBtnRow->addWidget(m_addLakeBtn);
+
+    m_addSunBtn = new QPushButton("Add Sun", worldGroup);
+    m_addSunBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addSunBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddSunLight);
+    worldBtnRow->addWidget(m_addSunBtn);
+
+    m_addSkyBtn = new QPushButton("Add Sky", worldGroup);
+    m_addSkyBtn->setStyleSheet("QPushButton { padding: 8px; }");
+    connect(m_addSkyBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddSkyLight);
+    worldBtnRow->addWidget(m_addSkyBtn);
+    worldLayout->addLayout(worldBtnRow);
+
+    sideLayout->addWidget(worldGroup);
+
     // ─── Scene ───
     auto* sceneGroup = new QGroupBox("Scene", sidePanel);
     auto* sceneLayout = new QVBoxLayout(sceneGroup);
@@ -433,6 +473,46 @@ void Studio3DWidget::onClearObjects()
     m_ogreWidget->clearActors();
     appendLog("All objects cleared.");
     m_statusLabel->setText("Objects cleared");
+}
+
+void Studio3DWidget::onGenerateBuildings()
+{
+    m_ogreWidget->generateBuildings(100);
+    appendLog("Generated 100 buildings via WorldBuilder.");
+    m_statusLabel->setText("Buildings generated");
+    m_outliner->refresh();
+}
+
+void Studio3DWidget::onGenerateVegetation()
+{
+    m_ogreWidget->generateVegetation(500, 0.01f);
+    appendLog("Generated vegetation via PCG (scatter + height/slope filters).");
+    m_statusLabel->setText("Vegetation generated");
+    m_outliner->refresh();
+}
+
+void Studio3DWidget::onAddLake()
+{
+    float terrainSize = m_ogreWidget->world()->settings.terrainSize;
+    if (terrainSize <= 0) terrainSize = 1000.0f;
+    m_ogreWidget->addLake("Lake", 0, 0, terrainSize * 0.3f, terrainSize * 0.3f, 5.0f);
+    appendLog("Added lake at world center.");
+    m_statusLabel->setText("Lake added");
+    m_outliner->refresh();
+}
+
+void Studio3DWidget::onAddSunLight()
+{
+    m_ogreWidget->addSunLight(45.0f, 60.0f, 3.0f);
+    appendLog("Added sun light (yaw=45, pitch=60, intensity=3).");
+    m_statusLabel->setText("Sun light added");
+}
+
+void Studio3DWidget::onAddSkyLight()
+{
+    m_ogreWidget->addSkyLight(1.0f);
+    appendLog("Added sky light.");
+    m_statusLabel->setText("Sky light added");
 }
 
 QString Studio3DWidget::sceneFilePath() const

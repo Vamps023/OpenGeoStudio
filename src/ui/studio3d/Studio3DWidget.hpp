@@ -52,6 +52,11 @@ private slots:
     void onAddTree();
     void onAddBox();
     void onClearObjects();
+    void onGenerateBuildings();
+    void onGenerateVegetation();
+    void onAddLake();
+    void onAddSunLight();
+    void onAddSkyLight();
     void onSaveScene();
     void onLoadScene();
     void onSaveWorld();
@@ -95,6 +100,11 @@ private:
     QPushButton* m_addTreeBtn = nullptr;
     QPushButton* m_addBoxBtn = nullptr;
     QPushButton* m_clearObjectsBtn = nullptr;
+    QPushButton* m_genBuildingsBtn = nullptr;
+    QPushButton* m_genVegetationBtn = nullptr;
+    QPushButton* m_addLakeBtn = nullptr;
+    QPushButton* m_addSunBtn = nullptr;
+    QPushButton* m_addSkyBtn = nullptr;
     QPushButton* m_saveSceneBtn = nullptr;
     QPushButton* m_loadSceneBtn = nullptr;
     QPushButton* m_saveWorldBtn = nullptr;
