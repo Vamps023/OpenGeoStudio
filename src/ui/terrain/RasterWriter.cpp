@@ -409,9 +409,9 @@ void RasterWriter::setGeoTags(void* tifPtr, int width, int height,
                      geoKeys.doubleParams.data());
     }
 
-    // GeoAsciiParams (tag 34737) — ASCII string
+    // GeoAsciiParams (tag 34737) — ASCII string with explicit byte count
     if (!geoKeys.asciiParams.empty()) {
-        TIFFSetField(tif, 34737, geoKeys.asciiParams.c_str());
+        TIFFSetField(tif, 34737, (uint32_t)geoKeys.asciiParams.size() + 1, geoKeys.asciiParams.c_str());
     }
 }
 
@@ -476,9 +476,9 @@ bool RasterWriter::writeGeoTiffBand(
     }
 
     // Nodata value (QGIS pattern: GDALSetRasterNoDataValue).
-    // TIFFTAG_GDAL_NODATA is an ASCII tag, so it must be a string.
+    // TIFFTAG_GDAL_NODATA is an ASCII tag; pass byte count explicitly
     std::string nodataString = std::to_string(nodataValue);
-    TIFFSetField(tif, TIFFTAG_GDAL_NODATA, nodataString.c_str());
+    TIFFSetField(tif, TIFFTAG_GDAL_NODATA, (uint32_t)nodataString.size() + 1, nodataString.c_str());
 
     // GeoTIFF tags
     GeoKeySet geoKeys = buildGeoKeys(extent.crsMode, extent.utmEpsg);
