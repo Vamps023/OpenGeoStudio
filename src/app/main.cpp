@@ -774,10 +774,9 @@ private slots:
             QLineEdit::Normal, "Untitled Project", &ok);
         if (!ok || name.isEmpty()) return;
 
-        // Auto-create in Documents/OpenGeoStudio/Projects/{name}
-        // No folder dialog ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fully automatic
-        const QString baseDir = QStandardPaths::writableLocation(
-            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
+        // Auto-create in C:/OpenGeoStudio/Projects/{name}
+        // Keep projects off OneDrive/Unicode paths for safety
+        const QString baseDir = "C:/OpenGeoStudio/Projects";
         QDir().mkpath(baseDir);
         const QString projectDir = baseDir + "/" + name;
 
@@ -801,10 +800,9 @@ private slots:
             QLineEdit::Normal, "Untitled " + templateId, &ok);
         if (!ok || name.isEmpty()) return;
 
-        // Auto-create in Documents/OpenGeoStudio/Projects/{name}
-        // No folder dialog ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fully automatic
-        const QString baseDir = QStandardPaths::writableLocation(
-            QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Projects";
+        // Auto-create in C:/OpenGeoStudio/Projects/{name}
+        // Keep projects off OneDrive/Unicode paths for safety
+        const QString baseDir = "C:/OpenGeoStudio/Projects";
         QDir().mkpath(baseDir);
         const QString projectDir = baseDir + "/" + name;
 

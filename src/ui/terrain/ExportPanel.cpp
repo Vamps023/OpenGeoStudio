@@ -510,8 +510,8 @@ void ExportPanel::onExportClicked() {
         dir = m_ctx->projects().current().basePath + "/Terrain";
         QDir().mkpath(dir);
     } else {
-        // No project open — fall back to Documents/OpenGeoStudio/Exports
-        dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/OpenGeoStudio/Exports";
+        // No project open — fall back to C:/OpenGeoStudio/Exports
+        dir = "C:/OpenGeoStudio/Exports";
         QDir().mkpath(dir);
     }
 
