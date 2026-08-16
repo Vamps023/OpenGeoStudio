@@ -1,7 +1,6 @@
 // RasterWriter — QGIS-inspired GeoTIFF/PNG raster writer implementation
 
 #include "RasterWriter.hpp"
-#include "../../core/PathHelper.hpp"
 
 #include <tiffio.h>
 #include <QFile>
@@ -43,6 +42,70 @@ static const TIFFFieldInfo kGeoTiffFieldInfo[] = {
 };
 
 static void tiffSilentWarning(const char*, const char*, va_list) {}
+
+// ============================================================
+// libtiff I/O callbacks that write through a Unicode-safe QFile
+// ============================================================
+// libtiff's TIFFOpen uses fopen() on Windows, which cannot handle Unicode.
+// Using TIFFClientOpen lets libtiff read/write through Qt's QFile directly.
+
+static tmsize_t tiffFileRead(thandle_t handle, void* buf, tmsize_t size) {
+    QFile* f = static_cast<QFile*>(handle);
+    if (!f || size <= 0) return 0;
+    return f->read(static_cast<char*>(buf), static_cast<qint64>(size));
+}
+
+static tmsize_t tiffFileWrite(thandle_t handle, void* buf, tmsize_t size) {
+    QFile* f = static_cast<QFile*>(handle);
+    if (!f || size <= 0) return 0;
+    return f->write(static_cast<const char*>(buf), static_cast<qint64>(size));
+}
+
+static toff_t tiffFileSeek(thandle_t handle, toff_t off, int whence) {
+    QFile* f = static_cast<QFile*>(handle);
+    if (!f) return 0;
+    qint64 pos = 0;
+    switch (whence) {
+    case SEEK_SET: pos = static_cast<qint64>(off); break;
+    case SEEK_CUR: pos = f->pos() + static_cast<qint64>(off); break;
+    case SEEK_END: pos = f->size() + static_cast<qint64>(off); break;
+    default: return (toff_t)f->pos();
+    }
+    if (pos < 0) pos = 0;
+    if (!f->seek(pos)) return 0;
+    return (toff_t)f->pos();
+}
+
+static toff_t tiffFileSize(thandle_t handle) {
+    QFile* f = static_cast<QFile*>(handle);
+    return f ? (toff_t)f->size() : 0;
+}
+
+static int tiffFileClose(thandle_t handle) {
+    QFile* f = static_cast<QFile*>(handle);
+    if (f) {
+        f->close();
+        delete f;
+    }
+    return 0;
+}
+
+static TIFF* openTiffForWrite(const QString& path) {
+    QFile* f = new QFile(path);
+    if (!f->open(QIODevice::ReadWrite | QIODevice::Truncate)) {
+        delete f;
+        return nullptr;
+    }
+    TIFF* tif = TIFFClientOpen("qtfile", "w", f,
+                               tiffFileRead, tiffFileWrite,
+                               tiffFileSeek, tiffFileClose,
+                               tiffFileSize, nullptr, nullptr);
+    if (!tif) {
+        f->close();
+        delete f;
+    }
+    return tif;
+}
 
 static void registerGeoTiffTags(TIFF* tif) {
     // Must be called for every TIFFOpen handle — tag registration is per-handle
@@ -364,7 +427,8 @@ bool RasterWriter::writeGeoTiffBand(
     double nodataValue,
     terrain::Compression compression)
 {
-    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
+    // Use TIFFClientOpen with a QFile so Unicode paths work on Windows
+    TIFF* tif = openTiffForWrite(path);
     if (!tif) return false;
 
     // Register GeoTIFF tags so TIFFSetField doesn't silently fail
@@ -512,7 +576,8 @@ bool RasterWriter::writeRgbGeoTiff(
     const terrain::RasterExtent& extent,
     terrain::Compression compression)
 {
-    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
+    // Use TIFFClientOpen with a QFile so Unicode paths work on Windows
+    TIFF* tif = openTiffForWrite(path);
     if (!tif) return false;
 
     // Register GeoTIFF tags so TIFFSetField doesn't silently fail
