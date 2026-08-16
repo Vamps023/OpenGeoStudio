@@ -172,14 +172,18 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            emit finished(false, QString("DEM download failed for tile %1: %2")
-                              .arg(tile.id()).arg(reply->errorString()));
+        QByteArray data = reply->readAll();
+        int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+        if (reply->error() != QNetworkReply::NoError || status < 200 || status >= 300) {
+            m_log.warn("DEM download for tile", tile.id(), "HTTP", status, "error", reply->errorString());
+            emit finished(false, QString("DEM download failed for tile %1 (HTTP %2): %3\n%4")
+                              .arg(tile.id()).arg(status).arg(reply->errorString())
+                              .arg(QString::fromUtf8(data)));
             return;
         }
 
-        QByteArray data = reply->readAll();
-        m_log.info("DEM download for tile", tile.id(), ":", data.size(), "bytes");
+        m_log.info("DEM download for tile", tile.id(), ":", data.size(), "bytes, HTTP", status);
 
         try {
             const int res = m_store->exportSettings().heightmapResolution;
@@ -392,14 +396,18 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
     QNetworkReply* reply = m_network->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            emit finished(false, QString("Imagery download failed for tile %1: %2")
-                              .arg(tile.id()).arg(reply->errorString()));
+        QByteArray data = reply->readAll();
+        int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+        if (reply->error() != QNetworkReply::NoError || status < 200 || status >= 300) {
+            m_log.warn("Imagery download for tile", tile.id(), "HTTP", status, "error", reply->errorString());
+            emit finished(false, QString("Imagery download failed for tile %1 (HTTP %2): %3\n%4")
+                              .arg(tile.id()).arg(status).arg(reply->errorString())
+                              .arg(QString::fromUtf8(data)));
             return;
         }
 
-        QByteArray data = reply->readAll();
-        m_log.info("Imagery download for tile", tile.id(), ":", data.size(), "bytes");
+        m_log.info("Imagery download for tile", tile.id(), ":", data.size(), "bytes, HTTP", status);
 
         try {
             QImage img;
@@ -501,16 +509,26 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     case terrain::DemSource::OpenTopo_USGS_3DEP: demType = "USGS10m"; break;
     case terrain::DemSource::GPXZ_LiDAR:
         if (settings.gpxzApiKey.isEmpty()) return {};
-        // API key is passed via x-api-key header (set in downloadDemForTile)
-        return QString("https://api.gpxz.io/v1/elevation/raster?"
-                       "bbox_left=%1&bbox_right=%2&bbox_bottom=%3&bbox_top=%4"
-                       "&height_px=%5&width_px=%6")
-            .arg(tile.bounds.west, 0, 'f', 6)
-            .arg(tile.bounds.east, 0, 'f', 6)
-            .arg(tile.bounds.south, 0, 'f', 6)
-            .arg(tile.bounds.north, 0, 'f', 6)
-            .arg(settings.heightmapResolution)
-            .arg(settings.heightmapResolution);
+        // API key is passed via x-api-key header (set in downloadDemForTile).
+        // GPXZ requires resolution_m between 0.5 and 1000 metres, so compute
+        // an approximate resolution from the tile dimensions and clamp it.
+        {
+            double latMid = (tile.bounds.north + tile.bounds.south) * 0.5;
+            double widthM = (tile.bounds.east - tile.bounds.west) * 111320.0 * std::cos(latMid * M_PI / 180.0);
+            double heightM = (tile.bounds.north - tile.bounds.south) * 111320.0;
+            double tileSizeM = std::max(widthM, heightM);
+            double resM = tileSizeM / settings.heightmapResolution;
+            if (resM < 0.5) resM = 0.5;
+            if (resM > 1000.0) resM = 1000.0;
+            return QString("https://api.gpxz.io/v1/elevation/raster?"
+                           "bbox_left=%1&bbox_right=%2&bbox_bottom=%3&bbox_top=%4"
+                           "&resolution_m=%5&projection=epsg:4326")
+                .arg(tile.bounds.west, 0, 'f', 6)
+                .arg(tile.bounds.east, 0, 'f', 6)
+                .arg(tile.bounds.south, 0, 'f', 6)
+                .arg(tile.bounds.north, 0, 'f', 6)
+                .arg(resM, 0, 'f', 6);
+        }
     case terrain::DemSource::GLAD_SRTM:
         return QString("https://glad.umd.edu/dataset/srtm-90m/%1/%2")
             .arg(tile.bounds.south, 0, 'f', 4).arg(tile.bounds.west, 0, 'f', 4);
