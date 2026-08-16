@@ -27,7 +27,6 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QDir>
-#include <QDebug>
 #include <QDialog>
 #include <QTimer>
 #include <QFormLayout>
@@ -44,6 +43,7 @@
 #include "core/ApplicationContext.hpp"
 #include "core/project/ProjectManager.hpp"
 #include "core/project/Project.hpp"
+#include "core/logger/Logger.hpp"
 #include "ui/terrain/TerrainTypes.hpp"
 #include "core/workspace/WorkspaceManager.hpp"
 
@@ -705,13 +705,13 @@ private slots:
                 QJsonObject roadState;
                 roadState["xodrFile"] = roadFile;
                 moduleState["road-studio"] = roadState;
-                qDebug() << "saveProjectState: road file saved:" << roadFile
-                         << "size:" << QFileInfo(roadFile).size();
+                appLog().info("saveProjectState: road file saved:", roadFile,
+                              "size:", QFileInfo(roadFile).size());
             } else {
-                qDebug() << "saveProjectState: WARNING ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â road file was NOT created:" << roadFile;
+                appLog().warn("saveProjectState: WARNING - road file was NOT created:", roadFile);
             }
         } else {
-            qDebug() << "saveProjectState: road studio widget not available";
+            appLog().warn("saveProjectState: road studio widget not available");
         }
 
         // Update the project's moduleState
@@ -986,8 +986,8 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    qDebug() << "OpenGeoStudio started - Road Engine v"
-             << QString::fromLatin1(road_engine::versionString());
+    appLog().info("OpenGeoStudio started - Road Engine v",
+                  QString::fromLatin1(road_engine::versionString()));
 
     return app.exec();
 }

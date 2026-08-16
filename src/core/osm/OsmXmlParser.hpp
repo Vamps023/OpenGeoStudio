@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // OsmXmlParser — Parse .osm (XML) files
@@ -31,7 +31,7 @@
 #include "OsmTypes.hpp"
 #include <QFile>
 #include <QXmlStreamReader>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <QString>
 #include <functional>
 
@@ -188,8 +188,7 @@ public:
             return false;
         }
 
-        qDebug() << "[OSM] Parsed:" << nodesParsed << "nodes,"
-                 << waysParsed << "ways," << relationsParsed << "relations";
+        appLog().info("[OSM] Parsed:", nodesParsed, "nodes,", waysParsed, "ways,", relationsParsed, "relations");
         return true;
     }
 };

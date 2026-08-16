@@ -1,4 +1,4 @@
-// ═══════════════════════════════════════════════════════════
+﻿// ═══════════════════════════════════════════════════════════
 // OpenGeoStudio — C++ Plugin API (Header Skeleton)
 // ═══════════════════════════════════════════════════════════
 //
@@ -27,7 +27,7 @@
 #include <QStandardPaths>
 #include <QVersionNumber>
 #include <QCoreApplication>
-#include <QDebug>
+#include "../core/logger/Logger.hpp"
 #include <memory>
 
 // ─── Forward declarations ────────────────────────────────────
@@ -279,7 +279,7 @@ public:
         // Read metadata without loading
         const QJsonObject metadata = loader.metaData();
         if (metadata.isEmpty()) {
-            qWarning() << "Plugin metadata is empty for" << libraryPath;
+            appLog().warn("Plugin metadata is empty for", libraryPath);
             return nullptr;
         }
 
@@ -290,9 +290,7 @@ public:
                 QVersionNumber::fromString(QCoreApplication::applicationVersion());
             const QVersionNumber required = QVersionNumber::fromString(minHostVersion);
             if (hostVersion < required) {
-                qWarning() << "Plugin" << libraryPath
-                           << "requires host version" << minHostVersion
-                           << "but host is" << hostVersion.toString();
+                appLog().warn("Plugin", libraryPath, "requires host version", minHostVersion, "but host is", hostVersion.toString());
                 return nullptr;
             }
         }
@@ -302,8 +300,7 @@ public:
         for (const QJsonValue& dep : deps) {
             const QString depId = dep.toString();
             if (!m_manager->pluginById(depId)) {
-                qWarning() << "Plugin" << libraryPath
-                           << "requires" << depId << "which is not loaded";
+                appLog().warn("Plugin", libraryPath, "requires", depId, "which is not loaded");
                 return nullptr;
             }
         }
@@ -311,15 +308,13 @@ public:
         // Load and instantiate
         QObject* instance = loader.instance();
         if (!instance) {
-            qWarning() << "Failed to load plugin" << libraryPath
-                       << ":" << loader.errorString();
+            appLog().warn("Failed to load plugin", libraryPath, ":", loader.errorString());
             return nullptr;
         }
 
         IPlugin* plugin = qobject_cast<IPlugin*>(instance);
         if (!plugin) {
-            qWarning() << "Plugin" << libraryPath
-                       << "does not implement IPlugin interface";
+            appLog().warn("Plugin", libraryPath, "does not implement IPlugin interface");
             delete instance;
             return nullptr;
         }
@@ -331,7 +326,7 @@ public:
         m_manager->registerPlugin(plugin);
         m_loaders.insert(plugin->id(), std::make_unique<QPluginLoader>(std::move(loader)));
 
-        qDebug() << "Plugin loaded:" << plugin->name() << "v" << plugin->version();
+        appLog().info("Plugin loaded:", plugin->name(), "v", plugin->version());
         return plugin;
     }
 

@@ -1,0 +1,10 @@
+Standardize centralized logging and error handling
+
+- Migrate all qDebug() calls in app/core/plugin/studio3d code to the
+  centralized Logger via appLog() (OSM pipeline, world model, main app,
+  MapViewportWidget, PluginApi, OgreWidget)
+- Migrate qWarning() calls to appLog().warn() for consistent severity
+- Add global appLog() accessor to Logger.hpp for header-only modules
+- Fix garbled encoding in main.cpp warning message
+- Document logging and error-handling conventions in AGENTS.md
+- Keep LaneMaker's spdlog untouched (embedded engine behavior preserved)

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // LaneGenerator — OSM lane tags → LaneSection model
@@ -27,7 +27,7 @@
 
 #include <QString>
 #include <QStringList>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 

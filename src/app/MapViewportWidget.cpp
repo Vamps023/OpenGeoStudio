@@ -1,9 +1,9 @@
-// MapViewportWidget - MapLibre Native Qt map widget implementation
+﻿// MapViewportWidget - MapLibre Native Qt map widget implementation
 
 #include "MapViewportWidget.hpp"
 
 #include <QVBoxLayout>
-#include <QDebug>
+#include "../core/logger/Logger.hpp"
 #include <QTimer>
 
 // Esri World Imagery raster style JSON (inline, no external style URL)
@@ -47,11 +47,11 @@ StyleHttpServer::StyleHttpServer(const QByteArray& styleJson, QObject* parent)
     : QObject(parent), m_styleJson(styleJson) {
     if (m_server.listen(QHostAddress::LocalHost)) {
         m_port = m_server.serverPort();
-        qDebug() << "[StyleHttpServer] Listening on port" << m_port;
+        appLog().info("[StyleHttpServer] Listening on port", m_port);
         connect(&m_server, &QTcpServer::newConnection,
                 this, &StyleHttpServer::onNewConnection);
     } else {
-        qWarning() << "[StyleHttpServer] Failed to listen:" << m_server.errorString();
+        appLog().warn("[StyleHttpServer] Failed to listen:", m_server.errorString());
     }
 }
 
@@ -109,7 +109,7 @@ void MapViewportWidget::setupMap() {
     m_styleServer = new StyleHttpServer(
         QByteArray(kEsriImageryStyle), this);
     const QString styleUrl = m_styleServer->styleUrl();
-    qDebug() << "[MapViewport] Style server URL:" << styleUrl;
+    appLog().info("[MapViewport] Style server URL:", styleUrl);
 
     // Configure MapLibre settings with Esri imagery style.
     // The reference Electron app centers on lat=18.52, lon=73.85 (Pune, India)
@@ -131,7 +131,7 @@ void MapViewportWidget::setupMap() {
     layout->setSpacing(0);
     layout->addWidget(m_mapWidget, 1);
 
-    qDebug() << "[MapViewport] MapWidget created with Esri style URL in Settings";
+    appLog().info("[MapViewport] MapWidget created with Esri style URL in Settings");
 
     // Connect to mapChanged after the map is created (lazily during initialize)
     QTimer::singleShot(100, this, [this]() {
@@ -185,13 +185,13 @@ void MapViewportWidget::fitBounds(double minLat, double minLon,
 void MapViewportWidget::onMapChanged(QMapLibre::Map::MapChange change) {
     switch (change) {
         case QMapLibre::Map::MapChangeDidFinishLoadingMap:
-            qDebug() << "[MapViewport] Map loaded successfully";
+            appLog().info("[MapViewport] Map loaded successfully");
             break;
         case QMapLibre::Map::MapChangeDidFailLoadingMap:
-            qWarning() << "[MapViewport] Map failed to load";
+            appLog().warn("[MapViewport] Map failed to load");
             break;
         case QMapLibre::Map::MapChangeDidFinishLoadingStyle:
-            qDebug() << "[MapViewport] Style loaded successfully";
+            appLog().info("[MapViewport] Style loaded successfully");
             break;
         case QMapLibre::Map::MapChangeRegionDidChange:
             emit mapMoved();

@@ -5,7 +5,16 @@
 // ============================================================
 //
 // Replaces the TypeScript Logger (core/logger/logger.ts).
-// Uses Qt'sQDebug for console output, with optional file transport.
+// Uses Qt's qDebug for console output, with optional file transport.
+//
+// This is the application's centralized logging facility. Prefer
+// Logger over raw qDebug() calls so all output shares a consistent
+// format (timestamp, level, scope) and a single configuration point
+// (file transport, level filtering).
+//
+// Usage:
+//   appLog().info("Project opened:", name);
+//   Logger scoped = appLog().child("osm");
 //
 
 #include <QDebug>
@@ -96,3 +105,12 @@ private:
 
 inline std::unique_ptr<QFile> Logger::s_fileTransport;
 inline std::unique_ptr<QTextStream> Logger::s_fileStream;
+
+// ─── Global accessor ───
+// Returns the application-wide default logger. Header-only modules
+// (OSM pipeline, world model, terrain) use this instead of qDebug()
+// so all output flows through the centralized logger.
+inline Logger& appLog() {
+    static Logger logger("app");
+    return logger;
+}

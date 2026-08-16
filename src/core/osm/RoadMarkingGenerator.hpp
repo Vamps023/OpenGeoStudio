@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RoadMarkingGenerator — Generate road markings from lane model
@@ -29,7 +29,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 
@@ -381,7 +381,7 @@ public:
             }
         }
 
-        qDebug() << "[RoadMarkingGenerator] Generated" << allMarkings.size() << "markings";
+        appLog().info("[RoadMarkingGenerator] Generated", allMarkings.size(), "markings");
         return allMarkings;
     }
 

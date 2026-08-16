@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RoadValidator — Validate the generated road network
@@ -16,7 +16,7 @@
 
 #include <QString>
 #include <QList>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 
@@ -99,8 +99,7 @@ public:
             else infos++;
         }
 
-        qDebug() << "[RoadValidator] Found" << issues.size() << "issues:"
-                 << errors << "errors," << warnings << "warnings," << infos << "info";
+        appLog().info("[RoadValidator] Found", issues.size(), "issues:", errors, "errors,", warnings, "warnings,", infos, "info");
 
         return issues;
     }

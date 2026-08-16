@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // OsmImportPipeline — Complete OSM → Road Studio pipeline
@@ -24,7 +24,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <functional>
 #include <memory>
 

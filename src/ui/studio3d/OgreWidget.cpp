@@ -1,4 +1,4 @@
-#include "OgreWidget.hpp"
+﻿#include "OgreWidget.hpp"
 
 #include "../../core/world/Spline.hpp"
 #include "../../core/world/PCGEngine.hpp"
@@ -7,7 +7,7 @@
 #include <QMouseEvent>
 #include <QTimer>
 #include <QDir>
-#include <QDebug>
+#include "../../core/logger/Logger.hpp"
 #include <QImage>
 #include <QFileInfo>
 #include <QDateTime>
@@ -153,7 +153,7 @@ void OgreWidget::initOgre()
         }
     }
     if (!m_root->getRenderSystem()) {
-        qWarning() << "No D3D11 render system found!";
+        appLog().warn("No D3D11 render system found!");
         return;
     }
 
@@ -167,21 +167,21 @@ void OgreWidget::initOgre()
     m_renderWindow = m_root->createRenderWindow("OgreWindow",
         width(), height(), false, &params);
     if (!m_renderWindow) {
-        qWarning() << "[OGRE] Failed to create render window!";
+        appLog().warn("[OGRE] Failed to create render window!");
         return;
     }
     logStep(QString("Render window created: %1x%2").arg(width()).arg(height()));
 
     m_sceneManager = m_root->createSceneManager(Ogre::ST_GENERIC, 2, "MainSM");
     if (!m_sceneManager) {
-        qWarning() << "[OGRE] Failed to create scene manager!";
+        appLog().warn("[OGRE] Failed to create scene manager!");
         return;
     }
-    qDebug() << "[OGRE] Scene manager created";
+    appLog().info("[OGRE] Scene manager created");
 
     m_camera = m_sceneManager->createCamera("MainCamera");
     if (!m_camera) {
-        qWarning() << "[OGRE] Failed to create camera!";
+        appLog().warn("[OGRE] Failed to create camera!");
         return;
     }
     m_camera->setNearClipDistance(0.5f);
@@ -189,11 +189,11 @@ void OgreWidget::initOgre()
     m_camera->setAutoAspectRatio(true);
     m_camera->setPosition(Ogre::Vector3(0, 300, 500));
     m_camera->lookAt(Ogre::Vector3(0, 0, 0));
-    qDebug() << "[OGRE] Camera created";
+    appLog().info("[OGRE] Camera created");
 
     Ogre::CompositorManager2* compositorManager = m_root->getCompositorManager2();
     if (!compositorManager) {
-        qWarning() << "[OGRE] No compositor manager!";
+        appLog().warn("[OGRE] No compositor manager!");
         return;
     }
     Ogre::ColourValue bgColor(0.2f, 0.4f, 0.6f, 1.0f);
@@ -203,7 +203,7 @@ void OgreWidget::initOgre()
     }
     compositorManager->addWorkspace(m_sceneManager,
         m_renderWindow->getTexture(), m_camera, "MainWorkspace", true);
-    qDebug() << "[OGRE] Compositor setup done";
+    appLog().info("[OGRE] Compositor setup done");
 
     {
         QString hlmsFolder = appDir + "/";
@@ -259,12 +259,12 @@ void OgreWidget::initOgre()
     showGrid(m_gridVisible);
     createGizmo();
 
-    qDebug() << "OGRE-Next initialized successfully";
+    appLog().info("OGRE-Next initialized successfully");
 }
 
 void OgreWidget::setupScene()
 {
-    qDebug() << "[OGRE] setupScene: ready";
+    appLog().info("[OGRE] setupScene: ready");
 }
 
 // ============================================================
@@ -280,12 +280,12 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     m_heightScale = heightScale;
 
     if (!m_initialized) {
-        qDebug() << "OGRE not initialized yet, terrain will load after init";
+        appLog().info("OGRE not initialized yet, terrain will load after init");
         return;
     }
 
     if (!QFile::exists(heightmapPath)) {
-        qWarning() << "Heightmap not found:" << heightmapPath;
+        appLog().warn("Heightmap not found:", heightmapPath);
         return;
     }
 
@@ -293,7 +293,7 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
 
     QImage heightImg(heightmapPath);
     if (heightImg.isNull()) {
-        qWarning() << "Failed to load heightmap image:" << heightmapPath;
+        appLog().warn("Failed to load heightmap image:", heightmapPath);
         return;
     }
     heightImg = heightImg.convertToFormat(QImage::Format_Grayscale8);
@@ -301,7 +301,7 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     int hmH = heightImg.height();
     m_heightmapImage = heightImg;
     m_hasHeightmap = true;
-    qDebug() << "Heightmap loaded:" << hmW << "x" << hmH;
+    appLog().info("Heightmap loaded:", hmW, "x", hmH);
 
     const int maxGridSize = 256;
     int gridW = std::min(hmW, maxGridSize);
@@ -344,7 +344,7 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
         datablock->setTexture(0, albedoTex);
-        qDebug() << "Albedo texture loaded:" << albedoPath;
+        appLog().info("Albedo texture loaded:", albedoPath);
     } else {
         datablock->setColour(Ogre::ColourValue(0.3f, 0.5f, 0.3f, 1.0f));
     }
@@ -407,8 +407,7 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
 
     m_sceneManager->destroyManualObject(manual);
 
-    qDebug() << "Terrain mesh created:" << gridW << "x" << gridH
-             << "verts, size:" << terrainSize << "m, heightScale:" << heightScale << "m";
+    appLog().info("Terrain mesh created:", gridW, "x", gridH, "verts, size:", terrainSize, "m, heightScale:", heightScale, "m");
 
     resetCamera();
 }
@@ -449,12 +448,12 @@ void OgreWidget::loadRoads(const QString& xodrPath)
     m_xodrPath = xodrPath;
 
     if (!m_initialized) {
-        qDebug() << "OGRE not initialized yet, roads will load after init";
+        appLog().info("OGRE not initialized yet, roads will load after init");
         return;
     }
 
     if (!QFile::exists(xodrPath)) {
-        qWarning() << "XODR file not found:" << xodrPath;
+        appLog().warn("XODR file not found:", xodrPath);
         return;
     }
 
@@ -464,11 +463,11 @@ void OgreWidget::loadRoads(const QString& xodrPath)
     auto roads = odrMap.get_roads();
 
     if (roads.empty()) {
-        qWarning() << "No roads found in XODR file:" << xodrPath;
+        appLog().warn("No roads found in XODR file:", xodrPath);
         return;
     }
 
-    qDebug() << "Loading" << roads.size() << "roads from" << xodrPath;
+    appLog().info("Loading", roads.size(), "roads from", xodrPath);
 
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
     manual->setName("RoadMesh");
@@ -591,7 +590,7 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     m_sceneManager->destroyManualObject(manual);
 
-    qDebug() << "Road mesh created with" << vertexOffset << "vertices";
+    appLog().info("Road mesh created with", vertexOffset, "vertices");
 }
 
 void OgreWidget::clearRoads()

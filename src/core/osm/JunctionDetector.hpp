@@ -25,7 +25,7 @@
 
 #include <QString>
 #include <QList>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -185,7 +185,7 @@ public:
             mergeNearbyJunctions(junctions, params.mergeTolerance);
         }
 
-        qDebug() << "[JunctionDetector] Detected" << junctions.size() << "junctions";
+        appLog().info("[JunctionDetector] Detected", junctions.size(), "junctions");
         return junctions;
     }
 

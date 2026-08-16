@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // WorldBuilder — High-level World authoring API
@@ -24,7 +24,7 @@
 #include <QString>
 #include <QDir>
 #include <QFileInfo>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <functional>
 
 namespace world {
@@ -45,7 +45,7 @@ public:
         world = World();  // Reset
         world.settings.name = name;
         world.settings.terrainSize = terrainSize;
-        qDebug() << "[WorldBuilder] Created world:" << name << "size:" << terrainSize;
+        appLog().info("[WorldBuilder] Created world:", name, "size:", terrainSize);
     }
 
     // ============================================================
@@ -75,7 +75,7 @@ public:
             world, 45.0f);
         world.masks.append(slopeMask);
 
-        qDebug() << "[WorldBuilder] Generated" << world.maskCount() << "masks";
+        appLog().info("[WorldBuilder] Generated", world.maskCount(), "masks");
     }
 
     // ============================================================
@@ -93,8 +93,7 @@ public:
         Actor roadActor = SplineEditor::splineToActor(world.splines.last());
         world.addActor(roadActor);
 
-        qDebug() << "[WorldBuilder] Created road:" << name
-                 << "with" << points.size() << "points";
+        appLog().info("[WorldBuilder] Created road:", name, "with", points.size(), "points");
         return &world.splines.last();
     }
 
@@ -112,8 +111,7 @@ public:
                 world.addActor(b);
         }
 
-        qDebug() << "[WorldBuilder] Generated buildings:"
-                 << world.actorCountByType(ActorType::Building);
+        appLog().info("[WorldBuilder] Generated buildings:", world.actorCountByType(ActorType::Building));
     }
 
     void generateBuildings(int count, float areaSize = 4000.0f, int seed = 42) {
@@ -143,7 +141,7 @@ public:
             world.addActor(b);
         }
 
-        qDebug() << "[WorldBuilder] Generated" << count << "buildings";
+        appLog().info("[WorldBuilder] Generated", count, "buildings");
     }
 
     // ============================================================
@@ -211,15 +209,14 @@ public:
         output.inputNodeIds.append(scale.id);
         graph->nodes.append(output);
 
-        qDebug() << "[WorldBuilder] Created PCG graph:" << name
-                 << "with" << graph->nodes.size() << "nodes";
+        appLog().info("[WorldBuilder] Created PCG graph:", name, "with", graph->nodes.size(), "nodes");
         return graph;
     }
 
     void generateVegetation(const QString& graphName, int seed = 42) {
         PCGGraph* graph = world.findPCGGraph(graphName);
         if (!graph) {
-            qDebug() << "[WorldBuilder] PCG graph not found:" << graphName;
+            appLog().info("[WorldBuilder] PCG graph not found:", graphName);
             return;
         }
 
@@ -250,7 +247,7 @@ public:
             world.addActor(tree);
         }
 
-        qDebug() << "[WorldBuilder] Generated" << points.size() << "vegetation actors";
+        appLog().info("[WorldBuilder] Generated", points.size(), "vegetation actors");
     }
 
     // ============================================================

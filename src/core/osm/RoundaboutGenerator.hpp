@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RoundaboutGenerator — Generate roundabout geometry from OSM
@@ -24,7 +24,7 @@
 #include "../../engine/road/road_v2.hpp"
 
 #include <QString>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -83,7 +83,7 @@ public:
         }
 
         if (roundaboutWayId == 0) {
-            qWarning() << "[RoundaboutGenerator] No roundabout way found for junction" << junction.id;
+            appLog().warn("[RoundaboutGenerator] No roundabout way found for junction", junction.id);
             return rb;
         }
 
@@ -91,7 +91,7 @@ public:
 
         const Way* way = osm.getWay(roundaboutWayId);
         if (!way || way->nodeRefs.size() < 4) {
-            qWarning() << "[RoundaboutGenerator] Roundabout way too short";
+            appLog().warn("[RoundaboutGenerator] Roundabout way too short");
             return rb;
         }
 
@@ -110,7 +110,7 @@ public:
         }
 
         if (ringPts.size() < 3) {
-            qWarning() << "[RoundaboutGenerator] Not enough ring points";
+            appLog().warn("[RoundaboutGenerator] Not enough ring points");
             return rb;
         }
 
@@ -194,11 +194,7 @@ public:
         rb.circulatoryLanes = osmLanes > 0 ? osmLanes : params.defaultCirculatoryLanes;
         rb.laneWidth = params.defaultLaneWidth;
 
-        qDebug() << "[RoundaboutGenerator] Generated roundabout" << rb.id
-                 << "radius:" << rb.radius << "m"
-                 << "entries:" << rb.entryPoints.size()
-                 << "exits:" << rb.exitPoints.size()
-                 << "clockwise:" << rb.isClockwise;
+        appLog().info("[RoundaboutGenerator] Generated roundabout", rb.id, "radius:", rb.radius, "m", "entries:", rb.entryPoints.size(), "exits:", rb.exitPoints.size(), "clockwise:", rb.isClockwise);
 
         return rb;
     }
@@ -217,7 +213,7 @@ public:
             roundabouts.push_back(generate(j, network, osm, params));
         }
 
-        qDebug() << "[RoundaboutGenerator] Generated" << roundabouts.size() << "roundabouts";
+        appLog().info("[RoundaboutGenerator] Generated", roundabouts.size(), "roundabouts");
         return roundabouts;
     }
 

@@ -86,3 +86,26 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
   placeholder `road_v2.hpp` used by `road_engine.hpp`
 - Q_OBJECT headers included from .cpp files need a corresponding .cpp entry
   in CMakeLists.txt for AUTOMOC to process them
+
+## Logging Conventions
+
+- Use the centralized `Logger` (via `appLog()` from `src/core/logger/Logger.hpp`)
+  for ALL application logging. Do NOT add new `qDebug()`/`qWarning()` calls.
+- `appLog().debug/info/warn/error(...)` — variadic, accepts QString, numbers,
+  and `const char*`.
+- `Logger::addFileTransport(path)` enables optional file output (append mode).
+- LaneMaker (`src/engine/lanemaker/`) uses its own spdlog — leave untouched to
+  preserve embedded engine behavior.
+- Test executables may use `qDebug()` directly for their own output.
+
+## Error Handling Conventions
+
+- Core pipelines return results with a `success` flag + `QString errorMessage`
+  (see `OsmImportPipeline::ImportResult`, `RailImportResult`).
+- UI reports failures via `QMessageBox::critical` on the import dialogs.
+- Terrain manager reports stage results via `StageStatus` + `addResult` and
+  emits `finished(bool success, const QString& message)`.
+- World model reports issues via `ValidationError` structs returned from
+  `validate()`.
+- Do not throw exceptions across module boundaries in the core pipelines;
+  return `success=false` + `errorMessage` instead.

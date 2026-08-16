@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // OsmExporter — Export road network to OpenDRIVE and GeoJSON
@@ -27,7 +27,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QString>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 #include <sstream>
@@ -355,8 +355,7 @@ public:
         stream << QString::fromStdString(xml.str());
         file.close();
 
-        qDebug() << "[OsmExporter] Exported OpenDRIVE to" << path
-                 << "—" << network.roads.size() << "roads";
+        appLog().info("[OsmExporter] Exported OpenDRIVE to", path, "—", network.roads.size(), "roads");
         return true;
     }
 
@@ -479,8 +478,7 @@ public:
         file.write(doc.toJson(QJsonDocument::Indented));
         file.close();
 
-        qDebug() << "[OsmExporter] Exported GeoJSON to" << path
-                 << "—" << features.size() << "features";
+        appLog().info("[OsmExporter] Exported GeoJSON to", path, "—", features.size(), "features");
         return true;
     }
 
@@ -503,8 +501,7 @@ public:
             if (root["type"].toString() == "FeatureCollection") {
                 int featureCount = root["features"].toArray().size();
                 if (featureCount > 0) {
-                    qDebug() << "[OsmExporter] Validation: GeoJSON OK,"
-                             << featureCount << "features";
+                    appLog().info("[OsmExporter] Validation: GeoJSON OK,", featureCount, "features");
                     return true;
                 }
             }
@@ -515,7 +512,7 @@ public:
         // Try as OpenDRIVE XML
         if (data.contains("<?xml") && data.contains("<OpenDRIVE>")) {
             if (data.contains("<road") && data.contains("</OpenDRIVE>")) {
-                qDebug() << "[OsmExporter] Validation: OpenDRIVE XML OK";
+                appLog().info("[OsmExporter] Validation: OpenDRIVE XML OK");
                 return true;
             }
         }

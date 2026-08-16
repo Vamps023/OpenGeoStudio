@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // OsmProjectSerializer — Save/reload OSM-derived road networks
@@ -35,7 +35,7 @@
 #include <QJsonDocument>
 #include <QFile>
 #include <QString>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 
 namespace osm {
@@ -281,9 +281,7 @@ struct OsmProjectData {
         file.write(doc.toJson(QJsonDocument::Indented));
         file.close();
 
-        qDebug() << "[OsmProjectSerializer] Saved project to" << path
-                 << "—" << data.roadCount << "roads,"
-                 << data.junctionCount << "junctions";
+        appLog().info("[OsmProjectSerializer] Saved project to", path, "—", data.roadCount, "roads,", data.junctionCount, "junctions");
         return true;
     }
 
@@ -311,9 +309,7 @@ struct OsmProjectData {
         if (ok) *ok = true;
         OsmProjectData data = fromJson(doc.object());
 
-        qDebug() << "[OsmProjectSerializer] Loaded project from" << path
-                 << "—" << data.roadCount << "roads,"
-                 << data.junctionCount << "junctions";
+        appLog().info("[OsmProjectSerializer] Loaded project from", path, "—", data.roadCount, "roads,", data.junctionCount, "junctions");
         return data;
     }
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RailImportPipeline — OSM → Train Studio pipeline
@@ -24,7 +24,7 @@
 
 #include <QString>
 #include <QJsonObject>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <functional>
 
 namespace osm {

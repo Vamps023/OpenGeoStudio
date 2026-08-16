@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // TrafficSignGenerator — Generate traffic signs from OSM data
@@ -28,7 +28,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
 
@@ -256,8 +256,7 @@ public:
             }
         }
 
-        qDebug() << "[TrafficSignGenerator] Generated" << signs.size()
-                 << "signs from OSM nodes";
+        appLog().info("[TrafficSignGenerator] Generated", signs.size(), "signs from OSM nodes");
         return signs;
     }
 
@@ -406,7 +405,7 @@ public:
         signs.insert(signs.end(), fromRoads.begin(), fromRoads.end());
         signs.insert(signs.end(), fromJunctions.begin(), fromJunctions.end());
 
-        qDebug() << "[TrafficSignGenerator] Total signs:" << signs.size();
+        appLog().info("[TrafficSignGenerator] Total signs:", signs.size());
         return signs;
     }
 

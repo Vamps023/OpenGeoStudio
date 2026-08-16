@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RoadNetworkBuilder — OSM ways → RoadV2 road network
@@ -27,7 +27,7 @@
 
 #include <QString>
 #include <QList>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -325,11 +325,7 @@ public:
         }
 
         const char* label = (params.mode == Mode::Railway) ? "RailNetworkBuilder" : "RoadNetworkBuilder";
-        qDebug() << "[" << label << "] Created" << result.roadsCreated << "tracks/roads,"
-                 << result.segmentsCreated << "segments,"
-                 << result.junctionsDetected << "junctions,"
-                 << result.endPointsDetected << "endpoints,"
-                 << result.waysSkipped << "ways skipped";
+        appLog().info("[", label, "] Created", result.roadsCreated, "tracks/roads,", result.segmentsCreated, "segments,", result.junctionsDetected, "junctions,", result.endPointsDetected, "endpoints,", result.waysSkipped, "ways skipped");
 
         return result;
     }

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // TerrainWorldBridge — Connects terrain pipeline to World model
@@ -16,7 +16,7 @@
 #include <QString>
 #include <QDir>
 #include <QFileInfo>
-#include <QDebug>
+#include "../logger/Logger.hpp"
 
 namespace world {
 
@@ -56,9 +56,7 @@ public:
         terrainActor->metadata["crs"] = crs;
         terrainActor->colorR = 0.4f; terrainActor->colorG = 0.5f; terrainActor->colorB = 0.3f;
 
-        qDebug() << "[TerrainWorldBridge] Imported terrain into World:"
-                 << "size=" << terrainSize << "heightScale=" << heightScale
-                 << "heightmap=" << heightmapPath;
+        appLog().info("[TerrainWorldBridge] Imported terrain into World:", "size=", terrainSize, "heightScale=", heightScale, "heightmap=", heightmapPath);
     }
 
     // Import terrain masks into the World
@@ -96,7 +94,7 @@ public:
             mask->height = 512;
         }
 
-        qDebug() << "[TerrainWorldBridge] Imported" << files.size() << "masks from" << masksDir;
+        appLog().info("[TerrainWorldBridge] Imported", files.size(), "masks from", masksDir);
     }
 
     // Create terrain tiles for large worlds
@@ -120,7 +118,7 @@ public:
             }
         }
 
-        qDebug() << "[TerrainWorldBridge] Created" << (rows * cols) << "terrain tiles";
+        appLog().info("[TerrainWorldBridge] Created", (rows * cols), "terrain tiles");
     }
 
     // Generate terrain material from masks
