@@ -89,7 +89,25 @@ void ExportEngine::processNextTile() {
         .arg(m_completedTiles + 1).arg(m_totalTiles).arg(m_currentTile.id()));
 
     // Download DEM (heightmap) or load from local file
-    QString demPath = m_exportDir + "/heightmaps/tile_" + m_currentTile.id() + ".png";
+    QString demExt;
+    switch (m_store->exportSettings().heightmapFormat) {
+    case terrain::HeightmapFormat::GeoTIFF_Float32:
+    case terrain::HeightmapFormat::GeoTIFF_Int16:
+    case terrain::HeightmapFormat::GeoTIFF_UInt16:
+        demExt = ".tif";
+        break;
+    case terrain::HeightmapFormat::PNG16:
+        demExt = ".png";
+        break;
+    case terrain::HeightmapFormat::R16:
+        demExt = ".r16";
+        break;
+    case terrain::HeightmapFormat::None:
+    default:
+        demExt = ".png";
+        break;
+    }
+    QString demPath = m_exportDir + "/heightmaps/tile_" + m_currentTile.id() + demExt;
     if (m_store->exportSettings().demSource == terrain::DemSource::Local_File) {
         loadLocalDemForTile(m_currentTile, demPath);
     } else {
@@ -97,7 +115,9 @@ void ExportEngine::processNextTile() {
     }
 
     // Download imagery (albedo) or load from local file
-    QString albedoPath = m_exportDir + "/albedo/tile_" + m_currentTile.id() + ".png";
+    QString albExt = (m_store->exportSettings().albedoFormat == terrain::AlbedoFormat::GeoTIFF_RGB)
+        ? ".tif" : ".png";
+    QString albedoPath = m_exportDir + "/albedo/tile_" + m_currentTile.id() + albExt;
     if (m_store->exportSettings().imagerySource == terrain::ImagerySource::Local_File) {
         loadLocalImageryForTile(m_currentTile, albedoPath);
     } else {

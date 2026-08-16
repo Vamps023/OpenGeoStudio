@@ -11,6 +11,7 @@
 //
 
 #include <QString>
+#include <QFile>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -25,6 +26,16 @@ namespace PathHelper {
 // can handle on Windows. On non-Windows platforms, returns UTF-8 as-is.
 inline QString toTiffPath(const QString& path) {
 #ifdef _WIN32
+    // libtiff uses fopen(), which cannot open Unicode paths on Windows.
+    // GetShortPathNameW needs the file to exist, so create an empty file
+    // first. TIFFOpen("w") will overwrite it afterwards.
+    if (!QFile::exists(path)) {
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly)) {
+            f.close();
+        }
+    }
+
     // Convert QString (UTF-16) to wchar_t*
     std::wstring wpath = path.toStdWString();
 
