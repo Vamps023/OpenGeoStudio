@@ -19,11 +19,22 @@ public:
     void SetMode(bool roadMode);
     bool IsRoadMode() const { return roadMode; }
 
+    // Rail mode — draws rails/tracks instead of road lanes
+    void SetRailMode(bool railMode);
+    bool IsRailMode() const { return railMode; }
+
+    // Rail profile settings
+    void SetRailProfile(int trackCount, double gauge, double trackSpacing);
+    int RailTrackCount() const { return railTrackCount; }
+    double RailGauge() const { return railGauge; }
+    double RailTrackSpacing() const { return railTrackSpacing; }
+
     LM::LanePlan activeLeftSetting;
     LM::LanePlan activeRightSetting;
 
 signals:
     void OptionChangedByUser(LM::LanePlan left, LM::LanePlan right);
+    void RailProfileChanged(int trackCount, double gauge, double trackSpacing);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -43,6 +54,9 @@ protected:
 
     virtual QSize sizeHint() const override;
 
+    void paintRoadSection(QPainter& painter, const QRect& rect);
+    void paintRailSection(QPainter& painter, const QRect& rect);
+
     float TickInterval;
     int XCenter, YCenter, XLeft, XRight;
 
@@ -55,7 +69,13 @@ protected:
     int dragLimit; // absolute value
 
     bool roadMode;
+    bool railMode = false;
     bool changedExternally = false;
+
+    // Rail profile parameters
+    int railTrackCount = 1;
+    double railGauge = 1.435;       // meters
+    double railTrackSpacing = 4.0;  // meters center-to-center
 
     const QImage rightLogo, leftLogo;
 };
@@ -74,10 +94,14 @@ public:
 
     void GotoRoadMode();
     void GotoLaneMode();
+    void GotoRailMode();
 
     LM::LanePlan LeftResult() const { return visual->activeLeftSetting; }
     LM::LanePlan RightResult() const { return visual->activeRightSetting; }
     bool RoadMode() const { return visual->IsRoadMode(); }
+    bool RailMode() const { return visual->IsRailMode(); }
+
+    void SetRailProfile(int trackCount, double gauge, double trackSpacing);
 
     virtual QSize sizeHint() const override;
 

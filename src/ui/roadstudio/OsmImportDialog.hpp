@@ -1,0 +1,418 @@
+#pragma once
+
+// ============================================================
+// OsmImportDialog — OSM import UI for Road Studio
+// ============================================================
+//
+// Provides a dialog for importing OSM data into Road Studio:
+//   - File selection (.osm, .osm.pbf)
+//   - Import settings (simplification, filters)
+//   - Progress display
+//   - Results summary
+//   - Validation report
+//
+
+#include "../../core/osm/OsmImportPipeline.hpp"
+#include "../../core/osm/RoundaboutGenerator.hpp"
+#include "../../core/osm/RoadMarkingGenerator.hpp"
+#include "../../core/osm/TrafficSignGenerator.hpp"
+#include "../../core/osm/OsmProjectSerializer.hpp"
+#include "../../core/osm/OsmExporter.hpp"
+
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QPushButton>
+#include <QLabel>
+#include <QProgressBar>
+#include <QLineEdit>
+#include <QDoubleSpinBox>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QTextEdit>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QApplication>
+
+namespace osm {
+
+class OsmImportDialog : public QDialog {
+    Q_OBJECT
+
+public:
+    explicit OsmImportDialog(QWidget* parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle("Import OSM Data");
+        setMinimumSize(600, 500);
+        setupUi();
+    }
+
+    // Get the import result after a successful import
+    const ImportResult& result() const { return m_result; }
+
+    // Get generated roundabouts
+    const std::vector<RoundaboutGeometry>& roundabouts() const { return m_roundabouts; }
+
+    // Get generated markings
+    const std::vector<RoadMarking>& markings() const { return m_markings; }
+
+    // Get generated signs
+    const std::vector<TrafficSign>& signs() const { return m_signs; }
+
+private slots:
+    void onSelectFile() {
+        QString path = QFileDialog::getOpenFileName(
+            this, "Select OSM File",
+            QString(),
+            "OSM Files (*.osm *.osm.pbf);;All Files (*.*)");
+        if (!path.isEmpty()) {
+            m_fileEdit->setText(path);
+        }
+    }
+
+    void onImport() {
+        QString path = m_fileEdit->text().trimmed();
+        if (path.isEmpty()) {
+            QMessageBox::warning(this, "No File", "Please select an OSM file first.");
+            return;
+        }
+
+        // Disable button during import
+        m_importButton->setEnabled(false);
+        m_progressBar->setVisible(true);
+        m_progressLabel->setVisible(true);
+        QApplication::processEvents();
+
+        // Build settings from UI
+        ImportSettings settings;
+        settings.autoDetectReference = m_autoRefCheck->isChecked();
+        settings.simplifyTolerance = m_simplifySpin->value();
+        settings.minSegmentLength = m_minSegSpin->value();
+        settings.runValidation = m_validateCheck->isChecked();
+        settings.autoRepair = m_repairCheck->isChecked();
+        settings.progressCallback = [this](double progress, const QString& msg) {
+            m_progressBar->setValue(int(progress * 100));
+            m_progressLabel->setText(msg);
+            QApplication::processEvents();
+        };
+
+        // Run import
+        m_result = OsmImportPipeline::importFromFile(path, settings);
+
+        m_progressBar->setVisible(false);
+        m_progressLabel->setVisible(false);
+        m_importButton->setEnabled(true);
+
+        if (!m_result.success) {
+            QMessageBox::critical(this, "Import Failed", m_result.errorMessage);
+            return;
+        }
+
+        // Generate roundabouts
+        m_roundabouts = RoundaboutGenerator::generateAll(
+            m_result.junctions, m_result.network, m_result.osmData);
+
+        // Generate markings
+        RoadMarkingGenerator::Params mkParams;
+        m_markings = RoadMarkingGenerator::generateAll(
+            m_result.network, m_result.junctions, mkParams);
+
+        // Generate signs
+        TrafficSignGenerator::Params signParams;
+        m_signs = TrafficSignGenerator::generateAll(
+            m_result.osmData, m_result.network, m_result.junctions, signParams);
+
+        // Display results
+        displayResults();
+    }
+
+    void onSaveProject() {
+        QString path = QFileDialog::getSaveFileName(
+            this, "Save OSM Project",
+            "osm_project.ogosm",
+            "OSM Project (*.ogosm);;All Files (*.*)");
+        if (path.isEmpty()) return;
+
+        auto projectData = OsmProjectData::fromImportResult(
+            m_result, m_roundabouts, m_markings, m_signs,
+            QFileInfo(m_fileEdit->text()).baseName());
+
+        QString error;
+        if (OsmProjectData::saveToFile(path, projectData, &error)) {
+            QMessageBox::information(this, "Saved",
+                QString("Project saved to %1").arg(path));
+        } else {
+            QMessageBox::critical(this, "Save Failed", error);
+        }
+    }
+
+    void onExportOpenDrive() {
+        QString path = QFileDialog::getSaveFileName(
+            this, "Export OpenDRIVE",
+            "export.xodr",
+            "OpenDRIVE (*.xodr);;All Files (*.*)");
+        if (path.isEmpty()) return;
+
+        OsmExporter::OpenDriveParams params;
+        QString error;
+        if (OsmExporter::exportToOpenDrive(path, m_result.network,
+                                            m_result.junctions,
+                                            m_result.converter, params, &error)) {
+            QMessageBox::information(this, "Exported",
+                QString("OpenDRIVE exported to %1").arg(path));
+        } else {
+            QMessageBox::critical(this, "Export Failed", error);
+        }
+    }
+
+    void onExportGeoJson() {
+        QString path = QFileDialog::getSaveFileName(
+            this, "Export GeoJSON",
+            "export.geojson",
+            "GeoJSON (*.geojson *.json);;All Files (*.*)");
+        if (path.isEmpty()) return;
+
+        OsmExporter::GeoJsonParams params;
+        QString error;
+        if (OsmExporter::exportToGeoJson(path, m_result.network,
+                                          m_result.junctions,
+                                          m_result.converter, params, &error)) {
+            QMessageBox::information(this, "Exported",
+                QString("GeoJSON exported to %1").arg(path));
+        } else {
+            QMessageBox::critical(this, "Export Failed", error);
+        }
+    }
+
+private:
+    void setupUi() {
+        auto* mainLayout = new QVBoxLayout(this);
+
+        // ─── File selection ───
+        auto* fileGroup = new QGroupBox("OSM File");
+        auto* fileLayout = new QHBoxLayout(fileGroup);
+        m_fileEdit = new QLineEdit();
+        m_fileEdit->setPlaceholderText("Select .osm or .osm.pbf file...");
+        auto* browseBtn = new QPushButton("Browse...");
+        connect(browseBtn, &QPushButton::clicked, this, &OsmImportDialog::onSelectFile);
+        fileLayout->addWidget(m_fileEdit);
+        fileLayout->addWidget(browseBtn);
+        mainLayout->addWidget(fileGroup);
+
+        // ─── Settings ───
+        auto* settingsGroup = new QGroupBox("Import Settings");
+        auto* formLayout = new QFormLayout(settingsGroup);
+
+        m_autoRefCheck = new QCheckBox("Auto-detect reference origin");
+        m_autoRefCheck->setChecked(true);
+        formLayout->addRow(m_autoRefCheck);
+
+        m_simplifySpin = new QDoubleSpinBox();
+        m_simplifySpin->setRange(0.0, 10.0);
+        m_simplifySpin->setValue(0.5);
+        m_simplifySpin->setSuffix(" m");
+        formLayout->addRow("Simplification tolerance:", m_simplifySpin);
+
+        m_minSegSpin = new QDoubleSpinBox();
+        m_minSegSpin->setRange(0.0, 10.0);
+        m_minSegSpin->setValue(0.5);
+        m_minSegSpin->setSuffix(" m");
+        formLayout->addRow("Minimum segment length:", m_minSegSpin);
+
+        m_validateCheck = new QCheckBox("Run validation");
+        m_validateCheck->setChecked(true);
+        formLayout->addRow(m_validateCheck);
+
+        m_repairCheck = new QCheckBox("Auto-repair issues");
+        m_repairCheck->setChecked(true);
+        formLayout->addRow(m_repairCheck);
+
+        mainLayout->addWidget(settingsGroup);
+
+        // ─── Import button ───
+        auto* btnLayout = new QHBoxLayout();
+        m_importButton = new QPushButton("Import");
+        m_importButton->setMinimumHeight(40);
+        connect(m_importButton, &QPushButton::clicked, this, &OsmImportDialog::onImport);
+        btnLayout->addWidget(m_importButton);
+        mainLayout->addLayout(btnLayout);
+
+        // ─── Progress ───
+        m_progressBar = new QProgressBar();
+        m_progressBar->setVisible(false);
+        mainLayout->addWidget(m_progressBar);
+
+        m_progressLabel = new QLabel();
+        m_progressLabel->setVisible(false);
+        mainLayout->addWidget(m_progressLabel);
+
+        // ─── Results tabs ───
+        m_tabs = new QTabWidget();
+        m_tabs->setVisible(false);
+        mainLayout->addWidget(m_tabs, 1);
+
+        // Summary tab
+        m_summaryText = new QTextEdit();
+        m_summaryText->setReadOnly(true);
+        m_tabs->addTab(m_summaryText, "Summary");
+
+        // Roads tab
+        m_roadsTable = new QTableWidget();
+        m_roadsTable->setColumnCount(5);
+        m_roadsTable->setHorizontalHeaderLabels({"ID", "Name", "Lanes", "Width", "Length"});
+        m_roadsTable->horizontalHeader()->setStretchLastSection(true);
+        m_tabs->addTab(m_roadsTable, "Roads");
+
+        // Junctions tab
+        m_junctionsTable = new QTableWidget();
+        m_junctionsTable->setColumnCount(4);
+        m_junctionsTable->setHorizontalHeaderLabels({"ID", "Type", "Roads", "OSM Node"});
+        m_junctionsTable->horizontalHeader()->setStretchLastSection(true);
+        m_tabs->addTab(m_junctionsTable, "Junctions");
+
+        // Validation tab
+        m_validationText = new QTextEdit();
+        m_validationText->setReadOnly(true);
+        m_tabs->addTab(m_validationText, "Validation");
+
+        // ─── Export buttons ───
+        auto* exportLayout = new QHBoxLayout();
+        m_saveButton = new QPushButton("Save Project...");
+        m_saveButton->setVisible(false);
+        connect(m_saveButton, &QPushButton::clicked, this, &OsmImportDialog::onSaveProject);
+        exportLayout->addWidget(m_saveButton);
+
+        m_exportOdrButton = new QPushButton("Export OpenDRIVE...");
+        m_exportOdrButton->setVisible(false);
+        connect(m_exportOdrButton, &QPushButton::clicked, this, &OsmImportDialog::onExportOpenDrive);
+        exportLayout->addWidget(m_exportOdrButton);
+
+        m_exportGeoButton = new QPushButton("Export GeoJSON...");
+        m_exportGeoButton->setVisible(false);
+        connect(m_exportGeoButton, &QPushButton::clicked, this, &OsmImportDialog::onExportGeoJson);
+        exportLayout->addWidget(m_exportGeoButton);
+
+        mainLayout->addLayout(exportLayout);
+
+        // Close button
+        auto* closeLayout = new QHBoxLayout();
+        closeLayout->addStretch();
+        auto* closeButton = new QPushButton("Close");
+        connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
+        closeLayout->addWidget(closeButton);
+        mainLayout->addLayout(closeLayout);
+    }
+
+    void displayResults() {
+        m_tabs->setVisible(true);
+        m_saveButton->setVisible(true);
+        m_exportOdrButton->setVisible(true);
+        m_exportGeoButton->setVisible(true);
+
+        // Summary
+        m_summaryText->setHtml(
+            QString("<h3>Import Successful</h3>"
+                    "<table cellpadding='4'>"
+                    "<tr><td>OSM Nodes:</td><td>%1</td></tr>"
+                    "<tr><td>OSM Ways:</td><td>%2</td></tr>"
+                    "<tr><td>Roads created:</td><td>%3</td></tr>"
+                    "<tr><td>Segments:</td><td>%4</td></tr>"
+                    "<tr><td>Junctions:</td><td>%5</td></tr>"
+                    "<tr><td>Roundabouts:</td><td>%6</td></tr>"
+                    "<tr><td>Road markings:</td><td>%7</td></tr>"
+                    "<tr><td>Traffic signs:</td><td>%8</td></tr>"
+                    "<tr><td>Total road length:</td><td>%9 m</td></tr>"
+                    "<tr><td>Validation errors:</td><td>%10</td></tr>"
+                    "<tr><td>Validation warnings:</td><td>%11</td></tr>"
+                    "<tr><td>Repairs applied:</td><td>%12</td></tr>"
+                    "</table>")
+            .arg(m_result.stats.osmNodes)
+            .arg(m_result.stats.osmWays)
+            .arg(m_result.stats.roadsCreated)
+            .arg(m_result.stats.segmentsCreated)
+            .arg(m_result.stats.junctionsDetected)
+            .arg(int(m_roundabouts.size()))
+            .arg(int(m_markings.size()))
+            .arg(int(m_signs.size()))
+            .arg(m_result.stats.totalRoadLength, 0, 'f', 1)
+            .arg(m_result.stats.validationErrors)
+            .arg(m_result.stats.validationWarnings)
+            .arg(m_result.stats.repairsApplied));
+
+        // Roads table
+        m_roadsTable->setRowCount(int(m_result.network.roads.size()));
+        for (int i = 0; i < int(m_result.network.roads.size()); i++) {
+            const auto& road = m_result.network.roads[i];
+            m_roadsTable->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(road.id)));
+            m_roadsTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(road.name)));
+            m_roadsTable->setItem(i, 2, new QTableWidgetItem(QString::number(road.laneCount)));
+            m_roadsTable->setItem(i, 3, new QTableWidgetItem(QString::number(road.width, 'f', 1)));
+            m_roadsTable->setItem(i, 4, new QTableWidgetItem(QString::number(road.totalLength(), 'f', 1)));
+        }
+        m_roadsTable->resizeColumnsToContents();
+
+        // Junctions table
+        m_junctionsTable->setRowCount(int(m_result.junctions.size()));
+        for (int i = 0; i < int(m_result.junctions.size()); i++) {
+            const auto& j = m_result.junctions[i];
+            m_junctionsTable->setItem(i, 0, new QTableWidgetItem(j.id));
+            m_junctionsTable->setItem(i, 1, new QTableWidgetItem(j.typeString()));
+            m_junctionsTable->setItem(i, 2, new QTableWidgetItem(QString::number(j.roadIds.size())));
+            m_junctionsTable->setItem(i, 3, new QTableWidgetItem(QString::number(j.osmNodeId)));
+        }
+        m_junctionsTable->resizeColumnsToContents();
+
+        // Validation
+        QString valText;
+        if (m_result.validationIssues.empty()) {
+            valText = "<i>No validation issues found.</i>";
+        } else {
+            valText = "<table cellpadding='4'><tr><th>Severity</th><th>Category</th><th>Road</th><th>Message</th></tr>";
+            for (const auto& issue : m_result.validationIssues) {
+                QString color = issue.severity == Severity::Error ? "red" :
+                               issue.severity == Severity::Warning ? "orange" : "gray";
+                valText += QString("<tr><td><font color='%1'>%2</font></td><td>%3</td><td>%4</td><td>%5</td></tr>")
+                    .arg(color)
+                    .arg(issue.severityString())
+                    .arg(issue.category)
+                    .arg(issue.roadId)
+                    .arg(issue.message);
+            }
+            valText += "</table>";
+        }
+        m_validationText->setHtml(valText);
+    }
+
+    // UI elements
+    QLineEdit* m_fileEdit = nullptr;
+    QCheckBox* m_autoRefCheck = nullptr;
+    QDoubleSpinBox* m_simplifySpin = nullptr;
+    QDoubleSpinBox* m_minSegSpin = nullptr;
+    QCheckBox* m_validateCheck = nullptr;
+    QCheckBox* m_repairCheck = nullptr;
+    QPushButton* m_importButton = nullptr;
+    QProgressBar* m_progressBar = nullptr;
+    QLabel* m_progressLabel = nullptr;
+    QTabWidget* m_tabs = nullptr;
+    QTextEdit* m_summaryText = nullptr;
+    QTableWidget* m_roadsTable = nullptr;
+    QTableWidget* m_junctionsTable = nullptr;
+    QTextEdit* m_validationText = nullptr;
+    QPushButton* m_saveButton = nullptr;
+    QPushButton* m_exportOdrButton = nullptr;
+    QPushButton* m_exportGeoButton = nullptr;
+
+    // Results
+    ImportResult m_result;
+    std::vector<RoundaboutGeometry> m_roundabouts;
+    std::vector<RoadMarking> m_markings;
+    std::vector<TrafficSign> m_signs;
+};
+
+} // namespace osm

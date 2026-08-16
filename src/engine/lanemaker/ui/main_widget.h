@@ -65,6 +65,11 @@ public:
 
     LM::EditMode GetEditMode() const;
 
+    // Rail mode — switches profile catalog to rail profiles and
+    // cross-section visual to draw rails instead of road lanes.
+    void SetRailMode(bool railMode);
+    bool IsRailMode() const;
+
     LM::MapViewGL* mapViewGL;
 
 signals:

@@ -1,11 +1,13 @@
 #include "Studio3DWidget.hpp"
 #include "OgreWidget.hpp"
+#include "EditorPanels.hpp"
 
 #include "core/ApplicationContext.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QSplitter>
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
@@ -52,6 +54,28 @@ void Studio3DWidget::setupUI()
 
     viewportGroup->setLayout(viewportLayout);
     mainLayout->addWidget(viewportGroup, 3);
+
+    // ─── Center-Right: Editor Panels (Outliner, Inspector, Layers) ───
+    auto* editorSplitter = new QSplitter(Qt::Vertical, this);
+    editorSplitter->setMaximumWidth(300);
+
+    m_outliner = new WorldOutliner(m_ogreWidget, this);
+    m_inspector = new Inspector(m_ogreWidget, this);
+    m_layerPanel = new LayerPanel(m_ogreWidget, this);
+
+    editorSplitter->addWidget(m_outliner);
+    editorSplitter->addWidget(m_inspector);
+    editorSplitter->addWidget(m_layerPanel);
+    editorSplitter->setSizes({200, 300, 150});
+
+    // Connect signals
+    connect(m_outliner, &WorldOutliner::actorSelected, this, &Studio3DWidget::onActorSelected);
+    connect(m_ogreWidget, &OgreWidget::actorSelected, this, &Studio3DWidget::onActorSelected);
+    connect(m_ogreWidget, &OgreWidget::actorAdded, [this](const QString&) { m_outliner->refresh(); });
+    connect(m_ogreWidget, &OgreWidget::actorRemoved, [this](const QString&) { m_outliner->refresh(); });
+    connect(m_ogreWidget, &OgreWidget::sceneChanged, [this]() { m_outliner->refresh(); m_layerPanel->refresh(); });
+
+    mainLayout->addWidget(editorSplitter, 1);
 
     // ─── Right: Controls Panel ───
     auto* sidePanel = new QWidget(this);
@@ -171,6 +195,18 @@ void Studio3DWidget::setupUI()
     m_loadSceneBtn->setToolTip("Load the saved 3D scene from the project");
     connect(m_loadSceneBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadScene);
     sceneLayout->addWidget(m_loadSceneBtn);
+
+    m_saveWorldBtn = new QPushButton("Save World", sceneGroup);
+    m_saveWorldBtn->setStyleSheet("QPushButton { background-color: #89b4fa; color: #1e1e2e; font-weight: bold; padding: 8px; }");
+    m_saveWorldBtn->setToolTip("Save the complete World (actors, layers, splines, PCG, terrain) to the project");
+    connect(m_saveWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onSaveWorld);
+    sceneLayout->addWidget(m_saveWorldBtn);
+
+    m_loadWorldBtn = new QPushButton("Load World", sceneGroup);
+    m_loadWorldBtn->setStyleSheet("QPushButton { background-color: #a6e3a1; color: #1e1e2e; font-weight: bold; padding: 8px; }");
+    m_loadWorldBtn->setToolTip("Load the complete World from the project");
+    connect(m_loadWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadWorld);
+    sceneLayout->addWidget(m_loadWorldBtn);
 
     sideLayout->addWidget(sceneGroup);
 
@@ -364,8 +400,8 @@ void Studio3DWidget::onAddBuilding()
     float x = (rand() % 200 - 100);
     float z = (rand() % 200 - 100);
     float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addObject("building", x, y, z, 0,
-                                          10.0f, 15.0f, 10.0f);
+    QString id = m_ogreWidget->addActor(world::ActorType::Building, x, y, z, 0,
+                                          10.0f, 15.0f, 10.0f, "buildings");
     appendLog("Added building: " + id);
     m_statusLabel->setText("Building added");
 }
@@ -375,8 +411,8 @@ void Studio3DWidget::onAddTree()
     float x = (rand() % 400 - 200);
     float z = (rand() % 400 - 200);
     float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addObject("tree", x, y, z, 0,
-                                          3.0f, 8.0f, 3.0f);
+    QString id = m_ogreWidget->addActor(world::ActorType::Tree, x, y, z, 0,
+                                          3.0f, 8.0f, 3.0f, "vegetation");
     appendLog("Added tree: " + id);
     m_statusLabel->setText("Tree added");
 }
@@ -386,7 +422,7 @@ void Studio3DWidget::onAddBox()
     float x = (rand() % 200 - 100);
     float z = (rand() % 200 - 100);
     float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addObject("box", x, y, z, 0,
+    QString id = m_ogreWidget->addActor(world::ActorType::Prop, x, y, z, 0,
                                           5.0f, 5.0f, 5.0f);
     appendLog("Added box: " + id);
     m_statusLabel->setText("Box added");
@@ -394,7 +430,7 @@ void Studio3DWidget::onAddBox()
 
 void Studio3DWidget::onClearObjects()
 {
-    m_ogreWidget->clearObjects();
+    m_ogreWidget->clearActors();
     appendLog("All objects cleared.");
     m_statusLabel->setText("Objects cleared");
 }
@@ -581,7 +617,7 @@ void Studio3DWidget::onProjectOpened()
 
 void Studio3DWidget::onProjectClosed()
 {
-    m_ogreWidget->clearObjects();
+    m_ogreWidget->clearActors();
     m_ogreWidget->clearRoads();
     m_ogreWidget->clearTerrain();
     m_sceneAutoLoaded = false;  // Reset for next project
@@ -680,4 +716,75 @@ void Studio3DWidget::onExportRoads()
         QMessageBox::warning(this, "Export Failed",
             "No road files found in Roads folder.");
     }
+}
+
+// ============================================================
+// World save/load
+// ============================================================
+
+QString Studio3DWidget::worldFilePath() const
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
+    return m_ctx->projects().current().basePath + "/World/world.json";
+}
+
+void Studio3DWidget::onSaveWorld()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString path = worldFilePath();
+    if (path.isEmpty()) return;
+
+    if (m_ogreWidget->saveWorld(path)) {
+        appendLog("World saved to: " + path);
+        m_statusLabel->setText("World saved");
+        QMessageBox::information(this, "World Saved",
+            QString("World saved to:\n%1\n\nActors: %2\nLayers: %3\nSplines: %4")
+                .arg(path)
+                .arg(m_ogreWidget->world()->actorCount())
+                .arg(m_ogreWidget->world()->layerCount())
+                .arg(m_ogreWidget->world()->splineCount()));
+    } else {
+        QMessageBox::warning(this, "Save Failed",
+            QString("Could not write to:\n%1").arg(path));
+    }
+}
+
+void Studio3DWidget::onLoadWorld()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) {
+        QMessageBox::warning(this, "No Project", "Open an OpenGeoStudio project first.");
+        return;
+    }
+
+    QString path = worldFilePath();
+    if (!QFile::exists(path)) {
+        QMessageBox::warning(this, "No World",
+            "No saved world found.\nSave the world first.");
+        return;
+    }
+
+    if (m_ogreWidget->loadWorld(path)) {
+        appendLog("World loaded from: " + path);
+        m_statusLabel->setText("World loaded");
+        if (m_outliner) m_outliner->refresh();
+        if (m_layerPanel) m_layerPanel->refresh();
+        QMessageBox::information(this, "World Loaded",
+            QString("World loaded from:\n%1\n\nActors: %2\nLayers: %3")
+                .arg(path)
+                .arg(m_ogreWidget->world()->actorCount())
+                .arg(m_ogreWidget->world()->layerCount()));
+    } else {
+        QMessageBox::warning(this, "Load Failed",
+            QString("Could not load world from:\n%1").arg(path));
+    }
+}
+
+void Studio3DWidget::onActorSelected(const QString& id)
+{
+    if (m_inspector)
+        m_inspector->setActor(id);
 }

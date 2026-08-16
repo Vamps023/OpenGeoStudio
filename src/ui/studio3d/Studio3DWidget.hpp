@@ -28,6 +28,10 @@
 
 class ApplicationContext;
 class OgreWidget;
+class WorldOutliner;
+class Inspector;
+class LayerPanel;
+class ContentBrowser;
 
 class Studio3DWidget : public QWidget {
     Q_OBJECT
@@ -50,6 +54,9 @@ private slots:
     void onClearObjects();
     void onSaveScene();
     void onLoadScene();
+    void onSaveWorld();
+    void onLoadWorld();
+    void onActorSelected(const QString& id);
 
 public:
     // Called by main window when project is opened/closed
@@ -63,12 +70,19 @@ private:
     QString findAlbedoInProject();
     QString findXodrInProject();
     QString sceneFilePath() const;
+    QString worldFilePath() const;
     QJsonObject resolveScenePaths(const QJsonObject& scene);
 
     ApplicationContext* m_ctx;
 
     // OGRE viewport
     OgreWidget* m_ogreWidget = nullptr;
+
+    // Editor panels
+    WorldOutliner* m_outliner = nullptr;
+    Inspector* m_inspector = nullptr;
+    LayerPanel* m_layerPanel = nullptr;
+    ContentBrowser* m_contentBrowser = nullptr;
 
     // Controls
     QPushButton* m_loadTerrainBtn = nullptr;
@@ -83,6 +97,8 @@ private:
     QPushButton* m_clearObjectsBtn = nullptr;
     QPushButton* m_saveSceneBtn = nullptr;
     QPushButton* m_loadSceneBtn = nullptr;
+    QPushButton* m_saveWorldBtn = nullptr;
+    QPushButton* m_loadWorldBtn = nullptr;
     QSlider* m_heightScaleSlider = nullptr;
     QLabel* m_heightScaleLabel = nullptr;
 

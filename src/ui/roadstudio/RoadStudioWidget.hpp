@@ -6,26 +6,26 @@
 
 #include <QWidget>
 #include <QVBoxLayout>
+#include <QToolBar>
+#include <QAction>
 
 // LaneMaker's MainWindow — contains the full road editor
 #include "main_window.h"
+
+// Forward declaration — full include is in the .cpp to avoid
+// pulling the full RoadV2 model into the main app's include chain
+namespace osm { class OsmImportDialog; }
 
 class RoadStudioWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit RoadStudioWidget(QWidget* parent = nullptr)
-        : QWidget(parent)
-    {
-        auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(0);
-
-        m_lmMainWindow = new MainWindow(this);
-        layout->addWidget(m_lmMainWindow);
-    }
+    explicit RoadStudioWidget(QWidget* parent = nullptr);
 
     MainWindow* laneMakerWindow() { return m_lmMainWindow; }
+
+private slots:
+    void onImportOsm();
 
 private:
     MainWindow* m_lmMainWindow = nullptr;

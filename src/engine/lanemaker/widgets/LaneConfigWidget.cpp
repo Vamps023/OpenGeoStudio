@@ -73,8 +73,20 @@ void CrossSectionVisual::paintEvent(QPaintEvent* evt)
     QWidget::paintEvent(evt);
 
     QRect rect = evt->rect();
-
     QPainter painter(this);
+
+    if (railMode)
+    {
+        paintRailSection(painter, rect);
+    }
+    else
+    {
+        paintRoadSection(painter, rect);
+    }
+}
+
+void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
+{
     const int RectGap = 2;
 
     YCenter = rect.y() + rect.height() / 2;
@@ -89,7 +101,7 @@ void CrossSectionVisual::paintEvent(QPaintEvent* evt)
     TickInterval = static_cast<float>(XRight - XLeft) / (2 * SingleSideLaneLimit);
     QPen colorPen;
     painter.setPen(colorPen);
-    painter.drawLine(XCenter - SingleSideLaneLimit * TickInterval, YCenter, 
+    painter.drawLine(XCenter - SingleSideLaneLimit * TickInterval, YCenter,
                      XCenter + SingleSideLaneLimit * TickInterval, YCenter);
     // Draw ticks
     const int TickHeight = rect.height() / 2;
@@ -130,7 +142,7 @@ void CrossSectionVisual::paintEvent(QPaintEvent* evt)
             painter.drawImage(rect, leftLogo);
         }
     }
-    
+
     if (activeRightSetting.laneCount != 0)
     {
         colorPen.setColor(Qt::green);
@@ -161,6 +173,115 @@ void CrossSectionVisual::paintEvent(QPaintEvent* evt)
         painter.setPen(colorPen);
         painter.drawLine(handle, YCenter - TickHeight / 2, handle, YCenter + TickHeight / 2);
     }
+}
+
+void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
+{
+    YCenter = rect.y() + rect.height() / 2;
+    XLeft = rect.x() + 20;
+    XRight = rect.x() + rect.width() - 20;
+    XCenter = rect.x() + rect.width() / 2;
+
+    // Scale: pixels per meter
+    // Show up to ~20m width
+    const double totalWidthM = 20.0;
+    const double ppm = static_cast<double>(XRight - XLeft) / totalWidthM;
+    TickInterval = static_cast<float>(ppm);
+
+    // Draw ballast background (brown/gravel)
+    double ballastWidthM = railTrackCount * railTrackSpacing + 1.0;
+    int ballastLeft = XCenter - static_cast<int>(ballastWidthM * ppm / 2);
+    int ballastRight = XCenter + static_cast<int>(ballastWidthM * ppm / 2);
+    int ballastHeight = rect.height() * 2 / 3;
+    painter.setBrush(QColor(120, 100, 80));  // brown ballast
+    painter.setPen(Qt::NoPen);
+    painter.drawRect(ballastLeft, YCenter - ballastHeight / 2,
+                     ballastRight - ballastLeft, ballastHeight);
+
+    // Draw ruler line
+    QPen colorPen;
+    painter.setPen(colorPen);
+    painter.drawLine(XLeft, YCenter + ballastHeight / 2 + 2,
+                     XRight, YCenter + ballastHeight / 2 + 2);
+
+    // Draw each track
+    const int railHeight = ballastHeight * 2 / 3;
+    const int gaugePx = static_cast<int>(railGauge * ppm);
+    const int spacingPx = static_cast<int>(railTrackSpacing * ppm);
+
+    // Center the track group
+    int firstTrackCenter;
+    if (railTrackCount == 1)
+        firstTrackCenter = XCenter;
+    else
+        firstTrackCenter = XCenter - ((railTrackCount - 1) * spacingPx) / 2;
+
+    for (int t = 0; t < railTrackCount; t++)
+    {
+        int trackCenter = firstTrackCenter + t * spacingPx;
+        int railLeft = trackCenter - gaugePx / 2;
+        int railRight = trackCenter + gaugePx / 2;
+
+        // Draw sleepers (ties) — short perpendicular lines
+        colorPen.setColor(QColor(80, 60, 40));
+        colorPen.setWidth(2);
+        painter.setPen(colorPen);
+        int sleeperLen = gaugePx + static_cast<int>(0.5 * ppm);  // gauge + 0.5m
+        int sleeperStart = railLeft - (sleeperLen - gaugePx) / 2;
+        int numSleepers = 12;
+        for (int s = 0; s < numSleepers; s++)
+        {
+            int sx = ballastLeft + 5 + s * (ballastRight - ballastLeft - 10) / (numSleepers - 1);
+            painter.drawLine(sx, YCenter - sleeperLen / 2,
+                            sx, YCenter + sleeperLen / 2);
+        }
+
+        // Draw rails (two steel-colored bars)
+        colorPen.setColor(QColor(180, 180, 190));  // steel gray
+        colorPen.setWidth(3);
+        painter.setPen(colorPen);
+        painter.drawLine(railLeft, YCenter - railHeight / 2,
+                        railLeft, YCenter + railHeight / 2);
+        painter.drawLine(railRight, YCenter - railHeight / 2,
+                        railRight, YCenter + railHeight / 2);
+
+        // Draw rail head (thicker top)
+        colorPen.setWidth(4);
+        colorPen.setColor(QColor(200, 200, 210));
+        painter.setPen(colorPen);
+        painter.drawLine(railLeft - 1, YCenter - railHeight / 2,
+                        railLeft + 1, YCenter - railHeight / 2);
+        painter.drawLine(railRight - 1, YCenter - railHeight / 2,
+                        railRight + 1, YCenter - railHeight / 2);
+    }
+
+    // Draw gauge label
+    colorPen.setColor(QColor(200, 200, 200));
+    colorPen.setWidth(1);
+    painter.setPen(colorPen);
+    QFont font = painter.font();
+    font.setPointSize(8);
+    painter.setFont(font);
+    QString gaugeLabel = QString("%1mm  %2T").arg(int(railGauge * 1000)).arg(railTrackCount);
+    painter.drawText(QPoint(XCenter - 40, YCenter + ballastHeight / 2 + 15), gaugeLabel);
+}
+
+void CrossSectionVisual::SetRailMode(bool rail)
+{
+    railMode = rail;
+    if (rail) roadMode = true;  // rail mode uses road mode's lane plan internally
+    changedExternally = true;
+    update();
+}
+
+void CrossSectionVisual::SetRailProfile(int trackCount, double gauge, double trackSpacing)
+{
+    railTrackCount = std::max(1, std::min(trackCount, 4));
+    railGauge = gauge;
+    railTrackSpacing = trackSpacing;
+    changedExternally = true;
+    update();
+    emit RailProfileChanged(railTrackCount, railGauge, railTrackSpacing);
 }
 
 void CrossSectionVisual::mousePressEvent(QMouseEvent* evt)
@@ -386,11 +507,25 @@ QSize LaneConfigWidget::sizeHint() const
 void LaneConfigWidget::GotoRoadMode()
 {
     show();
+    visual->SetRailMode(false);
     visual->SetMode(true);
 }
 
 void LaneConfigWidget::GotoLaneMode()
 {
     show();
+    visual->SetRailMode(false);
     visual->SetMode(false);
+}
+
+void LaneConfigWidget::GotoRailMode()
+{
+    show();
+    visual->SetRailMode(true);
+    visual->SetMode(true);
+}
+
+void LaneConfigWidget::SetRailProfile(int trackCount, double gauge, double trackSpacing)
+{
+    visual->SetRailProfile(trackCount, gauge, trackSpacing);
 }

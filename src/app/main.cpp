@@ -17,6 +17,7 @@
 #include <QStatusBar>
 #include <QToolBar>
 #include <QAction>
+#include <QActionGroup>
 #include <QLabel>
 #include <QDockWidget>
 #include <QMessageBox>
@@ -222,9 +223,7 @@ private:
 class AppMainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    void openProjectPath(const QString& path) { onOpenProjectPath(path); }
-    void activate3DStudio() { m_ctx->workspaces().activate("3d-studio"); }
-        explicit AppMainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
+    explicit AppMainWindow(ApplicationContext* ctx, QWidget* parent = nullptr)
         : QMainWindow(parent), m_ctx(ctx)
     {
         setWindowTitle(QStringLiteral("OpenGeoStudio"));
@@ -537,26 +536,9 @@ private:
         m_roadStudioWidget = new RoadStudioWidget();
         m_centerStack->addWidget(m_roadStudioWidget);
 
-        // Page 3: Train Studio (2D track editing)
-        m_trainStudioWidget = new TrainStudioWidget(m_ctx);
+        // Page 3: Train Studio (LaneMaker's MainWindow - full rail editor)
+        m_trainStudioWidget = new TrainStudioWidget();
         m_centerStack->addWidget(m_trainStudioWidget);
-#if defined(HAVE_MAPLIBRE)
-        if (m_trainStudioWidget->mapWidget()) {
-            connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::mapClicked,
-                    this, [this](double lat, double lon) {
-                        m_statusLabel->setText(
-                            QStringLiteral("Train Studio ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Clicked: %1, %2")
-                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6));
-                    });
-            connect(m_trainStudioWidget->mapWidget(), &MapViewportWidget::cursorMoved,
-                    this, [this](double lat, double lon, double zoom) {
-                        m_statusLabel->setText(
-                            QStringLiteral("Lat: %1  Lon: %2  Zoom: %3  |  Train Studio")
-                                .arg(lat, 0, 'f', 6).arg(lon, 0, 'f', 6).arg(zoom, 0, 'f', 1));
-                    });
-        }
-#endif
-
         // Page 4: 3D Studio (O3DE level design integration)
         m_studio3DWidget = new Studio3DWidget(m_ctx);
         m_centerStack->addWidget(m_studio3DWidget);
@@ -653,6 +635,8 @@ private slots:
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
             showRoadStudioMenus(false);
+            // Auto-load saved scene when entering 3D Studio
+            if (m_studio3DWidget) m_studio3DWidget->onProjectOpened();
         }
 
         // Reset inspector for non-road-studio workspaces
@@ -679,8 +663,6 @@ private slots:
         m_ctx->workspaces().activate("terrain");
         // Restore terrain and road state from the project file
         loadProjectState();
-        // Notify 3D Studio to auto-load saved scene
-        if (m_studio3DWidget) m_studio3DWidget->onProjectOpened();
         updateStatusBar();
     }
 
@@ -851,6 +833,15 @@ private slots:
     void onOpenProjectPath(const QString& path) {
         m_ctx->projects().open(path);
     }
+
+public:
+    void openProjectPath(const QString& path) {
+        m_ctx->projects().open(path);
+    }
+
+    void activate3DStudio() {
+        m_ctx->workspaces().activate("3d-studio");
+    }
 };
 
 // ÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚ÂÃƒÂ¢Ã¢â‚¬Â¢Ã‚Â
@@ -983,9 +974,19 @@ int main(int argc, char* argv[]) {
 
     AppMainWindow window(&ctx);
     window.show();
-    window.show();
 
-    qDebug() << "OpenGeoStudio started ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Road Engine v"
+    // Auto-open project from command line
+    if (argc > 1 && QString::fromLocal8Bit(argv[1]).endsWith(".ogproj")) {
+        QString projPath = QString::fromLocal8Bit(argv[1]);
+        QTimer::singleShot(500, &window, [&window, projPath]() {
+            window.openProjectPath(projPath);
+            QTimer::singleShot(1000, &window, [&window]() {
+                window.activate3DStudio();
+            });
+        });
+    }
+
+    qDebug() << "OpenGeoStudio started - Road Engine v"
              << QString::fromLatin1(road_engine::versionString());
 
     return app.exec();

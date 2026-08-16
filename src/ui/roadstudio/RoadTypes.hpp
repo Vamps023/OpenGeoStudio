@@ -455,4 +455,159 @@ struct Junction {
     double overlap = 0;
 };
 
+// ════════════════════════════════════════════════════════════
+// Rail Profiles — Train Studio cross-section definitions
+// ════════════════════════════════════════════════════════════
+
+// RailProfile — railway track cross-section profile
+struct RailProfile {
+    QString type = "single_standard";
+    double gauge = 1.435;          // rail gauge in meters (standard=1.435, narrow=1.067, broad=1.676)
+    int trackCount = 1;            // number of parallel tracks (1-4)
+    double trackSpacing = 4.0;     // center-to-center spacing between parallel tracks (m)
+    double ballastWidth = 3.0;     // ballast width per track (m)
+    double railHeight = 0.172;     // rail head height (m) — UIC60=0.172, BS80A=0.146
+    double sleeperLength = 2.6;    // sleeper/tie length (m)
+    double maxSpeed = 120;         // km/h
+    QString railType = "UIC60";    // rail profile type
+    QString sleeperType = "concrete";  // concrete, wood, steel
+    QString description;
+
+    QJsonObject toJson() const {
+        return {
+            {"type", type}, {"gauge", gauge}, {"trackCount", trackCount},
+            {"trackSpacing", trackSpacing}, {"ballastWidth", ballastWidth},
+            {"railHeight", railHeight}, {"sleeperLength", sleeperLength},
+            {"maxSpeed", maxSpeed}, {"railType", railType},
+            {"sleeperType", sleeperType}, {"description", description}
+        };
+    }
+
+    static RailProfile fromJson(const QJsonObject& j) {
+        RailProfile p;
+        p.type = j["type"].toString("single_standard");
+        p.gauge = j["gauge"].toDouble(1.435);
+        p.trackCount = j["trackCount"].toInt(1);
+        p.trackSpacing = j["trackSpacing"].toDouble(4.0);
+        p.ballastWidth = j["ballastWidth"].toDouble(3.0);
+        p.railHeight = j["railHeight"].toDouble(0.172);
+        p.sleeperLength = j["sleeperLength"].toDouble(2.6);
+        p.maxSpeed = j["maxSpeed"].toDouble(120);
+        p.railType = j["railType"].toString("UIC60");
+        p.sleeperType = j["sleeperType"].toString("concrete");
+        p.description = j["description"].toString();
+        return p;
+    }
+};
+
+// ─── Rail Profile Catalog ───────────────────────────────────
+struct RailProfileCatalog {
+    static QMap<QString, RailProfile> all() {
+        return {
+            // ─── Single Track ────────────────────────────
+            {"single_standard", {
+                "single_standard", 1.435, 1, 4.0, 3.0, 0.172, 2.6, 120,
+                "UIC60", "concrete",
+                "Single track — standard gauge 1435mm, UIC60 rail"
+            }},
+            {"single_narrow", {
+                "single_narrow", 1.067, 1, 3.5, 2.5, 0.140, 2.0, 80,
+                "BS80A", "wood",
+                "Single track — narrow gauge 1067mm, wood sleepers"
+            }},
+            {"single_broad", {
+                "single_broad", 1.676, 1, 4.5, 3.5, 0.180, 3.0, 100,
+                "UIC60", "concrete",
+                "Single track — broad gauge 1676mm (Indian Gauge)"
+            }},
+            {"single_light_rail", {
+                "single_light_rail", 1.435, 1, 3.5, 2.5, 0.140, 2.2, 60,
+                "BS80A", "concrete",
+                "Light rail / tram — standard gauge, low speed"
+            }},
+
+            // ─── Double Track ────────────────────────────
+            {"double_standard", {
+                "double_standard", 1.435, 2, 4.0, 6.0, 0.172, 2.6, 120,
+                "UIC60", "concrete",
+                "Double track — standard gauge, 4m spacing"
+            }},
+            {"double_high_speed", {
+                "double_high_speed", 1.435, 2, 5.0, 7.0, 0.172, 2.6, 300,
+                "UIC60", "concrete",
+                "Double track — high speed, 5m spacing, 300km/h"
+            }},
+            {"double_narrow", {
+                "double_narrow", 1.067, 2, 3.5, 5.0, 0.140, 2.0, 80,
+                "BS80A", "wood",
+                "Double track — narrow gauge 1067mm"
+            }},
+
+            // ─── Triple/Quadruple Track ──────────────────
+            {"triple_standard", {
+                "triple_standard", 1.435, 3, 4.0, 9.0, 0.172, 2.6, 120,
+                "UIC60", "concrete",
+                "Triple track — standard gauge, 3 parallel tracks"
+            }},
+            {"quadruple_standard", {
+                "quadruple_standard", 1.435, 4, 4.0, 12.0, 0.172, 2.6, 120,
+                "UIC60", "concrete",
+                "Quadruple track — 4 parallel tracks, mainline"
+            }},
+
+            // ─── Tram / Streetcar ────────────────────────
+            {"tram_embedded", {
+                "tram_embedded", 1.435, 1, 3.0, 2.5, 0.060, 1.8, 50,
+                "grooved", "embedded",
+                "Tram — embedded rail, grooved rail, street use"
+            }},
+            {"tram_double", {
+                "tram_double", 1.435, 2, 3.0, 5.0, 0.060, 1.8, 50,
+                "grooved", "embedded",
+                "Double tram — embedded rail, 2 tracks"
+            }},
+
+            // ─── Subway / Metro ──────────────────────────
+            {"subway_single", {
+                "subway_single", 1.435, 1, 3.5, 3.0, 0.140, 2.4, 80,
+                "BS80A", "concrete",
+                "Subway — single track tunnel"
+            }},
+            {"subway_double", {
+                "subway_double", 1.435, 2, 3.5, 6.0, 0.140, 2.4, 80,
+                "BS80A", "concrete",
+                "Subway — double track tunnel"
+            }},
+
+            // ─── Custom ──────────────────────────────────
+            {"custom_rail", {
+                "custom_rail", 1.435, 1, 4.0, 3.0, 0.172, 2.6, 120,
+                "UIC60", "concrete",
+                "Custom — user-defined rail configuration"
+            }},
+        };
+    }
+
+    static QStringList profileNames() {
+        QMap<QString, RailProfile> profiles = all();
+        QStringList names;
+        for (auto it = profiles.begin(); it != profiles.end(); ++it) {
+            names << it.key();
+        }
+        return names;
+    }
+
+    static RailProfile get(const QString& key) {
+        auto profiles = all();
+        if (profiles.contains(key)) return profiles[key];
+        return profiles["custom_rail"];
+    }
+
+    static QString label(const QString& key) {
+        auto profiles = all();
+        if (!profiles.contains(key)) return "Custom Rail";
+        return key + " — " + profiles[key].description;
+    }
+};
+
 } // namespace roads

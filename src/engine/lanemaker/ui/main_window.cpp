@@ -549,3 +549,19 @@ void MainWindow::openPreferences()
     if (preferenceWindow)
         preferenceWindow->open();
 }
+
+void MainWindow::setRailMode(bool railMode)
+{
+    if (railMode)
+        setWindowTitle(tr("Train Studio"));
+    else
+        setWindowTitle(tr("Road Studio"));
+
+    if (mainWidget)
+        mainWidget->SetRailMode(railMode);
+}
+
+bool MainWindow::isRailMode() const
+{
+    return mainWidget && mainWidget->IsRailMode();
+}

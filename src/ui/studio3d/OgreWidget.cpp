@@ -1,10 +1,16 @@
-﻿#include "OgreWidget.hpp"
+#include "OgreWidget.hpp"
+
+#include "../../core/world/Spline.hpp"
+#include "../../core/world/PCGEngine.hpp"
 
 #include <QApplication>
 #include <QMouseEvent>
 #include <QTimer>
 #include <QDir>
 #include <QDebug>
+#include <QImage>
+#include <QFileInfo>
+#include <QDateTime>
 
 // OGRE-Next headers
 #include "OgreRoot.h"
@@ -28,9 +34,8 @@
 #include "OgreManualObject2.h"
 #include "OgreTextureGpuManager.h"
 #include "OgreTextureGpu.h"
-#include "OgreStagingTexture.h"
-#include "OgreImage2.h"
 #include "OgreResourceGroupManager.h"
+#include "OgreStagingTexture.h"
 
 // Math
 #include "OgreVector3.h"
@@ -44,6 +49,10 @@
 #include "LaneSection.h"
 #include "Lane.h"
 #include "Math.hpp"
+
+// ============================================================
+// Construction / Destruction
+// ============================================================
 
 OgreWidget::OgreWidget(QWidget* parent)
     : QWindow(parent ? parent->windowHandle() : nullptr)
@@ -64,6 +73,10 @@ QWidget* OgreWidget::containerWidget()
     return m_container;
 }
 
+// ============================================================
+// Qt event handling
+// ============================================================
+
 void OgreWidget::exposeEvent(QExposeEvent* event)
 {
     Q_UNUSED(event);
@@ -72,14 +85,9 @@ void OgreWidget::exposeEvent(QExposeEvent* event)
         setupScene();
         m_timerId = startTimer(16);
         m_initialized = true;
-
-        // Load pending scene if one was stored before OGRE init
         if (m_hasPendingScene) {
-            qDebug() << "OGRE initialized, loading pending scene...";
-            QJsonObject pending = m_pendingScene;
+            loadScene(m_pendingScene);
             m_hasPendingScene = false;
-            m_pendingScene = QJsonObject();
-            loadScene(pending);
         }
     }
 }
@@ -99,13 +107,15 @@ void OgreWidget::timerEvent(QTimerEvent* event)
     render();
 }
 
+// ============================================================
+// OGRE initialization
+// ============================================================
+
 void OgreWidget::initOgre()
 {
-    // OGRE DLLs and plugins are deployed alongside the exe
     QString appDir = QCoreApplication::applicationDirPath();
     QString pluginsCfg = appDir + "/plugins.cfg";
 
-    // Debug log file â€” write directly to file so we can see where it crashes
     QString debugLogPath = appDir + "/ogre_debug.log";
     QFile debugLog(debugLogPath);
     debugLog.open(QIODevice::WriteOnly | QIODevice::Append);
@@ -113,7 +123,8 @@ void OgreWidget::initOgre()
         debugLog.write((QDateTime::currentDateTime().toString("hh:mm:ss.zzz ") + msg + "\n").toUtf8());
         debugLog.flush();
     };
-    // Create plugins.cfg pointing to the app directory
+    logStep("=== initOgre started ===");
+
     if (!QFile::exists(pluginsCfg)) {
         QString cfg = QString(
             "PluginFolder=%1\n"
@@ -127,7 +138,6 @@ void OgreWidget::initOgre()
         f.close();
     }
 
-    // Create Root with AbiCookie (required by OGRE-Next 4.0)
     Ogre::AbiCookie abiCookie = Ogre::generateAbiCookie();
     m_root = OGRE_NEW Ogre::Root(&abiCookie,
                                  pluginsCfg.toStdString(),
@@ -135,7 +145,6 @@ void OgreWidget::initOgre()
                                  appDir.toStdString() + "/ogre.log",
                                  "OpenGeoStudio");
 
-    // Use D3D11 on Windows
     Ogre::RenderSystemList rsList = m_root->getAvailableRenderers();
     for (auto* rs : rsList) {
         if (rs->getName().find("Direct3D11") != std::string::npos) {
@@ -149,7 +158,8 @@ void OgreWidget::initOgre()
     }
 
     m_root->initialise(false);
-    // Create render window using Qt's window handle
+    logStep("Root initialised");
+
     Ogre::NameValuePairList params;
     params["externalWindowHandle"] = Ogre::StringConverter::toString(
         (size_t)winId());
@@ -162,13 +172,13 @@ void OgreWidget::initOgre()
     }
     logStep(QString("Render window created: %1x%2").arg(width()).arg(height()));
 
-    // Create scene manager â€” use instance name like the samples
     m_sceneManager = m_root->createSceneManager(Ogre::ST_GENERIC, 2, "MainSM");
     if (!m_sceneManager) {
         qWarning() << "[OGRE] Failed to create scene manager!";
         return;
     }
-    // Create camera (OGRE-Next 4.0: cameras are NOT attached to SceneNodes)
+    qDebug() << "[OGRE] Scene manager created";
+
     m_camera = m_sceneManager->createCamera("MainCamera");
     if (!m_camera) {
         qWarning() << "[OGRE] Failed to create camera!";
@@ -179,7 +189,8 @@ void OgreWidget::initOgre()
     m_camera->setAutoAspectRatio(true);
     m_camera->setPosition(Ogre::Vector3(0, 300, 500));
     m_camera->lookAt(Ogre::Vector3(0, 0, 0));
-    // Setup compositor (replaces Viewport in OGRE-Next)
+    qDebug() << "[OGRE] Camera created";
+
     Ogre::CompositorManager2* compositorManager = m_root->getCompositorManager2();
     if (!compositorManager) {
         qWarning() << "[OGRE] No compositor manager!";
@@ -192,7 +203,8 @@ void OgreWidget::initOgre()
     }
     compositorManager->addWorkspace(m_sceneManager,
         m_renderWindow->getTexture(), m_camera, "MainWorkspace", true);
-    // Setup Hlms (shader system) â€” use getDefaultPaths like the OGRE samples
+    qDebug() << "[OGRE] Compositor setup done";
+
     {
         QString hlmsFolder = appDir + "/";
         Ogre::String rootHlmsFolder = hlmsFolder.toStdString();
@@ -200,19 +212,16 @@ void OgreWidget::initOgre()
         Ogre::ArchiveManager& archMgr = Ogre::ArchiveManager::getSingleton();
         Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
 
-        // PBS
         {
             Ogre::String mainFolderPath;
             Ogre::StringVector libraryFoldersPaths;
             Ogre::HlmsPbs::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
-            logStep("PBS main folder: " + QString::fromStdString(mainFolderPath));
 
             Ogre::Archive* archivePbs = archMgr.load(
                 rootHlmsFolder + mainFolderPath, "FileSystem", true);
 
             Ogre::ArchiveVec archivePbsLibraryFolders;
             for (const auto& libPath : libraryFoldersPaths) {
-                logStep("PBS lib folder: " + QString::fromStdString(libPath));
                 Ogre::Archive* archiveLibrary = archMgr.load(
                     rootHlmsFolder + libPath, "FileSystem", true);
                 archivePbsLibraryFolders.push_back(archiveLibrary);
@@ -223,19 +232,16 @@ void OgreWidget::initOgre()
             hlmsManager->registerHlms(hlmsPbs);
         }
 
-        // Unlit
         {
             Ogre::String mainFolderPath;
             Ogre::StringVector libraryFoldersPaths;
             Ogre::HlmsUnlit::getDefaultPaths(mainFolderPath, libraryFoldersPaths);
-            logStep("Unlit main folder: " + QString::fromStdString(mainFolderPath));
 
             Ogre::Archive* archiveUnlit = archMgr.load(
                 rootHlmsFolder + mainFolderPath, "FileSystem", true);
 
             Ogre::ArchiveVec archiveUnlitLibraryFolders;
             for (const auto& libPath : libraryFoldersPaths) {
-                logStep("Unlit lib folder: " + QString::fromStdString(libPath));
                 Ogre::Archive* archiveLibrary = archMgr.load(
                     rootHlmsFolder + libPath, "FileSystem", true);
                 archiveUnlitLibraryFolders.push_back(archiveLibrary);
@@ -246,31 +252,24 @@ void OgreWidget::initOgre()
             hlmsManager->registerHlms(hlmsUnlit);
         }
     }
-    // Lighting - OGRE-Next 4.0: lights MUST be attached to a SceneNode
-    // BEFORE calling setDirection() (it redirects to the node)
-    m_sceneManager->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f),
-                                    Ogre::ColourValue(0.1f, 0.1f, 0.1f),
-                                    Ogre::Vector3(0, 1, 0));
-    Ogre::Light* dirLight = m_sceneManager->createLight();
-    dirLight->setType(Ogre::Light::LT_DIRECTIONAL);
-    dirLight->setDiffuseColour(Ogre::ColourValue(1.0f, 1.0f, 0.95f));
-    Ogre::SceneNode* lightNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
-    lightNode->attachObject(dirLight);
-    lightNode->setDirection(Ogre::Vector3(-0.5f, -1.0f, -0.3f).normalisedCopy());
+    logStep("Hlms setup complete");
+
+    // Create grid and gizmo
+    createGrid();
+    showGrid(m_gridVisible);
+    createGizmo();
 
     qDebug() << "OGRE-Next initialized successfully";
 }
 
 void OgreWidget::setupScene()
 {
-    // No mesh files deployed - terrain loaded separately via loadTerrain()
+    qDebug() << "[OGRE] setupScene: ready";
 }
 
-void OgreWidget::setupTerra()
-{
-    // TODO: Implement Terra terrain loading
-    // Terra requires CompositorManager2 which needs more setup
-}
+// ============================================================
+// Terrain loading
+// ============================================================
 
 void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedoPath,
                               float terrainSize, float heightScale)
@@ -292,177 +291,125 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
 
     clearTerrain();
 
-    // Load heightmap image
-    QImage heightmap(heightmapPath);
-    if (heightmap.isNull()) {
+    QImage heightImg(heightmapPath);
+    if (heightImg.isNull()) {
         qWarning() << "Failed to load heightmap image:" << heightmapPath;
         return;
     }
-    heightmap = heightmap.convertToFormat(QImage::Format_Grayscale8);
-    m_heightmapImage = heightmap;
+    heightImg = heightImg.convertToFormat(QImage::Format_Grayscale8);
+    int hmW = heightImg.width();
+    int hmH = heightImg.height();
+    m_heightmapImage = heightImg;
     m_hasHeightmap = true;
+    qDebug() << "Heightmap loaded:" << hmW << "x" << hmH;
 
-    int imgW = heightmap.width();
-    int imgH = heightmap.height();
-    qDebug() << "Terrain load:" << heightmapPath << "  " << imgW << "x" << imgH
-             << "  size=" << terrainSize << "m  hScale=" << heightScale;
+    const int maxGridSize = 256;
+    int gridW = std::min(hmW, maxGridSize);
+    int gridH = std::min(hmH, maxGridSize);
 
-    // Cap grid resolution to avoid excessive vertex counts
-    const int maxGridDim = 200;
-    int gridW = imgW;
-    int gridH = imgH;
-    while (gridW > maxGridDim || gridH > maxGridDim) {
-        gridW /= 2;
-        gridH /= 2;
-    }
-    if (gridW < 2) gridW = 2;
-    if (gridH < 2) gridH = 2;
-
-    qDebug() << "  Grid resolution:" << gridW << "x" << gridH;
-
-    // Create manual object for terrain mesh
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
     manual->setName("TerrainMesh");
 
-    // Create datablock — use Unlit so we can apply albedo texture
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
     Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
-    Ogre::String dblockName = "TerrainDatablock";
-    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+
+    Ogre::String datablockName = "TerrainDatablock";
+    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(datablockName));
     if (!dbBase) {
         dbBase = hlmsUnlit->createDatablock(
-            Ogre::IdString(dblockName), dblockName,
+            Ogre::IdString(datablockName), datablockName,
             Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
     }
     Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
 
-    // Load albedo texture if available
     if (!albedoPath.isEmpty() && QFile::exists(albedoPath)) {
-        qDebug() << "  Loading albedo:" << albedoPath;
-        QImage albImg(albedoPath);
-        if (!albImg.isNull()) {
-            albImg = albImg.convertToFormat(QImage::Format_RGBA8888);
-            int texW = albImg.width();
-            int texH = albImg.height();
-            qDebug() << "  Albedo image:" << texW << "x" << texH;
+        QString albDir = QFileInfo(albedoPath).absolutePath();
+        QString albName = QFileInfo(albedoPath).fileName();
+        Ogre::String ogreAlbDir = albDir.toStdString();
+        Ogre::String ogreAlbName = albName.toStdString();
 
-            // Create a manual OGRE texture and upload the image data
-            Ogre::TextureGpuManager* texMgr = m_root->getRenderSystem()->getTextureGpuManager();
-            Ogre::String texName = "TerrainAlbedo_" + Ogre::StringConverter::toString((size_t)this);
-            Ogre::TextureGpu* tex = texMgr->createOrRetrieveTexture(
-                texName, texName, Ogre::GpuPageOutStrategy::Discard,
-                Ogre::TextureFlags::AutomaticBatching | Ogre::TextureFlags::ManualTexture,
-                Ogre::TextureTypes::Type2D);
-            tex->setResolution(texW, texH);
-            tex->setNumMipmaps(1);
-            tex->setPixelFormat(Ogre::PFG_RGBA8_UNORM_SRGB);
-            tex->scheduleTransitionTo(Ogre::GpuResidency::Resident);
-
-            // Upload pixel data via Ogre::Image2
-            Ogre::Image2 ogreImage;
-            const uint8_t* pixelData = albImg.constBits();
-            ogreImage.loadDynamicImage(
-                const_cast<uint8_t*>(pixelData), texW, texH, 1u,
-                Ogre::TextureTypes::Type2D, Ogre::PFG_RGBA8_UNORM_SRGB, false);
-            ogreImage.uploadTo(tex, 0, 0);
-
-            datablock->setTexture(0, tex);
-            qDebug() << "  Albedo texture uploaded to GPU";
-        } else {
-            qWarning() << "  Failed to load albedo image, using fallback color";
-            datablock->setColour(Ogre::ColourValue(0.3f, 0.4f, 0.25f, 1.0f));
+        Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+        if (!rgm.resourceGroupExists("TerrainTextures")) {
+            rgm.createResourceGroup("TerrainTextures");
+            rgm.addResourceLocation(ogreAlbDir, "FileSystem", "TerrainTextures");
+            rgm.initialiseResourceGroup("TerrainTextures", false);
         }
+
+        Ogre::TextureGpuManager* texMgr = m_root->getRenderSystem()->getTextureGpuManager();
+        Ogre::TextureGpu* albedoTex = texMgr->createOrRetrieveTexture(
+            ogreAlbName,
+            Ogre::GpuPageOutStrategy::Discard,
+            Ogre::TextureFlags::PrefersLoadingFromFileAsSRGB,
+            Ogre::TextureTypes::Type2D,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+        datablock->setTexture(0, albedoTex);
+        qDebug() << "Albedo texture loaded:" << albedoPath;
     } else {
-        datablock->setColour(Ogre::ColourValue(0.3f, 0.4f, 0.25f, 1.0f));
+        datablock->setColour(Ogre::ColourValue(0.3f, 0.5f, 0.3f, 1.0f));
     }
 
-    manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+    manual->begin(datablockName, Ogre::OT_TRIANGLE_LIST);
 
-    // Generate vertices — sample heightmap at grid resolution
     float halfSize = terrainSize * 0.5f;
-    float stepX = terrainSize / (gridW - 1);
-    float stepZ = terrainSize / (gridH - 1);
+    float xStep = terrainSize / (gridW - 1);
+    float zStep = terrainSize / (gridH - 1);
 
     for (int gz = 0; gz < gridH; gz++) {
         for (int gx = 0; gx < gridW; gx++) {
-            int px = (gx * (imgW - 1)) / (gridW - 1);
-            int py = (gz * (imgH - 1)) / (gridH - 1);
-            
-            QRgb pixel = heightmap.pixel(px, py);
-            int gray = qGray(pixel);
-            float elevation = (gray / 255.0f) * heightScale;
+            int hx = (gx * (hmW - 1)) / (gridW - 1);
+            int hy = (gz * (hmH - 1)) / (gridH - 1);
+            uchar* pixel = heightImg.scanLine(hy);
+            float h = pixel[hx] / 255.0f;
+            float y = h * heightScale;
 
-            float worldX = -halfSize + gx * stepX;
-            float worldZ = -halfSize + gz * stepZ;
-
-            manual->position(worldX, elevation, worldZ);
-            
-            // Compute normal from neighboring pixels
-            int pxL = (px > 0) ? px - 1 : 0;
-            int pxR = (px < imgW - 1) ? px + 1 : imgW - 1;
-            int pyU = (py > 0) ? py - 1 : 0;
-            int pyD = (py < imgH - 1) ? py + 1 : imgH - 1;
-            float hL = (qGray(heightmap.pixel(pxL, py)) / 255.0f) * heightScale;
-            float hR = (qGray(heightmap.pixel(pxR, py)) / 255.0f) * heightScale;
-            float hU = (qGray(heightmap.pixel(px, pyU)) / 255.0f) * heightScale;
-            float hD = (qGray(heightmap.pixel(px, pyD)) / 255.0f) * heightScale;
-            float nx = (hL - hR);
-            float ny = 2.0f * (stepX / terrainSize) * heightScale;
-            float nz = (hU - hD);
-            float nLen = sqrt(nx * nx + ny * ny + nz * nz);
-            if (nLen > 0.0001f) {
-                manual->normal(nx / nLen, ny / nLen, nz / nLen);
-            } else {
-                manual->normal(0.0f, 1.0f, 0.0f);
-            }
+            float x = -halfSize + gx * xStep;
+            float z = -halfSize + gz * zStep;
 
             float u = (float)gx / (gridW - 1);
             float v = (float)gz / (gridH - 1);
+
+            manual->position(x, y, z);
             manual->textureCoord(u, v);
+            manual->normal(0.0f, 1.0f, 0.0f);
         }
     }
 
-    // Generate indices — two triangles per grid cell
     for (int gz = 0; gz < gridH - 1; gz++) {
         for (int gx = 0; gx < gridW - 1; gx++) {
-            uint32_t v00 = gz * gridW + gx;
-            uint32_t v10 = gz * gridW + (gx + 1);
-            uint32_t v01 = (gz + 1) * gridW + gx;
-            uint32_t v11 = (gz + 1) * gridW + (gx + 1);
+            uint32_t v0 = gz * gridW + gx;
+            uint32_t v1 = gz * gridW + gx + 1;
+            uint32_t v2 = (gz + 1) * gridW + gx;
+            uint32_t v3 = (gz + 1) * gridW + gx + 1;
 
-            manual->index(v00);
-            manual->index(v01);
-            manual->index(v10);
-            manual->index(v10);
-            manual->index(v01);
-            manual->index(v11);
+            manual->index(v0);
+            manual->index(v2);
+            manual->index(v1);
+            manual->index(v1);
+            manual->index(v2);
+            manual->index(v3);
         }
     }
 
     manual->end();
 
-    // Convert to mesh and create scene item
-    Ogre::String meshName = "TerrainMesh_" + Ogre::StringConverter::toString((size_t)this);
+    Ogre::String meshName = "TerrainMesh_" + Ogre::StringConverter::toString(
+        (size_t)this);
     Ogre::MeshPtr mesh = manual->convertToMesh(
-        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        meshName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-    m_terrainItem = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
+    m_terrainItem = m_sceneManager->createItem(
+        mesh,
+        Ogre::SCENE_DYNAMIC);
     m_terrainNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     m_terrainNode->attachObject(m_terrainItem);
 
     m_sceneManager->destroyManualObject(manual);
 
     qDebug() << "Terrain mesh created:" << gridW << "x" << gridH
-             << "=" << (gridW * gridH) << "vertices,"
-             << ((gridW - 1) * (gridH - 1) * 2) << "triangles";
+             << "verts, size:" << terrainSize << "m, heightScale:" << heightScale << "m";
 
-    // Frame camera on terrain
-    m_camTargetX = 0;
-    m_camTargetY = heightScale * 0.3f;
-    m_camTargetZ = 0;
-    m_camDist = terrainSize * 0.8f;
-    m_camYaw = 0;
-    m_camPitch = -30.0f;
     resetCamera();
 }
 
@@ -478,34 +425,25 @@ void OgreWidget::clearTerrain()
         m_terrainItem = nullptr;
     }
     m_hasHeightmap = false;
-    m_heightmapImage = QImage();
 }
 
 float OgreWidget::sampleTerrainHeight(float x, float z) const
 {
-    if (!m_hasHeightmap || m_heightmapImage.isNull()) return 0.0f;
-
-    int imgW = m_heightmapImage.width();
-    int imgH = m_heightmapImage.height();
+    if (!m_hasHeightmap || m_heightmapImage.isNull()) return 0;
     float halfSize = m_terrainSize * 0.5f;
-
-    // Map world (x, z) to heightmap pixel coordinates
-    // Terrain extends from -halfSize to +halfSize
     float u = (x + halfSize) / m_terrainSize;
     float v = (z + halfSize) / m_terrainSize;
-
-    // Clamp to valid range
-    if (u < 0.0f) u = 0.0f; if (u > 1.0f) u = 1.0f;
-    if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
-
-    int px = static_cast<int>(u * (imgW - 1));
-    int py = static_cast<int>(v * (imgH - 1));
-
-    QRgb pixel = m_heightmapImage.pixel(px, py);
-    int gray = qGray(pixel);
-    float elevation = (gray / 255.0f) * m_heightScale;
-    return elevation;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
+    int hx = int(u * (m_heightmapImage.width() - 1));
+    int hy = int(v * (m_heightmapImage.height() - 1));
+    const uchar* pixel = m_heightmapImage.constScanLine(hy);
+    return (pixel[hx] / 255.0f) * m_heightScale;
 }
+
+// ============================================================
+// Road loading
+// ============================================================
+
 void OgreWidget::loadRoads(const QString& xodrPath)
 {
     m_xodrPath = xodrPath;
@@ -552,6 +490,7 @@ void OgreWidget::loadRoads(const QString& xodrPath)
     const float roadYOffset = 2.0f;
     const double sampleEps = 1.0;
     const float defaultHalfWidth = 4.0f;
+
     uint32_t vertexOffset = 0;
 
     for (const auto& road : roads) {
@@ -580,18 +519,17 @@ void OgreWidget::loadRoads(const QString& xodrPath)
             float halfWidth = defaultHalfWidth;
             if (!laneSections.empty()) {
                 double lanesection_s0 = road.get_lanesection_s0(s0);
-                for (const auto& ls : laneSections) {
-                    if (ls.s0 == lanesection_s0) {
-                        double totalWidth = 0;
-                        for (const auto& lp : ls.id_to_lane) {
-                            if (lp.first != 0) {
-                                totalWidth += lp.second.lane_width.get(s0 - ls.s0);
-                            }
+                auto lsIt = std::find_if(laneSections.begin(), laneSections.end(),
+                    [&](const odr::LaneSection& ls) { return ls.s0 == lanesection_s0; });
+                if (lsIt != laneSections.end()) {
+                    double totalWidth = 0;
+                    for (const auto& lanePair : lsIt->id_to_lane) {
+                        if (lanePair.first != 0) {
+                            totalWidth += lanePair.second.lane_width.get(s0 - lsIt->s0);
                         }
-                        halfWidth = static_cast<float>(totalWidth * 0.5);
-                        if (halfWidth < 1.0f) halfWidth = defaultHalfWidth;
-                        break;
                     }
+                    halfWidth = static_cast<float>(totalWidth * 0.5);
+                    if (halfWidth < 1.0f) halfWidth = defaultHalfWidth;
                 }
             }
 
@@ -602,26 +540,29 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
             float lx0 = static_cast<float>(p0[0]) + perpX * halfWidth;
             float lz0 = static_cast<float>(p0[2]) + perpZ * halfWidth;
-            float ly0 = sampleTerrainHeight(lx0, lz0) + roadYOffset;
+            float ly0 = static_cast<float>(p0[1]) + roadYOffset;
             float rx0 = static_cast<float>(p0[0]) - perpX * halfWidth;
             float rz0 = static_cast<float>(p0[2]) - perpZ * halfWidth;
-            float ry0 = sampleTerrainHeight(rx0, rz0) + roadYOffset;
+            float ry0 = static_cast<float>(p0[1]) + roadYOffset;
             float lx1 = static_cast<float>(p1[0]) + perpX * halfWidth;
             float lz1 = static_cast<float>(p1[2]) + perpZ * halfWidth;
-            float ly1 = sampleTerrainHeight(lx1, lz1) + roadYOffset;
+            float ly1 = static_cast<float>(p1[1]) + roadYOffset;
             float rx1 = static_cast<float>(p1[0]) - perpX * halfWidth;
             float rz1 = static_cast<float>(p1[2]) - perpZ * halfWidth;
-            float ry1 = sampleTerrainHeight(rx1, rz1) + roadYOffset;
+            float ry1 = static_cast<float>(p1[1]) + roadYOffset;
 
             manual->position(lx0, ly0, lz0);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(0.0f, 0.0f);
+
             manual->position(rx0, ry0, rz0);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(1.0f, 0.0f);
+
             manual->position(lx1, ly1, lz1);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(0.0f, 1.0f);
+
             manual->position(rx1, ry1, rz1);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(1.0f, 1.0f);
@@ -641,13 +582,15 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     Ogre::String meshName = "RoadMesh_" + Ogre::StringConverter::toString((size_t)this);
     Ogre::MeshPtr mesh = manual->convertToMesh(
-        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        meshName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     m_roadItem = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
     m_roadNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     m_roadNode->attachObject(m_roadItem);
 
     m_sceneManager->destroyManualObject(manual);
+
     qDebug() << "Road mesh created with" << vertexOffset << "vertices";
 }
 
@@ -665,112 +608,145 @@ void OgreWidget::clearRoads()
 }
 
 // ============================================================
-// SceneObject JSON serialization
+// Actor management (delegates to World model + syncs rendering)
 // ============================================================
-QJsonObject SceneObject::toJson() const
-{
-    QJsonObject j;
-    j["id"] = id;
-    j["type"] = type;
-    j["name"] = name;
-    j["posX"] = posX;
-    j["posY"] = posY;
-    j["posZ"] = posZ;
-    j["rotY"] = rotY;
-    j["scaleX"] = scaleX;
-    j["scaleY"] = scaleY;
-    j["scaleZ"] = scaleZ;
-    j["colorR"] = colorR;
-    j["colorG"] = colorG;
-    j["colorB"] = colorB;
-    return j;
-}
 
-SceneObject SceneObject::fromJson(const QJsonObject& j)
+QString OgreWidget::addActor(world::ActorType type, float x, float y, float z,
+                              float rotY, float sx, float sy, float sz,
+                              const QString& layerId)
 {
-    SceneObject o;
-    o.id = j["id"].toString();
-    o.type = j["type"].toString();
-    o.name = j["name"].toString();
-    o.posX = static_cast<float>(j["posX"].toDouble());
-    o.posY = static_cast<float>(j["posY"].toDouble());
-    o.posZ = static_cast<float>(j["posZ"].toDouble());
-    o.rotY = static_cast<float>(j["rotY"].toDouble());
-    o.scaleX = static_cast<float>(j["scaleX"].toDouble(1.0));
-    o.scaleY = static_cast<float>(j["scaleY"].toDouble(1.0));
-    o.scaleZ = static_cast<float>(j["scaleZ"].toDouble(1.0));
-    o.colorR = static_cast<float>(j["colorR"].toDouble(0.8));
-    o.colorG = static_cast<float>(j["colorG"].toDouble(0.8));
-    o.colorB = static_cast<float>(j["colorB"].toDouble(0.8));
-    return o;
-}
+    world::Actor* actor = m_world.addActor(type, "Actor", layerId);
+    actor->transform.posX = x;
+    actor->transform.posY = y;
+    actor->transform.posZ = z;
+    actor->transform.rotY = rotY;
+    actor->transform.scaleX = sx;
+    actor->transform.scaleY = sy;
+    actor->transform.scaleZ = sz;
 
-// ============================================================
-// Object placement
-// ============================================================
-QString OgreWidget::addObject(const QString& type, float x, float y, float z,
-                              float rotY, float sx, float sy, float sz)
-{
-    if (!m_initialized || !m_sceneManager) return QString();
-
-    // Generate unique ID
-    QString id = type + "_" + QString::number(m_objects.size() + 1);
-    int suffix = 1;
-    while (m_objects.count(id)) {
-        suffix++;
-        id = type + "_" + QString::number(m_objects.size() + suffix);
+    // Set default color based on type
+    switch (type) {
+    case world::ActorType::Building:
+        actor->colorR = 0.6f; actor->colorG = 0.6f; actor->colorB = 0.6f; break;
+    case world::ActorType::Tree:
+        actor->colorR = 0.2f; actor->colorG = 0.5f; actor->colorB = 0.2f; break;
+    case world::ActorType::Water:
+        actor->colorR = 0.2f; actor->colorG = 0.4f; actor->colorB = 0.6f; break;
+    default:
+        break;
     }
 
-    SceneObject obj;
-    obj.id = id;
-    obj.type = type;
-    obj.name = type + " " + QString::number(m_objects.size() + 1);
-    obj.posX = x;
-    obj.posY = y;
-    obj.posZ = z;
-    obj.rotY = rotY;
-    obj.scaleX = sx;
-    obj.scaleY = sy;
-    obj.scaleZ = sz;
-
-    // Set color based on type
-    if (type == "building") {
-        obj.colorR = 0.6f; obj.colorG = 0.5f; obj.colorB = 0.4f;
-    } else if (type == "tree") {
-        obj.colorR = 0.2f; obj.colorG = 0.5f; obj.colorB = 0.2f;
-    } else {
-        obj.colorR = 0.8f; obj.colorG = 0.8f; obj.colorB = 0.8f;
-    }
-
-    rebuildObject(obj);
-    return id;
+    rebuildActor(*actor);
+    emit actorAdded(actor->id);
+    emit sceneChanged();
+    return actor->id;
 }
 
-void OgreWidget::rebuildObject(const SceneObject& obj)
+void OgreWidget::removeActor(const QString& id)
 {
-    if (!m_sceneManager) return;
-
-    // Remove existing entry if present
-    auto it = m_objects.find(obj.id);
-    if (it != m_objects.end()) {
+    // Remove render entry
+    auto it = m_actorRenders.find(id);
+    if (it != m_actorRenders.end()) {
         if (it->second.node) {
             it->second.node->detachObject(it->second.item);
             m_sceneManager->destroySceneNode(it->second.node);
         }
-        if (it->second.item) {
+        if (it->second.item)
             m_sceneManager->destroyItem(it->second.item);
+        m_actorRenders.erase(it);
+    }
+    m_world.removeActor(id);
+    m_world.selectedActorIds.remove(id);
+    emit actorRemoved(id);
+    emit sceneChanged();
+}
+
+void OgreWidget::clearActors()
+{
+    clearActorRenderables();
+    m_world.actors.clear();
+    m_world.selectedActorIds.clear();
+    emit sceneChanged();
+}
+
+void OgreWidget::updateActorTransform(const QString& id, float x, float y, float z,
+                                       float rotY, float sx, float sy, float sz)
+{
+    world::Actor* a = m_world.findActor(id);
+    if (!a) return;
+    a->transform.posX = x;
+    a->transform.posY = y;
+    a->transform.posZ = z;
+    a->transform.rotY = rotY;
+    a->transform.scaleX = sx;
+    a->transform.scaleY = sy;
+    a->transform.scaleZ = sz;
+    a->touch();
+    rebuildActor(*a);
+    emit actorTransformed(id);
+    emit sceneChanged();
+}
+
+void OgreWidget::updateActorVisibility(const QString& id, bool visible)
+{
+    world::Actor* a = m_world.findActor(id);
+    if (!a) return;
+    a->visible = visible;
+    a->touch();
+    auto it = m_actorRenders.find(id);
+    if (it != m_actorRenders.end() && it->second.node)
+        it->second.node->setVisible(visible && isLayerVisible(a->layerId));
+    emit sceneChanged();
+}
+
+void OgreWidget::updateActorLayer(const QString& id, const QString& layerId)
+{
+    world::Actor* a = m_world.findActor(id);
+    if (!a) return;
+    a->layerId = layerId;
+    a->touch();
+    auto it = m_actorRenders.find(id);
+    if (it != m_actorRenders.end() && it->second.node)
+        it->second.node->setVisible(a->visible && isLayerVisible(layerId));
+    emit sceneChanged();
+}
+
+void OgreWidget::renameActor(const QString& id, const QString& newName)
+{
+    world::Actor* a = m_world.findActor(id);
+    if (!a) return;
+    a->name = newName;
+    a->touch();
+    emit sceneChanged();
+}
+
+// ============================================================
+// Actor rendering — creates a simple colored box for each actor
+// ============================================================
+
+void OgreWidget::rebuildActor(const world::Actor& actor)
+{
+    if (!m_initialized || !m_sceneManager) return;
+
+    // Remove existing render entry
+    auto it = m_actorRenders.find(actor.id);
+    if (it != m_actorRenders.end()) {
+        if (it->second.node) {
+            it->second.node->detachObject(it->second.item);
+            m_sceneManager->destroySceneNode(it->second.node);
         }
+        if (it->second.item)
+            m_sceneManager->destroyItem(it->second.item);
+        m_actorRenders.erase(it);
     }
 
-    // Create a manual mesh for the object (a box)
+    // Create a simple box mesh for the actor
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
-    Ogre::String moName = "Obj_" + obj.id.toStdString();
-    manual->setName(moName);
 
-    // Create datablock with object color
+    // Create or get datablock for this actor's color
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
     Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
-    Ogre::String dblockName = "ObjDb_" + obj.id.toStdString();
+    Ogre::String dblockName = "ActorDatablock_" + actor.id.toStdString();
     Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
     if (!dbBase) {
         dbBase = hlmsUnlit->createDatablock(
@@ -778,279 +754,597 @@ void OgreWidget::rebuildObject(const SceneObject& obj)
             Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
     }
     Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
-    datablock->setColour(Ogre::ColourValue(obj.colorR, obj.colorG, obj.colorB, 1.0f));
+    datablock->setColour(Ogre::ColourValue(actor.colorR, actor.colorG, actor.colorB, actor.colorA));
 
     // Build a unit cube centered at origin
     manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
 
     // 8 vertices of a unit cube (-0.5 to 0.5)
     // Front face
-    manual->position(-0.5f, -0.5f, 0.5f);  manual->normal(0, 0, 1);  manual->textureCoord(0, 0);
-    manual->position(0.5f, -0.5f, 0.5f);   manual->normal(0, 0, 1);  manual->textureCoord(1, 0);
-    manual->position(0.5f, 0.5f, 0.5f);    manual->normal(0, 0, 1);  manual->textureCoord(1, 1);
-    manual->position(-0.5f, 0.5f, 0.5f);   manual->normal(0, 0, 1);  manual->textureCoord(0, 1);
+    manual->position(-0.5f, -0.5f, 0.5f); manual->normal(0, 0, 1);
+    manual->position(0.5f, -0.5f, 0.5f); manual->normal(0, 0, 1);
+    manual->position(0.5f, 0.5f, 0.5f); manual->normal(0, 0, 1);
+    manual->position(-0.5f, 0.5f, 0.5f); manual->normal(0, 0, 1);
     // Back face
-    manual->position(-0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1); manual->textureCoord(0, 0);
-    manual->position(0.5f, -0.5f, -0.5f);  manual->normal(0, 0, -1); manual->textureCoord(1, 0);
-    manual->position(0.5f, 0.5f, -0.5f);   manual->normal(0, 0, -1); manual->textureCoord(1, 1);
-    manual->position(-0.5f, 0.5f, -0.5f);  manual->normal(0, 0, -1); manual->textureCoord(0, 1);
+    manual->position(-0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1);
+    manual->position(0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1);
+    manual->position(0.5f, 0.5f, -0.5f); manual->normal(0, 0, -1);
+    manual->position(-0.5f, 0.5f, -0.5f); manual->normal(0, 0, -1);
 
-    // Front face triangles (0,1,2) (0,2,3)
+    // Front
     manual->index(0); manual->index(1); manual->index(2);
     manual->index(0); manual->index(2); manual->index(3);
-    // Back face triangles (5,4,7) (5,7,6)
+    // Back
     manual->index(5); manual->index(4); manual->index(7);
     manual->index(5); manual->index(7); manual->index(6);
-    // Left face triangles (4,0,3) (4,3,7)
+    // Left
     manual->index(4); manual->index(0); manual->index(3);
     manual->index(4); manual->index(3); manual->index(7);
-    // Right face triangles (1,5,6) (1,6,2)
+    // Right
     manual->index(1); manual->index(5); manual->index(6);
     manual->index(1); manual->index(6); manual->index(2);
-    // Top face triangles (3,2,6) (3,6,7)
+    // Top
     manual->index(3); manual->index(2); manual->index(6);
     manual->index(3); manual->index(6); manual->index(7);
-    // Bottom face triangles (4,5,1) (4,1,0)
+    // Bottom
     manual->index(4); manual->index(5); manual->index(1);
     manual->index(4); manual->index(1); manual->index(0);
 
     manual->end();
 
-    // Convert to mesh
-    Ogre::String meshName = "ObjMesh_" + obj.id.toStdString();
+    Ogre::String meshName = "ActorMesh_" + actor.id.toStdString();
     Ogre::MeshPtr mesh = manual->convertToMesh(
-        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        meshName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     Ogre::Item* item = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
     Ogre::SceneNode* node = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     node->attachObject(item);
 
-    // Set position, rotation, scale
-    // Sample terrain elevation at object (x, z) so objects sit on terrain
-    float terrainY = m_hasHeightmap ? sampleTerrainHeight(obj.posX, obj.posZ) : obj.posY;
-    // Object center should be at terrainY + half the object height (scaleY/2)
-    float objectY = terrainY + obj.scaleY * 0.5f;
-    node->setPosition(Ogre::Vector3(obj.posX, objectY, obj.posZ));
-    float rotRad = obj.rotY * 3.14159265358979f / 180.0f;
-    node->setOrientation(Ogre::Quaternion(Ogre::Radian(rotRad), Ogre::Vector3::UNIT_Y));
-    node->setScale(Ogre::Vector3(obj.scaleX, obj.scaleY, obj.scaleZ));
+    // Apply transform
+    node->setPosition(Ogre::Vector3(actor.transform.posX, actor.transform.posY, actor.transform.posZ));
+    Ogre::Radian rotY(Ogre::Degree(actor.transform.rotY));
+    node->setOrientation(Ogre::Quaternion(rotY, Ogre::Vector3::UNIT_Y));
+    node->setScale(Ogre::Vector3(actor.transform.scaleX, actor.transform.scaleY, actor.transform.scaleZ));
+    node->setVisible(actor.visible && isLayerVisible(actor.layerId));
 
     m_sceneManager->destroyManualObject(manual);
 
-    // Store in map
-    ObjectEntry entry;
-    entry.data = obj;
+    ActorRenderEntry entry;
+    entry.actorId = actor.id;
     entry.item = item;
     entry.node = node;
-    m_objects[obj.id] = entry;
+    m_actorRenders[actor.id] = entry;
 }
 
-void OgreWidget::removeObject(const QString& id)
+void OgreWidget::clearActorRenderables()
 {
-    auto it = m_objects.find(id);
-    if (it == m_objects.end()) return;
-
-    if (it->second.node) {
-        it->second.node->detachObject(it->second.item);
-        m_sceneManager->destroySceneNode(it->second.node);
-    }
-    if (it->second.item) {
-        m_sceneManager->destroyItem(it->second.item);
-    }
-    m_objects.erase(it);
-}
-
-void OgreWidget::clearObjects()
-{
-    for (auto& pair : m_objects) {
+    for (auto& pair : m_actorRenders) {
         if (pair.second.node) {
             pair.second.node->detachObject(pair.second.item);
             m_sceneManager->destroySceneNode(pair.second.node);
         }
-        if (pair.second.item) {
+        if (pair.second.item)
             m_sceneManager->destroyItem(pair.second.item);
-        }
     }
-    m_objects.clear();
+    m_actorRenders.clear();
 }
 
-void OgreWidget::updateObjectTransform(const QString& id, float x, float y, float z,
-                                       float rotY, float sx, float sy, float sz)
+void OgreWidget::syncAllActors()
 {
-    auto it = m_objects.find(id);
-    if (it == m_objects.end()) return;
-
-    it->second.data.posX = x;
-    it->second.data.posY = y;
-    it->second.data.posZ = z;
-    it->second.data.rotY = rotY;
-    it->second.data.scaleX = sx;
-    it->second.data.scaleY = sy;
-    it->second.data.scaleZ = sz;
-
-    if (it->second.node) {
-        it->second.node->setPosition(Ogre::Vector3(x, y, z));
-        float rotRad = rotY * 3.14159265358979f / 180.0f;
-        it->second.node->setOrientation(Ogre::Quaternion(Ogre::Radian(rotRad), Ogre::Vector3::UNIT_Y));
-        it->second.node->setScale(Ogre::Vector3(sx, sy, sz));
-    }
+    clearActorRenderables();
+    for (const auto& actor : m_world.actors)
+        rebuildActor(actor);
 }
 
-SceneObject OgreWidget::getObject(const QString& id) const
+// ============================================================
+// Layer management
+// ============================================================
+
+void OgreWidget::addLayer(const world::Layer& layer)
 {
-    auto it = m_objects.find(id);
-    if (it != m_objects.end()) return it->second.data;
-    return SceneObject();
+    // Check if layer already exists
+    if (m_world.findLayer(layer.id)) return;
+    world::Layer* l = m_world.addLayer(layer.name);
+    l->visible = layer.visible;
+    l->locked = layer.locked;
+    l->colorR = layer.colorR;
+    l->colorG = layer.colorG;
+    l->colorB = layer.colorB;
+    emit sceneChanged();
 }
 
-std::vector<SceneObject> OgreWidget::getObjects() const
+void OgreWidget::removeLayer(const QString& layerId)
 {
-    std::vector<SceneObject> result;
-    for (const auto& pair : m_objects) {
-        result.push_back(pair.second.data);
-    }
+    m_world.removeLayer(layerId);
+    // Update visibility of actors in that layer (they were moved to default)
+    syncAllActors();
+    emit sceneChanged();
+}
+
+std::vector<world::Layer> OgreWidget::getLayers() const
+{
+    std::vector<world::Layer> result;
+    for (const auto& l : m_world.layers)
+        result.push_back(l);
     return result;
 }
 
+void OgreWidget::setLayerVisible(const QString& layerId, bool visible)
+{
+    m_world.setLayerVisible(layerId, visible);
+    // Update visibility of all actors in this layer
+    for (const auto& actor : m_world.actors) {
+        if (actor.layerId == layerId) {
+            auto it = m_actorRenders.find(actor.id);
+            if (it != m_actorRenders.end() && it->second.node)
+                it->second.node->setVisible(visible && actor.visible);
+        }
+    }
+    emit sceneChanged();
+}
+
+void OgreWidget::setLayerLocked(const QString& layerId, bool locked)
+{
+    m_world.setLayerLocked(layerId, locked);
+    emit sceneChanged();
+}
+
+bool OgreWidget::isLayerVisible(const QString& layerId) const
+{
+    return m_world.isLayerVisible(layerId);
+}
+
+bool OgreWidget::isLayerLocked(const QString& layerId) const
+{
+    return m_world.isLayerLocked(layerId);
+}
+
 // ============================================================
-// Scene serialization
+// Selection
 // ============================================================
+
+void OgreWidget::selectActor(const QString& id)
+{
+    m_world.selectOnly(id);
+    updateGizmo();
+    emit actorSelected(id);
+}
+
+void OgreWidget::deselectAll()
+{
+    m_world.clearSelection();
+    updateGizmo();
+    emit actorSelected(QString());
+}
+
+// ============================================================
+// Transform mode
+// ============================================================
+
+void OgreWidget::setTransformMode(TransformMode mode)
+{
+    m_transformMode = mode;
+    updateGizmo();
+}
+
+// ============================================================
+// Grid
+// ============================================================
+
+void OgreWidget::setGridVisible(bool visible)
+{
+    m_gridVisible = visible;
+    showGrid(visible);
+}
+
+void OgreWidget::setSnapEnabled(bool enabled)
+{
+    m_snapEnabled = enabled;
+    m_world.settings.snapEnabled = enabled;
+}
+
+void OgreWidget::setSnapSize(float size)
+{
+    m_snapSize = size;
+    m_world.settings.snapSize = size;
+}
+
+void OgreWidget::createGrid()
+{
+    if (!m_sceneManager) return;
+
+    m_gridManual = m_sceneManager->createManualObject();
+    m_gridManual->setName("Grid");
+
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::String dblockName = "GridDatablock";
+    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+    if (!dbBase) {
+        dbBase = hlmsUnlit->createDatablock(
+            Ogre::IdString(dblockName), dblockName,
+            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    }
+    auto* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
+    datablock->setColour(Ogre::ColourValue(0.5f, 0.5f, 0.5f, 0.5f));
+
+    m_gridManual->begin(dblockName, Ogre::OT_LINE_LIST);
+
+    float gridSize = 100.0f;
+    int divisions = 40;
+    float half = gridSize * divisions * 0.5f;
+    float step = gridSize;
+
+    uint32_t idx = 0;
+    for (int i = 0; i <= divisions; i++) {
+        float x = -half + i * step;
+        // Line along Z
+        m_gridManual->position(x, 0, -half);
+        m_gridManual->position(x, 0, half);
+        m_gridManual->index(idx); m_gridManual->index(idx + 1);
+        idx += 2;
+        // Line along X
+        m_gridManual->position(-half, 0, x);
+        m_gridManual->position(half, 0, x);
+        m_gridManual->index(idx); m_gridManual->index(idx + 1);
+        idx += 2;
+    }
+
+    m_gridManual->end();
+
+    m_gridNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+    m_gridNode->attachObject(m_gridManual);
+}
+
+void OgreWidget::destroyGrid()
+{
+    if (m_gridManual) {
+        if (m_gridNode) {
+            m_gridNode->detachObject(m_gridManual);
+            m_sceneManager->destroySceneNode(m_gridNode);
+            m_gridNode = nullptr;
+        }
+        m_sceneManager->destroyManualObject(m_gridManual);
+        m_gridManual = nullptr;
+    }
+}
+
+void OgreWidget::showGrid(bool show)
+{
+    if (m_gridNode) m_gridNode->setVisible(show);
+}
+
+// ============================================================
+// Gizmo
+// ============================================================
+
+void OgreWidget::createGizmo()
+{
+    if (!m_sceneManager) return;
+
+    m_gizmoNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+
+    // Move gizmo — 3 axis lines (with indices)
+    m_gizmoMove = m_sceneManager->createManualObject();
+    {
+        Ogre::String dbName = "GizmoMoveDatablock";
+        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
+        if (!db) {
+            db = hlmsUnlit->createDatablock(
+                Ogre::IdString(dbName), dbName,
+                Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+        }
+        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
+        dblock->setColour(Ogre::ColourValue(1, 1, 1, 1));
+
+        m_gizmoMove->begin(dbName, Ogre::OT_LINE_LIST);
+        // X axis (red)
+        m_gizmoMove->position(0, 0, 0);
+        m_gizmoMove->position(50, 0, 0);
+        m_gizmoMove->index(0); m_gizmoMove->index(1);
+        // Y axis (green)
+        m_gizmoMove->position(0, 0, 0);
+        m_gizmoMove->position(0, 50, 0);
+        m_gizmoMove->index(2); m_gizmoMove->index(3);
+        // Z axis (blue)
+        m_gizmoMove->position(0, 0, 0);
+        m_gizmoMove->position(0, 0, 50);
+        m_gizmoMove->index(4); m_gizmoMove->index(5);
+        m_gizmoMove->end();
+    }
+    m_gizmoNode->attachObject(m_gizmoMove);
+
+    // Rotate gizmo — 3 circles (simplified as line segments)
+    m_gizmoRotate = m_sceneManager->createManualObject();
+    {
+        Ogre::String dbName = "GizmoRotateDatablock";
+        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
+        if (!db) {
+            db = hlmsUnlit->createDatablock(
+                Ogre::IdString(dbName), dbName,
+                Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+        }
+        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
+        dblock->setColour(Ogre::ColourValue(1, 1, 0, 1));
+
+        m_gizmoRotate->begin(dbName, Ogre::OT_LINE_LIST);
+        // Simple circle approximation in XZ plane
+        uint32_t idx = 0;
+        for (int i = 0; i < 32; i++) {
+            float a0 = float(i) / 32 * 6.2831853f;
+            float a1 = float(i + 1) / 32 * 6.2831853f;
+            m_gizmoRotate->position(cos(a0) * 40, 0, sin(a0) * 40);
+            m_gizmoRotate->position(cos(a1) * 40, 0, sin(a1) * 40);
+            m_gizmoRotate->index(idx); m_gizmoRotate->index(idx + 1);
+            idx += 2;
+        }
+        m_gizmoRotate->end();
+    }
+    m_gizmoNode->attachObject(m_gizmoRotate);
+
+    // Scale gizmo — 3 axis lines with box ends
+    m_gizmoScale = m_sceneManager->createManualObject();
+    {
+        Ogre::String dbName = "GizmoScaleDatablock";
+        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
+        if (!db) {
+            db = hlmsUnlit->createDatablock(
+                Ogre::IdString(dbName), dbName,
+                Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+        }
+        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
+        dblock->setColour(Ogre::ColourValue(0, 1, 1, 1));
+
+        m_gizmoScale->begin(dbName, Ogre::OT_LINE_LIST);
+        m_gizmoScale->position(0, 0, 0);
+        m_gizmoScale->position(50, 0, 0);
+        m_gizmoScale->index(0); m_gizmoScale->index(1);
+        m_gizmoScale->position(0, 0, 0);
+        m_gizmoScale->position(0, 50, 0);
+        m_gizmoScale->index(2); m_gizmoScale->index(3);
+        m_gizmoScale->position(0, 0, 0);
+        m_gizmoScale->position(0, 0, 50);
+        m_gizmoScale->index(4); m_gizmoScale->index(5);
+        m_gizmoScale->end();
+    }
+    m_gizmoNode->attachObject(m_gizmoScale);
+
+    m_gizmoNode->setVisible(false);
+}
+
+void OgreWidget::destroyGizmo()
+{
+    if (m_gizmoNode) {
+        if (m_gizmoMove) {
+            m_gizmoNode->detachObject(m_gizmoMove);
+            m_sceneManager->destroyManualObject(m_gizmoMove);
+            m_gizmoMove = nullptr;
+        }
+        if (m_gizmoRotate) {
+            m_gizmoNode->detachObject(m_gizmoRotate);
+            m_sceneManager->destroyManualObject(m_gizmoRotate);
+            m_gizmoRotate = nullptr;
+        }
+        if (m_gizmoScale) {
+            m_gizmoNode->detachObject(m_gizmoScale);
+            m_sceneManager->destroyManualObject(m_gizmoScale);
+            m_gizmoScale = nullptr;
+        }
+        m_sceneManager->destroySceneNode(m_gizmoNode);
+        m_gizmoNode = nullptr;
+    }
+}
+
+void OgreWidget::showGizmo(bool show)
+{
+    if (m_gizmoNode) m_gizmoNode->setVisible(show);
+}
+
+void OgreWidget::updateGizmo()
+{
+    QString selId = m_world.primarySelection();
+    if (selId.isEmpty() || m_transformMode == TransformMode::None) {
+        showGizmo(false);
+        return;
+    }
+    world::Actor* a = m_world.findActor(selId);
+    if (!a) {
+        showGizmo(false);
+        return;
+    }
+    if (m_gizmoNode) {
+        m_gizmoNode->setPosition(Ogre::Vector3(a->transform.posX, a->transform.posY, a->transform.posZ));
+        showGizmo(true);
+    }
+}
+
+GizmoAxis OgreWidget::pickGizmoAxis(int screenX, int screenY)
+{
+    // Simplified — just return None for now
+    Q_UNUSED(screenX); Q_UNUSED(screenY);
+    return GizmoAxis::None;
+}
+
+void OgreWidget::applyGizmoDrag(int screenX, int screenY)
+{
+    // Simplified — no drag implementation yet
+    Q_UNUSED(screenX); Q_UNUSED(screenY);
+}
+
+// ============================================================
+// Scene serialization (legacy format — backward compatible)
+// ============================================================
+
 QJsonObject OgreWidget::saveScene() const
 {
     QJsonObject scene;
 
-    // Terrain state
+    // Terrain
     QJsonObject terrain;
     terrain["heightmapPath"] = m_heightmapPath;
     terrain["albedoPath"] = m_albedoPath;
-    terrain["terrainSize"] = static_cast<double>(m_terrainSize);
-    terrain["heightScale"] = static_cast<double>(m_heightScale);
+    terrain["terrainSize"] = m_terrainSize;
+    terrain["heightScale"] = m_heightScale;
     scene["terrain"] = terrain;
 
-    // Road state
+    // Roads
     scene["xodrPath"] = m_xodrPath;
 
-    // Camera state
-    QJsonObject camera;
-    camera["yaw"] = static_cast<double>(m_camYaw);
-    camera["pitch"] = static_cast<double>(m_camPitch);
-    camera["dist"] = static_cast<double>(m_camDist);
-    camera["targetX"] = static_cast<double>(m_camTargetX);
-    camera["targetY"] = static_cast<double>(m_camTargetY);
-    camera["targetZ"] = static_cast<double>(m_camTargetZ);
-    scene["camera"] = camera;
+    // Camera
+    QJsonObject cam;
+    cam["yaw"] = m_camYaw;
+    cam["pitch"] = m_camPitch;
+    cam["dist"] = m_camDist;
+    cam["targetX"] = m_camTargetX;
+    cam["targetY"] = m_camTargetY;
+    cam["targetZ"] = m_camTargetZ;
+    scene["camera"] = cam;
 
-    // Objects
-    QJsonArray objArray;
-    for (const auto& pair : m_objects) {
-        objArray.append(pair.second.data.toJson());
-    }
-    scene["objects"] = objArray;
+    // Actors (from World model)
+    QJsonArray actorsArr;
+    for (const auto& a : m_world.actors)
+        actorsArr.append(a.toJson());
+    scene["actors"] = actorsArr;
 
+    // Layers
+    QJsonArray layersArr;
+    for (const auto& l : m_world.layers)
+        layersArr.append(l.toJson());
+    scene["layers"] = layersArr;
+
+    // Selection
+    QJsonArray selArr;
+    for (const auto& id : m_world.selectedActorIds)
+        selArr.append(id);
+    scene["selection"] = selArr;
+
+    scene["version"] = "2.0";
     return scene;
 }
 
 void OgreWidget::loadScene(const QJsonObject& scene)
 {
     if (!m_initialized) {
-        qDebug() << "OGRE not initialized, storing pending scene...";
         m_pendingScene = scene;
         m_hasPendingScene = true;
         return;
     }
 
-    // Clear current scene
-    clearObjects();
-    clearRoads();
-    clearTerrain();
+    // Clear existing
+    clearActorRenderables();
+    m_world.actors.clear();
+    m_world.selectedActorIds.clear();
 
     // Load terrain
-    QJsonObject terrain = scene["terrain"].toObject();
-    if (terrain.contains("heightmapPath")) {
+    if (scene.contains("terrain")) {
+        QJsonObject terrain = scene["terrain"].toObject();
         QString hmPath = terrain["heightmapPath"].toString();
         QString albPath = terrain["albedoPath"].toString();
-        float tSize = static_cast<float>(terrain["terrainSize"].toDouble(4000.0));
-        float hScale = static_cast<float>(terrain["heightScale"].toDouble(100.0));
+        float tSize = float(terrain["terrainSize"].toDouble(4000));
+        float hScale = float(terrain["heightScale"].toDouble(100));
         if (!hmPath.isEmpty() && QFile::exists(hmPath)) {
             loadTerrain(hmPath, albPath, tSize, hScale);
         }
     }
 
     // Load roads
-    QString xodr = scene["xodrPath"].toString();
-    if (!xodr.isEmpty() && QFile::exists(xodr)) {
-        loadRoads(xodr);
-    }
-
-    // Load objects
-    QJsonArray objArray = scene["objects"].toArray();
-    qDebug() << "Loading" << objArray.size() << "objects from scene...";
-    for (const auto& val : objArray) {
-        SceneObject obj = SceneObject::fromJson(val.toObject());
-        if (!obj.id.isEmpty()) {
-            rebuildObject(obj);
-            qDebug() << "  Object created:" << obj.id << "at" << obj.posX << obj.posY << obj.posZ;
+    if (scene.contains("xodrPath")) {
+        QString xodr = scene["xodrPath"].toString();
+        if (!xodr.isEmpty() && QFile::exists(xodr)) {
+            loadRoads(xodr);
         }
     }
-    qDebug() << "Objects loaded:" << m_objects.size();
 
-    // Restore camera
-    QJsonObject camera = scene["camera"].toObject();
-    if (camera.contains("yaw")) {
-        m_camYaw = static_cast<float>(camera["yaw"].toDouble());
-        m_camPitch = static_cast<float>(camera["pitch"].toDouble());
-        m_camDist = static_cast<float>(camera["dist"].toDouble());
-        m_camTargetX = static_cast<float>(camera["targetX"].toDouble());
-        m_camTargetY = static_cast<float>(camera["targetY"].toDouble());
-        m_camTargetZ = static_cast<float>(camera["targetZ"].toDouble());
-        // Apply camera state
-        if (m_camera) {
-            float yawRad = m_camYaw * 3.14159265358979f / 180.0f;
-            float pitchRad = m_camPitch * 3.14159265358979f / 180.0f;
-            float x = m_camTargetX + m_camDist * cos(pitchRad) * sin(yawRad);
-            float y = m_camTargetY + m_camDist * sin(-pitchRad);
-            float z = m_camTargetZ + m_camDist * cos(pitchRad) * cos(yawRad);
-            m_camera->setPosition(Ogre::Vector3(x, y, z));
-            m_camera->lookAt(Ogre::Vector3(m_camTargetX, m_camTargetY, m_camTargetZ));
+    // Load camera
+    if (scene.contains("camera")) {
+        QJsonObject cam = scene["camera"].toObject();
+        m_camYaw = float(cam["yaw"].toDouble(0));
+        m_camPitch = float(cam["pitch"].toDouble(-30));
+        m_camDist = float(cam["dist"].toDouble(500));
+        m_camTargetX = float(cam["targetX"].toDouble(0));
+        m_camTargetY = float(cam["targetY"].toDouble(0));
+        m_camTargetZ = float(cam["targetZ"].toDouble(0));
+        resetCamera();
+    }
+
+    // Load layers
+    if (scene.contains("layers")) {
+        m_world.layers.clear();
+        QJsonArray layersArr = scene["layers"].toArray();
+        for (const auto& v : layersArr)
+            m_world.layers.append(world::Layer::fromJson(v.toObject()));
+        if (m_world.layers.isEmpty()) {
+            world::World fresh;
+            m_world.layers = fresh.layers;
         }
     }
+
+    // Load actors
+    if (scene.contains("actors")) {
+        QJsonArray actorsArr = scene["actors"].toArray();
+        for (const auto& v : actorsArr) {
+            world::Actor a = world::Actor::fromJson(v.toObject());
+            m_world.actors.append(a);
+            rebuildActor(a);
+        }
+    }
+
+    // Load selection
+    if (scene.contains("selection")) {
+        QJsonArray selArr = scene["selection"].toArray();
+        for (const auto& v : selArr)
+            m_world.selectedActorIds.insert(v.toString());
+    }
+
+    updateGizmo();
+    emit sceneChanged();
 }
 
-void OgreWidget::render()
+// ============================================================
+// World serialization
+// ============================================================
+
+bool OgreWidget::saveWorld(const QString& path) const
 {
-    if (m_root && m_renderWindow) {
-        m_root->renderOneFrame();
-    }
+    return m_world.saveToFile(path);
 }
 
-void OgreWidget::shutdownOgre()
+bool OgreWidget::loadWorld(const QString& path)
 {
-    if (m_timerId) {
-        killTimer(m_timerId);
-        m_timerId = 0;
+    world::World loaded = world::World::loadFromFile(path);
+    if (loaded.actorCount() == 0 && loaded.layerCount() <= 8) {
+        // Empty or failed load
+        return false;
     }
-    clearObjects();
-    clearRoads();
-    clearTerrain();
-    if (m_root) {
-        delete m_root;
-        m_root = nullptr;
-    }
-    m_initialized = false;
+    m_world = loaded;
+    syncAllActors();
+    updateGizmo();
+    emit worldChanged();
+    return true;
 }
+
+// ============================================================
+// Camera
+// ============================================================
 
 void OgreWidget::resetCamera()
 {
-    m_camYaw = 0.0f;
-    m_camPitch = -30.0f;
-    m_camDist = 500.0f;
-    m_camTargetX = 0;
-    m_camTargetY = 0;
-    m_camTargetZ = 0;
+    if (m_camDist == 0) {
+        m_camYaw = 0.0f;
+        m_camPitch = -30.0f;
+        m_camDist = m_terrainSize * 0.8f;
+        m_camTargetX = 0;
+        m_camTargetY = m_heightScale * 0.3f;
+        m_camTargetZ = 0;
+    }
 
     if (m_camera) {
-        float yawRad = m_camYaw * 3.14159265358979f / 180.0f;
-        float pitchRad = m_camPitch * 3.14159265358979f / 180.0f;
+        float yawRad = Ogre::Degree(m_camYaw).valueRadians();
+        float pitchRad = Ogre::Degree(m_camPitch).valueRadians();
 
         float x = m_camTargetX + m_camDist * cos(pitchRad) * sin(yawRad);
         float y = m_camTargetY + m_camDist * sin(-pitchRad);
@@ -1084,10 +1378,62 @@ void OgreWidget::zoomCamera(float delta)
     resetCamera();
 }
 
+void OgreWidget::panCamera(float dx, float dy)
+{
+    m_camTargetX -= dx;
+    m_camTargetZ += dy;
+    resetCamera();
+}
+
+void OgreWidget::updateCameraFromKeys(float dt)
+{
+    if (!m_flyMode || m_keysDown.empty()) return;
+
+    float speed = m_flySpeed * m_flyBoost * dt;
+    Ogre::Vector3 forward = m_camera->getDirection();
+    Ogre::Vector3 right = m_camera->getRight();
+    Ogre::Vector3 up = Ogre::Vector3::UNIT_Y;
+    Ogre::Vector3 move = Ogre::Vector3::ZERO;
+
+    if (m_keysDown.count(Qt::Key_W)) move += forward * speed;
+    if (m_keysDown.count(Qt::Key_S)) move -= forward * speed;
+    if (m_keysDown.count(Qt::Key_A)) move -= right * speed;
+    if (m_keysDown.count(Qt::Key_D)) move += right * speed;
+    if (m_keysDown.count(Qt::Key_Q)) move -= up * speed;
+    if (m_keysDown.count(Qt::Key_E)) move += up * speed;
+
+    if (move != Ogre::Vector3::ZERO) {
+        m_camera->move(move);
+        m_camTargetX = m_camera->getPosition().x;
+        m_camTargetY = m_camera->getPosition().y;
+        m_camTargetZ = m_camera->getPosition().z;
+    }
+}
+
+// ============================================================
+// Mouse / keyboard
+// ============================================================
+
 void OgreWidget::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
-        m_mouseDown = true;
+        m_leftDown = true;
+        m_lastMouseX = event->x();
+        m_lastMouseY = event->y();
+
+        // Try to pick an actor
+        QString pickedId = pickActor(event->x(), event->y());
+        if (!pickedId.isEmpty()) {
+            selectActor(pickedId);
+        } else {
+            deselectAll();
+        }
+    } else if (event->button() == Qt::RightButton) {
+        m_rightDown = true;
+        m_lastMouseX = event->x();
+        m_lastMouseY = event->y();
+    } else if (event->button() == Qt::MiddleButton) {
+        m_middleDown = true;
         m_lastMouseX = event->x();
         m_lastMouseY = event->y();
     }
@@ -1095,24 +1441,168 @@ void OgreWidget::mousePressEvent(QMouseEvent* event)
 
 void OgreWidget::mouseMoveEvent(QMouseEvent* event)
 {
-    if (m_mouseDown) {
-        int dx = event->x() - m_lastMouseX;
-        int dy = event->y() - m_lastMouseY;
+    int dx = event->x() - m_lastMouseX;
+    int dy = event->y() - m_lastMouseY;
+
+    if (m_leftDown) {
+        // Orbit camera (or gizmo drag if gizmo is active)
+        if (m_gizmoDragging) {
+            applyGizmoDrag(event->x(), event->y());
+        } else {
+            orbitCamera(dx * 0.3f, -dy * 0.3f);
+        }
+    } else if (m_rightDown) {
+        // Orbit with right button too
         orbitCamera(dx * 0.3f, -dy * 0.3f);
-        m_lastMouseX = event->x();
-        m_lastMouseY = event->y();
+    } else if (m_middleDown) {
+        // Pan with middle button
+        panCamera(dx * 0.5f, dy * 0.5f);
     }
+
+    m_lastMouseX = event->x();
+    m_lastMouseY = event->y();
 }
 
 void OgreWidget::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton) {
-        m_mouseDown = false;
-    }
+    if (event->button() == Qt::LeftButton) m_leftDown = false;
+    else if (event->button() == Qt::RightButton) m_rightDown = false;
+    else if (event->button() == Qt::MiddleButton) m_middleDown = false;
 }
 
 void OgreWidget::wheelEvent(QWheelEvent* event)
 {
     float delta = -event->angleDelta().y() * 0.5f;
     zoomCamera(delta);
+}
+
+void OgreWidget::keyPressEvent(QKeyEvent* event)
+{
+    m_keysDown.insert(event->key());
+
+    if (event->key() == Qt::Key_F) {
+        // Frame selected actor
+        QString selId = m_world.primarySelection();
+        if (!selId.isEmpty()) {
+            world::Actor* a = m_world.findActor(selId);
+            if (a) {
+                m_camTargetX = a->transform.posX;
+                m_camTargetY = a->transform.posY;
+                m_camTargetZ = a->transform.posZ;
+                m_camDist = 100;
+                resetCamera();
+            }
+        }
+    }
+
+    // Transform mode shortcuts
+    if (event->key() == Qt::Key_W && !m_flyMode)
+        setTransformMode(TransformMode::Move);
+    if (event->key() == Qt::Key_E && !m_flyMode)
+        setTransformMode(TransformMode::Rotate);
+    if (event->key() == Qt::Key_R && !m_flyMode)
+        setTransformMode(TransformMode::Scale);
+
+    // Delete key removes selected actor
+    if (event->key() == Qt::Key_Delete) {
+        QString selId = m_world.primarySelection();
+        if (!selId.isEmpty())
+            removeActor(selId);
+    }
+}
+
+void OgreWidget::keyReleaseEvent(QKeyEvent* event)
+{
+    m_keysDown.erase(event->key());
+}
+
+void OgreWidget::focusOutEvent(QFocusEvent* event)
+{
+    Q_UNUSED(event);
+    m_keysDown.clear();
+    m_leftDown = m_rightDown = m_middleDown = false;
+}
+
+// ============================================================
+// Raycasting (simplified)
+// ============================================================
+
+bool OgreWidget::screenToWorld(int screenX, int screenY, WorldPos& worldPos)
+{
+    if (!m_camera || !m_renderWindow) return false;
+
+    float nx = float(screenX) / width();
+    float ny = float(screenY) / height();
+    Ogre::Ray ray = m_camera->getCameraToViewportRay(nx, ny);
+
+    // Intersect with ground plane (y=0)
+    float t = -ray.getOrigin().y / ray.getDirection().y;
+    if (t > 0) {
+        Ogre::Vector3 pos = ray.getPoint(t);
+        worldPos = {pos.x, pos.y, pos.z};
+        return true;
+    }
+    return false;
+}
+
+QString OgreWidget::pickActor(int screenX, int screenY)
+{
+    // Simplified picking — cast ray and find nearest actor by distance
+    WorldPos worldPos;
+    if (!screenToWorld(screenX, screenY, worldPos)) return QString();
+
+    QString bestId;
+    float bestDist = 1e10f;
+    for (const auto& actor : m_world.actors) {
+        if (!actor.visible || !actor.selectable) continue;
+        if (!isLayerVisible(actor.layerId) || isLayerLocked(actor.layerId)) continue;
+
+        float dx = actor.transform.posX - worldPos.x;
+        float dy = actor.transform.posY - worldPos.y;
+        float dz = actor.transform.posZ - worldPos.z;
+        float dist = sqrt(dx*dx + dy*dy + dz*dz);
+        float radius = std::max({actor.transform.scaleX, actor.transform.scaleY, actor.transform.scaleZ}) * 0.5f;
+        if (dist < radius && dist < bestDist) {
+            bestDist = dist;
+            bestId = actor.id;
+        }
+    }
+    return bestId;
+}
+
+// ============================================================
+// Render loop
+// ============================================================
+
+void OgreWidget::render()
+{
+    if (m_root && m_renderWindow) {
+        // Update fly camera
+        if (m_flyMode)
+            updateCameraFromKeys(0.016f);
+
+        m_root->renderOneFrame();
+    }
+}
+
+// ============================================================
+// Shutdown
+// ============================================================
+
+void OgreWidget::shutdownOgre()
+{
+    if (m_timerId) {
+        killTimer(m_timerId);
+        m_timerId = 0;
+    }
+    clearActorRenderables();
+    clearRoads();
+    clearTerrain();
+    destroyGizmo();
+    destroyGrid();
+    if (m_root) {
+        delete m_root;
+        m_root = nullptr;
+    }
+    m_initialized = false;
 }

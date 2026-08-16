@@ -41,7 +41,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # package manager. Set CMAKE_PREFIX_PATH to point to your Qt install:
 #   cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.8.0/msvc2022_64"
 #
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network)
 
 # Enable Qt MOC/UIC/RCC auto-processing
 set(CMAKE_AUTOMOC ON)
@@ -277,10 +277,10 @@ set(APP_SOURCES
     src/ui/home/HomeWidget.cpp
     # UI - Road Studio (LaneMaker's MainWindow is used directly)
     src/ui/roadstudio/RoadStudioWidget.cpp
+    src/ui/roadstudio/OsmImportDialog.cpp
     # UI - Train Studio
-    src/ui/trainstudio/TrainStudioStore.cpp
-    src/ui/trainstudio/TrainViewport2D.cpp
     src/ui/trainstudio/TrainStudioWidget.cpp
+    src/ui/trainstudio/RailOsmImportDialog.cpp
     # UI - Terrain Studio
     src/ui/terrain/TerrainStore.cpp
     src/ui/terrain/TerrainViewport.cpp
@@ -290,9 +290,12 @@ set(APP_SOURCES
     src/ui/terrain/LayerStack.cpp
     src/ui/terrain/SearchBar.cpp
     src/ui/terrain/TerrainStudioWidget.cpp
+    # Terrain Pipeline (QGIS-like terrain data pipeline)
+    # All header-only — no .cpp files needed
     # UI - 3D Studio (OGRE-Next embedded)
     src/ui/studio3d/Studio3DWidget.cpp
     src/ui/studio3d/OgreWidget.cpp
+    src/ui/studio3d/EditorPanels.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -337,6 +340,11 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/providers
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/world
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/osm
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
@@ -553,6 +561,115 @@ if(BUILD_TESTS)
     )
     if(MSVC)
         target_compile_options(test_geotiff_writer PRIVATE /EHa /bigobj)
+    endif()
+
+    # ─── Terrain Pipeline test suite (26 tests) ───────────────
+    add_executable(test_terrain_pipeline
+        src/core/terrain/test_terrain_pipeline.cpp
+    )
+    set_target_properties(test_terrain_pipeline PROPERTIES AUTOMOC ON)
+    target_include_directories(test_terrain_pipeline PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/providers
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
+    )
+    target_link_libraries(test_terrain_pipeline PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Network
+        TIFF::TIFF
+        PNG::PNG
+    )
+    if(MSVC)
+        target_compile_options(test_terrain_pipeline PRIVATE /EHa /bigobj)
+    endif()
+
+    # ─── World Model test suite (3D Studio) ──────────────────
+    add_executable(test_world_model
+        src/core/world/test_world_model.cpp
+    )
+    set_target_properties(test_world_model PROPERTIES AUTOMOC ON)
+    target_include_directories(test_world_model PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/world
+    )
+    target_link_libraries(test_world_model PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
+    if(MSVC)
+        target_compile_options(test_world_model PRIVATE /EHa /bigobj)
+    endif()
+
+    # ─── World Workflow test suite (3D Studio) ──────────────
+    add_executable(test_world_workflow
+        src/core/world/test_world_workflow.cpp
+    )
+    set_target_properties(test_world_workflow PROPERTIES AUTOMOC ON)
+    target_include_directories(test_world_workflow PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/world
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/providers
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
+    )
+    target_link_libraries(test_world_workflow PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Network
+    )
+    if(MSVC)
+        target_compile_options(test_world_workflow PRIVATE /EHa /bigobj)
+    endif()
+
+    # ─── OSM Pipeline test suite ─────────────────────────────
+    add_executable(test_osm_pipeline
+        src/core/osm/test_osm_pipeline.cpp
+    )
+    set_target_properties(test_osm_pipeline PROPERTIES AUTOMOC ON)
+    target_include_directories(test_osm_pipeline PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/osm
+    )
+    target_link_libraries(test_osm_pipeline PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
+    if(MSVC)
+        target_compile_options(test_osm_pipeline PRIVATE /EHa /bigobj)
+    endif()
+
+    # ─── Houston OSM round-trip test ──────────────────────────
+    add_executable(test_houston_roundtrip
+        src/core/osm/test_houston_roundtrip.cpp
+    )
+    set_target_properties(test_houston_roundtrip PROPERTIES AUTOMOC ON)
+    target_include_directories(test_houston_roundtrip PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/osm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty
+    )
+    target_link_libraries(test_houston_roundtrip PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        lanemaker::core
+    )
+    if(MSVC)
+        target_compile_options(test_houston_roundtrip PRIVATE /EHa /bigobj)
     endif()
 endif()
 

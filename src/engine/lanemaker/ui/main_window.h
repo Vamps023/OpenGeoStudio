@@ -40,6 +40,11 @@ public:
     bool isSimulationActive() const;
     void openPreferences();
 
+    // Switch to rail mode (Train Studio) — changes profile catalog to rail profiles
+    // and cross-section visual to draw rails instead of road lanes.
+    void setRailMode(bool railMode);
+    bool isRailMode() const;
+
 protected:
     void resizeEvent(QResizeEvent*) override;
 

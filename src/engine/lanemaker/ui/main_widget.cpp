@@ -467,6 +467,52 @@ void MainWidget::onProfileChanged(int index)
 {
     if (index < 0) return;
     QString key = profileCombo->itemData(index).toString();
+
+    // Check if we're in rail mode (rail profiles loaded)
+    if (g_laneConfig && g_laneConfig->RailMode())
+    {
+        // Rail profile selection
+        roads::RailProfile railProfile = roads::RailProfileCatalog::get(key);
+
+        // Update lane width to match rail gauge + ballast
+        LM::LaneWidth = railProfile.gauge + 0.5;  // gauge + clearance
+
+        // For rail, use single lane per track; trackCount maps to laneCount
+        LM::LanePlan leftPlan, rightPlan;
+        if (railProfile.trackCount == 1)
+        {
+            leftPlan.laneCount = 0;
+            leftPlan.offsetx2 = 0;
+            rightPlan.laneCount = 1;
+            rightPlan.offsetx2 = 0;
+        }
+        else
+        {
+            // Multiple tracks: split evenly left/right
+            int rightLanes = (railProfile.trackCount + 1) / 2;
+            int leftLanes = railProfile.trackCount - rightLanes;
+            leftPlan.laneCount = static_cast<int8_t>(leftLanes);
+            leftPlan.offsetx2 = 0;
+            rightPlan.laneCount = static_cast<int8_t>(rightLanes);
+            rightPlan.offsetx2 = 0;
+        }
+
+        laneConfig->SetOption(leftPlan, rightPlan);
+        laneConfig->SetRailProfile(railProfile.trackCount,
+                                    railProfile.gauge,
+                                    railProfile.trackSpacing);
+
+        auto* spinner = laneConfig->findChild<QDoubleSpinBox*>();
+        if (spinner) {
+            QSignalBlocker blocker(spinner);
+            spinner->setValue(LM::LaneWidth);
+        }
+
+        if (mapViewGL) mapViewGL->update();
+        return;
+    }
+
+    // Road profile selection (default)
     roads::RoadProfile profile = roads::RoadProfileCatalog::get(key);
 
     // Update global lane width
@@ -493,6 +539,60 @@ void MainWidget::onProfileChanged(int index)
 
     // Force a repaint of the viewport to show updated geometry
     if (mapViewGL) mapViewGL->update();
+}
+
+void MainWidget::SetRailMode(bool railMode)
+{
+    if (railMode)
+    {
+        // Switch profile combo to rail profiles
+        if (profileCombo)
+        {
+            QSignalBlocker blocker(profileCombo);
+            profileCombo->clear();
+            auto railProfiles = roads::RailProfileCatalog::all();
+            for (auto it = railProfiles.begin(); it != railProfiles.end(); ++it) {
+                profileCombo->addItem(it.key(), it.key());
+            }
+            profileCombo->setCurrentText("single_standard");
+            profileCombo->setToolTip(
+                tr("Select a rail profile — sets gauge, track count, and spacing"));
+        }
+        // Switch cross-section visual to rail mode
+        if (laneConfig)
+        {
+            laneConfig->GotoRailMode();
+            auto defaultProfile = roads::RailProfileCatalog::get("single_standard");
+            laneConfig->SetRailProfile(defaultProfile.trackCount,
+                                        defaultProfile.gauge,
+                                        defaultProfile.trackSpacing);
+        }
+    }
+    else
+    {
+        // Restore road profiles
+        if (profileCombo)
+        {
+            QSignalBlocker blocker(profileCombo);
+            profileCombo->clear();
+            auto roadProfiles = roads::RoadProfileCatalog::all();
+            for (auto it = roadProfiles.begin(); it != roadProfiles.end(); ++it) {
+                profileCombo->addItem(it.key(), it.key());
+            }
+            profileCombo->setCurrentText("city_2x1");
+            profileCombo->setToolTip(
+                tr("Select a SCANeR-style road profile — sets lane width, lane count, and offsets"));
+        }
+        if (laneConfig)
+        {
+            laneConfig->GotoRoadMode();
+        }
+    }
+}
+
+bool MainWidget::IsRailMode() const
+{
+    return laneConfig && laneConfig->RailMode();
 }
 
 void MainWidget::gotoCreateLaneMode(bool checked)
