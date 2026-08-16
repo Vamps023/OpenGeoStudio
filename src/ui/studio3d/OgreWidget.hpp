@@ -77,6 +77,8 @@ public:
     void updateActorLayer(const QString& id, const QString& layerId);
     void renameActor(const QString& id, const QString& newName);
     int actorCount() const { return m_world.actorCount(); }
+    bool hasTerrain() const { return m_terrainItem != nullptr && m_hasHeightmap; }
+    bool hasRoads() const { return m_roadItem != nullptr; }
 
     // ─── Layer management ───
     void addLayer(const world::Layer& layer);

@@ -45,6 +45,8 @@ void ExportEngine::exportToDirectory(const QString& dir) {
 
     // Collect selected tiles
     m_pendingTiles.clear();
+    m_tileDemData.clear();
+    m_tileAlbedoData.clear();
     const auto& grid = m_store->tileGrid();
     const auto& selected = m_store->selectedTiles();
     for (const auto& tile : grid.tiles) {
@@ -71,6 +73,7 @@ void ExportEngine::exportToDirectory(const QString& dir) {
 
 void ExportEngine::processNextTile() {
     if (m_pendingTiles.isEmpty()) {
+        writeMergedOutputs(m_exportDir);
         writeManifest(m_exportDir);
         emit progress(100, "Export complete!");
         emit finished(true, QString("Exported %1 tiles to %2").arg(m_completedTiles).arg(m_exportDir));
@@ -194,8 +197,13 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         if (demTile.width != res || demTile.height != res) {
             demTile = terrain::DemDecoder::resample(demTile, res, res);
         }
-        writeDemOutput(demTile.elevations, res, res, tile, outputPath);
+        if (!writeDemOutput(demTile.elevations, res, res, tile, outputPath)) {
+            emit finished(false, QString("Failed to write DEM output for tile %1: %2")
+                              .arg(tile.id(), outputPath));
+            return;
+        }
 
+        m_tileDemData[tile.id()] = std::move(demTile.elevations);
         m_demDownloaded = true;
         if (m_imageryDownloaded) {
             m_completedTiles++;
@@ -252,8 +260,13 @@ void ExportEngine::loadLocalDemForTile(const terrain::Tile& tile, const QString&
     if (demTile.width != res || demTile.height != res) {
         demTile = terrain::DemDecoder::resample(demTile, res, res);
     }
-    writeDemOutput(demTile.elevations, res, res, tile, outputPath);
+    if (!writeDemOutput(demTile.elevations, res, res, tile, outputPath)) {
+        emit finished(false, QString("Failed to write DEM output for tile %1: %2")
+                          .arg(tile.id(), outputPath));
+        return;
+    }
 
+    m_tileDemData[tile.id()] = std::move(demTile.elevations);
     m_demDownloaded = true;
     if (m_imageryDownloaded) {
         m_completedTiles++;
@@ -282,8 +295,13 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
     }
 
     QImage scaled = srcImg.scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    writeImageryOutput(scaled, tile, outputPath);
+    if (!writeImageryOutput(scaled, tile, outputPath)) {
+        emit finished(false, QString("Failed to write imagery output for tile %1: %2")
+                          .arg(tile.id(), outputPath));
+        return;
+    }
 
+    m_tileAlbedoData[tile.id()] = scaled;
     m_imageryDownloaded = true;
     if (m_demDownloaded) {
         m_completedTiles++;
@@ -366,8 +384,13 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
                             Qt::SmoothTransformation);
         }
         // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
-        writeImageryOutput(img, tile, outputPath);
+        if (!writeImageryOutput(img, tile, outputPath)) {
+            emit finished(false, QString("Failed to write imagery output for tile %1: %2")
+                              .arg(tile.id(), outputPath));
+            return;
+        }
 
+        m_tileAlbedoData[tile.id()] = img;
         m_imageryDownloaded = true;
         if (m_demDownloaded) {
             m_completedTiles++;
@@ -383,15 +406,30 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
     switch (settings.demSource) {
     // Tiled DEM sources (no API key needed)
     case terrain::DemSource::AWS_Terrarium:
-        return QString("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%1/%2/%3.png")
-            .arg(15).arg(tile.col).arg(tile.row); // approx zoom 15
     case terrain::DemSource::Mapzen_Terrarium:
+    case terrain::DemSource::Mapbox_TerrainRGB: {
+        double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
+        double centerLon = (tile.bounds.east + tile.bounds.west) / 2.0;
+        double tileSizeKm = m_store->tileSizeKm();
+        int zoom;
+        if (tileSizeKm <= 1) zoom = 15;
+        else if (tileSizeKm <= 2) zoom = 14;
+        else if (tileSizeKm <= 4) zoom = 13;
+        else if (tileSizeKm <= 8) zoom = 12;
+        else zoom = 11;
+        double n = std::pow(2.0, zoom);
+        int x = static_cast<int>((centerLon + 180.0) / 360.0 * n);
+        double latRad = centerLat * M_PI / 180.0;
+        int y = static_cast<int>((1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 * n);
+
+        if (settings.demSource == terrain::DemSource::Mapbox_TerrainRGB) {
+            if (settings.mapboxToken.isEmpty()) return {};
+            return QString("https://api.mapbox.com/v4/mapbox.terrain-rgb/%1/%2/%3.png?access_token=%4")
+                .arg(zoom).arg(x).arg(y).arg(settings.mapboxToken);
+        }
         return QString("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%1/%2/%3.png")
-            .arg(15).arg(tile.col).arg(tile.row);
-    case terrain::DemSource::Mapbox_TerrainRGB:
-        if (settings.mapboxToken.isEmpty()) return {};
-        return QString("https://api.mapbox.com/v4/mapbox.terrain-rgb/%1/%2/%3.png?access_token=%4")
-            .arg(15).arg(tile.col).arg(tile.row).arg(settings.mapboxToken);
+            .arg(zoom).arg(x).arg(y);
+    }
     case terrain::DemSource::NASA_EarthData_Copernicus: {
         // Copernicus DEM GLO-30 via AWS S3 (free, no key)
         // Tiles are named by SOUTHWEST (lower-left) corner, 1x1 degree grid
@@ -696,13 +734,42 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
     return ext;
 }
 
-void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
+bool ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                                    int width, int height,
                                    const terrain::Tile& tile,
                                    const QString& outputPath)
 {
     const auto& settings = m_store->exportSettings();
     terrain::RasterExtent ext = buildRasterExtent(tile);
+    bool written = false;
+
+    // PNG fallback keeps the terrain usable by OGRE even if libtiff cannot
+    // write to a synced/Unicode project path. It stores normalized elevation;
+    // the selected GeoTIFF remains the preferred output when it succeeds.
+    auto writePreviewPng = [&]() {
+        if (elevations.empty() || width <= 0 || height <= 0) return false;
+        float zMin = std::numeric_limits<float>::max();
+        float zMax = std::numeric_limits<float>::lowest();
+        for (float e : elevations) {
+            if (e != -9999.0f) {
+                zMin = std::min(zMin, e);
+                zMax = std::max(zMax, e);
+            }
+        }
+        if (zMax <= zMin) { zMin = 0.0f; zMax = 1.0f; }
+        const float range = zMax - zMin;
+        QImage preview(width, height, QImage::Format_Grayscale8);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                float e = elevations[y * width + x];
+                if (e == -9999.0f) e = zMin;
+                const int value = qBound(0, int(((e - zMin) / range) * 255.0f), 255);
+                preview.setPixelColor(x, y, QColor(value, value, value));
+            }
+        }
+        return RasterWriter::writePngWithWorldFile(outputPath, preview, ext) &&
+               QFileInfo::exists(outputPath);
+    };
 
     // Compression setting
     terrain::Compression comp = settings.compressDeflate ?
@@ -715,8 +782,9 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
     switch (settings.heightmapFormat) {
     case terrain::HeightmapFormat::GeoTIFF_Float32:
         // Full precision elevation — QGIS preferred for DEM
-        RasterWriter::writeFloat32GeoTiff(geotiffPath, elevations,
-            width, height, ext, -9999.0f, comp);
+        written = RasterWriter::writeFloat32GeoTiff(geotiffPath, elevations,
+            width, height, ext, -9999.0f, comp) && QFileInfo::exists(geotiffPath);
+        if (!written) written = writePreviewPng();
         break;
 
     case terrain::HeightmapFormat::GeoTIFF_Int16:
@@ -728,8 +796,9 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                 int16Data[i] = (e == -9999.0f) ? -9999 :
                     static_cast<int16_t>(std::max(-32768.0f, std::min(32767.0f, e)));
             }
-            RasterWriter::writeInt16GeoTiff(geotiffPath, int16Data,
-                width, height, ext, -9999, comp);
+            written = RasterWriter::writeInt16GeoTiff(geotiffPath, int16Data,
+                width, height, ext, -9999, comp) && QFileInfo::exists(geotiffPath);
+            if (!written) written = writePreviewPng();
         }
         break;
 
@@ -753,8 +822,9 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                 if (e == -9999.0f) e = zMin;
                 uint16Data[i] = static_cast<uint16_t>(((e - zMin) / zRange) * 65535.0f);
             }
-            RasterWriter::writeUInt16GeoTiff(geotiffPath, uint16Data,
-                width, height, ext, 0, comp);
+            written = RasterWriter::writeUInt16GeoTiff(geotiffPath, uint16Data,
+                width, height, ext, 0, comp) && QFileInfo::exists(geotiffPath);
+            if (!written) written = writePreviewPng();
         }
         break;
 
@@ -781,7 +851,8 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                     img.setPixel(x, y, qRgba64(val, val, val, 65535));
                 }
             }
-            RasterWriter::writePngWithWorldFile(outputPath, img, ext);
+            written = RasterWriter::writePngWithWorldFile(outputPath, img, ext) &&
+                      QFileInfo::exists(outputPath);
         }
         break;
 
@@ -791,6 +862,7 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
             QString r16Path = outputPath;
             r16Path.replace(".png", ".r16");
             QFile r16File(r16Path);
+            bool r16Written = false;
             if (r16File.open(QIODevice::WriteOnly)) {
                 float zMin = std::numeric_limits<float>::max();
                 float zMax = std::numeric_limits<float>::lowest();
@@ -808,9 +880,13 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                     }
                 }
                 r16File.close();
+                r16Written = true;
             }
             // Write world file for R16
-            RasterWriter::writeWorldFile(r16Path, width, height, ext);
+            r16Written = r16Written &&
+                         RasterWriter::writeWorldFile(r16Path, width, height, ext) &&
+                         QFileInfo::exists(r16Path);
+            written = r16Written || writePreviewPng();
         }
         break;
 
@@ -819,14 +895,16 @@ void ExportEngine::writeDemOutput(const std::vector<float>& elevations,
         // No heightmap output (albedo only)
         break;
     }
+    return written;
 }
 
-void ExportEngine::writeImageryOutput(const QImage& img,
+bool ExportEngine::writeImageryOutput(const QImage& img,
                                        const terrain::Tile& tile,
                                        const QString& outputPath)
 {
     const auto& settings = m_store->exportSettings();
     terrain::RasterExtent ext = buildRasterExtent(tile);
+    bool written = false;
 
     switch (settings.albedoFormat) {
     case terrain::AlbedoFormat::GeoTIFF_RGB:
@@ -836,16 +914,19 @@ void ExportEngine::writeImageryOutput(const QImage& img,
                 terrain::Compression::Deflate : terrain::Compression::None;
             QString geotiffPath = outputPath;
             geotiffPath.replace(".png", ".tif");
-            RasterWriter::writeRgbGeoTiff(geotiffPath, img, ext, comp);
+            written = RasterWriter::writeRgbGeoTiff(geotiffPath, img, ext, comp) &&
+                      QFileInfo::exists(geotiffPath);
         }
         break;
 
     case terrain::AlbedoFormat::PNG:
     default:
         // PNG + world file (QGIS layout exporter pattern)
-        RasterWriter::writePngWithWorldFile(outputPath, img, ext);
+        written = RasterWriter::writePngWithWorldFile(outputPath, img, ext) &&
+                  QFileInfo::exists(outputPath);
         break;
     }
+    return written;
 }
 
 void ExportEngine::writeManifest(const QString& dir) {
@@ -885,6 +966,139 @@ void ExportEngine::writeManifest(const QString& dir) {
         file.write(doc.toJson(QJsonDocument::Indented));
         file.close();
     }
+
+    // Record merged products in the manifest when they were produced
+    if (QFileInfo::exists(dir + "/heightmap_merged.png")) {
+        QJsonObject merged;
+        merged["heightmap"] = "heightmap_merged.png";
+        if (QFileInfo::exists(dir + "/heightmap_merged.tif"))
+            merged["heightmapGeotiff"] = "heightmap_merged.tif";
+        if (QFileInfo::exists(dir + "/albedo_merged.png"))
+            merged["albedo"] = "albedo_merged.png";
+        if (QFileInfo::exists(dir + "/albedo_merged.tif"))
+            merged["albedoGeotiff"] = "albedo_merged.tif";
+        manifest["merged"] = merged;
+
+        QJsonDocument outDoc(manifest);
+        QFile outFile(dir + "/terrain-manifest.json");
+        if (outFile.open(QIODevice::WriteOnly)) {
+            outFile.write(outDoc.toJson(QJsonDocument::Indented));
+            outFile.close();
+        }
+    }
+}
+
+// ============================================================
+// Merged terrain product — assemble all exported tiles into one
+// usable heightmap and albedo for 3D Studio and Unigine import.
+// ============================================================
+
+void ExportEngine::writeMergedOutputs(const QString& dir) {
+    const auto& grid = m_store->tileGrid();
+    const auto& settings = m_store->exportSettings();
+    const int demRes = settings.heightmapResolution;
+    const int albRes = settings.albedoResolution;
+
+    if (grid.rows <= 0 || grid.cols <= 0) return;
+    if (m_tileDemData.isEmpty() && m_tileAlbedoData.isEmpty()) return;
+
+    const int mergedH = grid.rows * demRes;
+    const int mergedW = grid.cols * demRes;
+    const int mergedAlbH = grid.rows * albRes;
+    const int mergedAlbW = grid.cols * albRes;
+
+    // Assemble DEM merged data (row 0 = north)
+    std::vector<float> mergedDem(mergedW * mergedH, -9999.0f);
+    for (const auto& tile : grid.tiles) {
+        if (!m_tileDemData.contains(tile.id())) continue;
+        const auto& data = m_tileDemData[tile.id()];
+        if (data.empty() || data.size() != static_cast<size_t>(demRes * demRes)) continue;
+        const int baseX = tile.col * demRes;
+        const int baseY = (grid.rows - 1 - tile.row) * demRes;
+        for (int y = 0; y < demRes; ++y) {
+            for (int x = 0; x < demRes; ++x) {
+                mergedDem[(baseY + y) * mergedW + baseX + x] = data[y * demRes + x];
+            }
+        }
+    }
+
+    // Assemble albedo merged image
+    QImage mergedAlb;
+    if (!m_tileAlbedoData.isEmpty()) {
+        mergedAlb = QImage(mergedAlbW, mergedAlbH, QImage::Format_RGB888);
+        mergedAlb.fill(Qt::darkGray);
+        QPainter painter(&mergedAlb);
+        for (const auto& tile : grid.tiles) {
+            if (!m_tileAlbedoData.contains(tile.id())) continue;
+            const QImage& img = m_tileAlbedoData[tile.id()];
+            if (img.isNull() || img.width() == 0 || img.height() == 0) continue;
+            int baseX = tile.col * albRes;
+            int baseY = (grid.rows - 1 - tile.row) * albRes;
+            painter.drawImage(baseX, baseY, img);
+        }
+        painter.end();
+    }
+
+    // Build extent from full selected bounds
+    terrain::Tile mergedTile;
+    mergedTile.bounds = m_store->selectedBounds();
+    terrain::RasterExtent mergedExt = buildRasterExtent(mergedTile);
+    terrain::Compression comp = settings.compressDeflate ?
+        terrain::Compression::Deflate : terrain::Compression::None;
+
+    // Write merged 8-bit PNG preview for 3D Studio
+    float zMin = std::numeric_limits<float>::max();
+    float zMax = std::numeric_limits<float>::lowest();
+    for (float e : mergedDem) {
+        if (e != -9999.0f) {
+            zMin = std::min(zMin, e);
+            zMax = std::max(zMax, e);
+        }
+    }
+    if (zMax <= zMin) { zMin = 0.0f; zMax = 1.0f; }
+    const float range = zMax - zMin;
+    QImage png(mergedW, mergedH, QImage::Format_Grayscale8);
+    for (int y = 0; y < mergedH; ++y) {
+        uint8_t* line = png.scanLine(y);
+        for (int x = 0; x < mergedW; ++x) {
+            float e = mergedDem[y * mergedW + x];
+            if (e == -9999.0f) e = zMin;
+            int v = qBound(0, static_cast<int>(((e - zMin) / range) * 255.0f), 255);
+            line[x] = static_cast<uint8_t>(v);
+        }
+    }
+    QString pngPath = dir + "/heightmap_merged.png";
+    bool pngOk = RasterWriter::writePngWithWorldFile(pngPath, png, mergedExt) &&
+                 QFileInfo::exists(pngPath);
+    if (!pngOk) m_log.warn("Failed to write merged heightmap PNG:", pngPath);
+
+    // Write full precision merged GeoTIFF for Unigine / QGIS
+    if (settings.heightmapFormat != terrain::HeightmapFormat::None) {
+        QString tifPath = dir + "/heightmap_merged.tif";
+        bool tifOk = RasterWriter::writeFloat32GeoTiff(tifPath, mergedDem,
+            mergedW, mergedH, mergedExt, -9999.0f, comp) &&
+            QFileInfo::exists(tifPath);
+        if (!tifOk) m_log.warn("Failed to write merged heightmap GeoTIFF:", tifPath);
+    }
+
+    // Write merged albedo PNG (and optionally GeoTIFF)
+    if (!mergedAlb.isNull()) {
+        QString albPngPath = dir + "/albedo_merged.png";
+        bool albPngOk = RasterWriter::writePngWithWorldFile(albPngPath, mergedAlb, mergedExt) &&
+                        QFileInfo::exists(albPngPath);
+        if (!albPngOk) m_log.warn("Failed to write merged albedo PNG:", albPngPath);
+
+        if (settings.albedoFormat == terrain::AlbedoFormat::GeoTIFF_RGB) {
+            QString albTifPath = dir + "/albedo_merged.tif";
+            bool albTifOk = RasterWriter::writeRgbGeoTiff(albTifPath, mergedAlb, mergedExt, comp) &&
+                            QFileInfo::exists(albTifPath);
+            if (!albTifOk) m_log.warn("Failed to write merged albedo GeoTIFF:", albTifPath);
+        }
+    }
+
+    m_log.info("Merged terrain product:", mergedW, "x", mergedH,
+               "DEM tiles:", m_tileDemData.size(),
+               "albedo tiles:", m_tileAlbedoData.size());
 }
 
 // ============================================================

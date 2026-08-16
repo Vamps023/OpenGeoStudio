@@ -77,6 +77,7 @@ private:
     QString sceneFilePath() const;
     QString worldFilePath() const;
     QJsonObject resolveScenePaths(const QJsonObject& scene);
+    void loadMissingProjectAssets();
 
     ApplicationContext* m_ctx;
 

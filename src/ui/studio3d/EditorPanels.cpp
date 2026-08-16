@@ -486,6 +486,9 @@ ContentBrowser::ContentBrowser(OgreWidget* ogre, QWidget* parent)
     : QWidget(parent), m_ogre(ogre)
 {
     auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(6);
+    setObjectName(QStringLiteral("contentBrowser"));
 
     // Path bar
     auto* pathLayout = new QHBoxLayout();
@@ -504,8 +507,11 @@ ContentBrowser::ContentBrowser(OgreWidget* ogre, QWidget* parent)
     // Asset list
     m_list = new QListWidget(this);
     m_list->setViewMode(QListWidget::IconMode);
-    m_list->setIconSize(QSize(48, 48));
+    m_list->setIconSize(QSize(56, 56));
+    m_list->setGridSize(QSize(110, 82));
     m_list->setResizeMode(QListWidget::Adjust);
+    m_list->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_list->setToolTip("Double-click an asset to select it for the active editor workflow");
     connect(m_list, &QListWidget::itemDoubleClicked, this, &ContentBrowser::onItemDoubleClicked);
     layout->addWidget(m_list);
 
@@ -529,15 +535,20 @@ void ContentBrowser::refresh()
 
     // List files
     QStringList filters;
-    filters << "*.obj" << "*.fbx" << "*.mesh" << "*.glb" << "*.gltf" << "*.png" << "*.jpg" << "*.tif";
+    filters << "*.obj" << "*.fbx" << "*.mesh" << "*.glb" << "*.gltf"
+            << "*.png" << "*.jpg" << "*.jpeg" << "*.tif" << "*.tiff"
+            << "*.dds" << "*.tga";
     QStringList files = dir.entryList(filters, QDir::Files);
     for (const auto& f : files) {
         auto* item = new QListWidgetItem(f, m_list);
         item->setData(Qt::UserRole, m_currentDir + "/" + f);
         // Set icon based on type
         QString ext = QFileInfo(f).suffix().toLower();
-        if (ext == "png" || ext == "jpg" || ext == "tif")
+        if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
+            ext == "tif" || ext == "tiff")
             item->setIcon(QIcon(m_currentDir + "/" + f));
+        else if (ext == "dds" || ext == "tga")
+            item->setIcon(QIcon::fromTheme("image-x-generic"));
         else
             item->setIcon(QIcon::fromTheme("document"));
     }
@@ -548,6 +559,8 @@ void ContentBrowser::onItemDoubleClicked(QListWidgetItem* item)
     QString path = item->data(Qt::UserRole).toString();
     QString ext = QFileInfo(path).suffix().toLower();
     QString type = "mesh";
-    if (ext == "png" || ext == "jpg" || ext == "tif") type = "texture";
+    if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
+        ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")
+        type = "texture";
     emit assetRequested(path, type);
 }

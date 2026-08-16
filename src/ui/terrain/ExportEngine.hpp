@@ -17,6 +17,8 @@
 #include <QObject>
 #include <QString>
 #include <QNetworkAccessManager>
+#include <QMap>
+#include <QImage>
 #include <vector>
 
 class ExportEngine : public QObject {
@@ -37,18 +39,19 @@ private:
     void loadLocalDemForTile(const terrain::Tile& tile, const QString& outputPath);
     void loadLocalImageryForTile(const terrain::Tile& tile, const QString& outputPath);
     void writeManifest(const QString& dir);
+    void writeMergedOutputs(const QString& dir);
     void writeGeoTiff(const QString& path, const QImage& heightmap,
                       const terrain::GeoBounds& bounds);
     void processNextTile();
 
     // QGIS-style DEM output using RasterWriter
-    void writeDemOutput(const std::vector<float>& elevations,
+    bool writeDemOutput(const std::vector<float>& elevations,
                         int width, int height,
                         const terrain::Tile& tile,
                         const QString& outputPath);
 
     // QGIS-style imagery output using RasterWriter
-    void writeImageryOutput(const QImage& img,
+    bool writeImageryOutput(const QImage& img,
                             const terrain::Tile& tile,
                             const QString& outputPath);
 
@@ -72,6 +75,8 @@ private:
     bool m_demDownloaded = false;
     bool m_imageryDownloaded = false;
     terrain::Tile m_currentTile;
+    QMap<QString, std::vector<float>> m_tileDemData;
+    QMap<QString, QImage> m_tileAlbedoData;
     Logger m_log{"ExportEngine"};
 
     QString demUrlForTile(const terrain::Tile& tile) const;

@@ -8,6 +8,8 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QSplitter>
+#include <QScrollArea>
+#include <QFrame>
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
@@ -15,12 +17,15 @@
 #include <QSlider>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QFileDialog>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QCoreApplication>
 #include <cmath>
 #include <cstdlib>
 
@@ -34,7 +39,9 @@ Studio3DWidget::~Studio3DWidget() = default;
 
 void Studio3DWidget::setupUI()
 {
-    auto* mainLayout = new QHBoxLayout(this);
+    auto* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(4, 4, 4, 4);
+    mainLayout->setSpacing(4);
 
     // ─── Left: OGRE 3D Viewport ───
     auto* viewportGroup = new QGroupBox("3D Viewport (OGRE-Next)", this);
@@ -53,20 +60,21 @@ void Studio3DWidget::setupUI()
     viewportLayout->addLayout(camLayout);
 
     viewportGroup->setLayout(viewportLayout);
-    mainLayout->addWidget(viewportGroup, 3);
 
-    // ─── Center-Right: Editor Panels (Outliner, Inspector, Layers) ───
-    auto* editorSplitter = new QSplitter(Qt::Vertical, this);
-    editorSplitter->setMaximumWidth(300);
+    // ─── Left: Unreal-style World Outliner + Layers ───
+    auto* leftPanel = new QWidget(this);
+    leftPanel->setMinimumWidth(220);
+    leftPanel->setMaximumWidth(300);
+    auto* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(4);
 
-    m_outliner = new WorldOutliner(m_ogreWidget, this);
+    m_outliner = new WorldOutliner(m_ogreWidget, leftPanel);
+    m_layerPanel = new LayerPanel(m_ogreWidget, leftPanel);
+    leftLayout->addWidget(m_outliner, 3);
+    leftLayout->addWidget(m_layerPanel, 1);
+
     m_inspector = new Inspector(m_ogreWidget, this);
-    m_layerPanel = new LayerPanel(m_ogreWidget, this);
-
-    editorSplitter->addWidget(m_outliner);
-    editorSplitter->addWidget(m_inspector);
-    editorSplitter->addWidget(m_layerPanel);
-    editorSplitter->setSizes({200, 300, 150});
 
     // Connect signals
     connect(m_outliner, &WorldOutliner::actorSelected, this, &Studio3DWidget::onActorSelected);
@@ -75,9 +83,7 @@ void Studio3DWidget::setupUI()
     connect(m_ogreWidget, &OgreWidget::actorRemoved, [this](const QString&) { m_outliner->refresh(); });
     connect(m_ogreWidget, &OgreWidget::sceneChanged, [this]() { m_outliner->refresh(); m_layerPanel->refresh(); });
 
-    mainLayout->addWidget(editorSplitter, 1);
-
-    // ─── Right: Controls Panel ───
+    // ─── Right: Details + world controls ───
     auto* sidePanel = new QWidget(this);
     auto* sideLayout = new QVBoxLayout(sidePanel);
     sidePanel->setMaximumWidth(350);
@@ -270,11 +276,57 @@ void Studio3DWidget::setupUI()
     sideLayout->addWidget(logGroup);
 
     sideLayout->addStretch();
-    mainLayout->addWidget(sidePanel, 1);
+
+    sidePanel->setMaximumWidth(QWIDGETSIZE_MAX);
+    auto* controlsScroll = new QScrollArea(this);
+    controlsScroll->setWidgetResizable(true);
+    controlsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    controlsScroll->setFrameShape(QFrame::NoFrame);
+    controlsScroll->setWidget(sidePanel);
+
+    auto* rightPanel = new QSplitter(Qt::Vertical, this);
+    rightPanel->setMinimumWidth(300);
+    rightPanel->setMaximumWidth(380);
+    rightPanel->addWidget(m_inspector);
+    rightPanel->addWidget(controlsScroll);
+    rightPanel->setStretchFactor(0, 3);
+    rightPanel->setStretchFactor(1, 2);
+    rightPanel->setSizes({420, 420});
+
+    // ─── Main Unreal-style editor row ───
+    auto* editorRow = new QSplitter(Qt::Horizontal, this);
+    editorRow->setChildrenCollapsible(false);
+    editorRow->addWidget(leftPanel);
+    editorRow->addWidget(viewportGroup);
+    editorRow->addWidget(rightPanel);
+    editorRow->setStretchFactor(0, 0);
+    editorRow->setStretchFactor(1, 1);
+    editorRow->setStretchFactor(2, 0);
+    editorRow->setSizes({250, 900, 350});
+    mainLayout->addWidget(editorRow, 1);
+
+    // ─── Bottom: Unreal-style Content Browser / Asset Library ───
+    m_contentBrowser = new ContentBrowser(m_ogreWidget, this);
+    m_contentBrowser->setMinimumHeight(150);
+    m_contentBrowser->setMaximumHeight(230);
+    QString assetDir;
+    if (m_ctx && m_ctx->projects().hasProject()) {
+        assetDir = QDir(m_ctx->projects().current().basePath).filePath("Assets");
+    }
+    if (assetDir.isEmpty() || !QDir(assetDir).exists()) {
+        assetDir = QCoreApplication::applicationDirPath();
+    }
+    m_contentBrowser->setAssetDirectory(assetDir);
+    connect(m_contentBrowser, &ContentBrowser::assetRequested,
+            this, [this](const QString& path, const QString& type) {
+        appendLog(QString("Asset selected (%1): %2").arg(type, path));
+        m_statusLabel->setText(QString("Asset selected: %1").arg(QFileInfo(path).fileName()));
+    });
+    mainLayout->addWidget(m_contentBrowser, 0);
 
     setLayout(mainLayout);
 
-    appendLog("3D Studio ready (OGRE-Next embedded)");
+    appendLog("3D Studio ready (Unreal-style editor layout)");
 }
 
 void Studio3DWidget::appendLog(const QString& msg)
@@ -285,61 +337,60 @@ void Studio3DWidget::appendLog(const QString& msg)
 QString Studio3DWidget::findHeightmapInProject()
 {
     if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
+    const QString projectDir = QDir::cleanPath(m_ctx->projects().current().basePath);
+    const QString terrainDir = QDir(projectDir).filePath("Terrain");
 
-    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
-
-    // Prefer merged heightmap in Terrain root
-    if (QDir(terrainDir).exists()) {
-        QStringList mergedFilters;
-        mergedFilters << "heightmap*.png" << "heightmap*.tif" << "heightmap*.tiff";
-        QStringList mergedFiles = QDir(terrainDir).entryList(mergedFilters, QDir::Files);
-        if (!mergedFiles.isEmpty()) return terrainDir + "/" + mergedFiles.first();
+    // Prefer merged products, then exported tiles. Support both the normal
+    // Terrain layout and projects where the export created Terrain/Terrain.
+    const QStringList roots = {
+        terrainDir,
+        QDir(projectDir).filePath("Exports"),
+        projectDir
+    };
+    const QStringList preferred = {"heightmap_merged.png", "heightmap_merged.tif",
+                                   "heightmap_merged.tiff"};
+    for (const QString& root : roots) {
+        if (!QDir(root).exists()) continue;
+        for (const QString& name : preferred) {
+            QDirIterator it(root, {name}, QDir::Files, QDirIterator::Subdirectories);
+            if (it.hasNext()) return it.next();
+        }
     }
-
-    // Check heightmaps subfolder
-    QString hmDir = terrainDir + "/heightmaps";
-    if (QDir(hmDir).exists()) {
-        QStringList filters;
-        filters << "*.png" << "*.tif" << "*.tiff";
-        QStringList files = QDir(hmDir).entryList(filters, QDir::Files);
-        if (!files.isEmpty()) return hmDir + "/" + files.first();
+    for (const QString& root : roots) {
+        if (!QDir(root).exists()) continue;
+        QDirIterator it(root, {"*.png", "*.tif", "*.tiff"},
+                        QDir::Files, QDirIterator::Subdirectories);
+        if (it.hasNext()) return it.next();
     }
-
-    // Check Terrain root for any TIFF/PNG
-    if (QDir(terrainDir).exists()) {
-        QStringList filters;
-        filters << "*.tif" << "*.tiff" << "*.png";
-        QStringList files = QDir(terrainDir).entryList(filters, QDir::Files);
-        if (!files.isEmpty()) return terrainDir + "/" + files.first();
-    }
-
     return QString();
 }
 
 QString Studio3DWidget::findAlbedoInProject()
 {
     if (!m_ctx || !m_ctx->projects().hasProject()) return QString();
-
-    QString terrainDir = m_ctx->projects().current().basePath + "/Terrain";
-
-    // Prefer merged albedo in Terrain root
-    if (QDir(terrainDir).exists()) {
-        QStringList mergedFilters;
-        mergedFilters << "albedo*.png" << "albedo*.tif" << "albedo*.tiff"
-                      << "satellite*.png" << "imagery*.png";
-        QStringList mergedFiles = QDir(terrainDir).entryList(mergedFilters, QDir::Files);
-        if (!mergedFiles.isEmpty()) return terrainDir + "/" + mergedFiles.first();
+    const QString projectDir = QDir::cleanPath(m_ctx->projects().current().basePath);
+    const QString terrainDir = QDir(projectDir).filePath("Terrain");
+    const QStringList roots = {
+        terrainDir,
+        QDir(projectDir).filePath("Exports"),
+        projectDir
+    };
+    const QStringList preferred = {"albedo_merged.png", "albedo_merged.tif",
+                                   "albedo_merged.tiff", "satellite.png",
+                                   "imagery.png"};
+    for (const QString& root : roots) {
+        if (!QDir(root).exists()) continue;
+        for (const QString& name : preferred) {
+            QDirIterator it(root, {name}, QDir::Files, QDirIterator::Subdirectories);
+            if (it.hasNext()) return it.next();
+        }
     }
-
-    // Check albedo subfolder
-    QString albDir = terrainDir + "/albedo";
-    if (QDir(albDir).exists()) {
-        QStringList filters;
-        filters << "*.png" << "*.tif" << "*.tiff";
-        QStringList files = QDir(albDir).entryList(filters, QDir::Files);
-        if (!files.isEmpty()) return albDir + "/" + files.first();
+    for (const QString& root : roots) {
+        if (!QDir(root).exists()) continue;
+        QDirIterator it(root, {"*.png", "*.tif", "*.tiff"},
+                        QDir::Files, QDirIterator::Subdirectories);
+        if (it.hasNext()) return it.next();
     }
-
     return QString();
 }
 
@@ -352,13 +403,23 @@ void Studio3DWidget::onLoadTerrain()
 
     QString heightmapPath = findHeightmapInProject();
     if (heightmapPath.isEmpty()) {
-        QMessageBox::warning(this, "No Terrain Data",
-            "No heightmap found in project.\n"
-            "Download terrain in Terrain Studio first.");
-        return;
+        const QString projectPath = m_ctx->projects().current().basePath;
+        QMessageBox::information(this, "Select Terrain Heightmap",
+            QString("No heightmap was found automatically in:\n%1\n\n"
+                    "Select an exported PNG or GeoTIFF manually.").arg(projectPath));
+        heightmapPath = QFileDialog::getOpenFileName(
+            this, "Select Terrain Heightmap", projectPath,
+            "Terrain files (*.png *.tif *.tiff);;All files (*.*)");
+        if (heightmapPath.isEmpty()) return;
     }
 
     QString albedoPath = findAlbedoInProject();
+    if (albedoPath.isEmpty()) {
+        albedoPath = QFileDialog::getOpenFileName(
+            this, "Select Terrain Albedo (Optional)",
+            QFileInfo(heightmapPath).absolutePath(),
+            "Imagery files (*.png *.jpg *.jpeg *.tif *.tiff);;All files (*.*)");
+    }
 
     float heightScale = static_cast<float>(m_heightScaleSlider->value());
     // Use 4000m for 4km terrain areas, or derive from project bounds if available
@@ -382,6 +443,13 @@ void Studio3DWidget::onLoadTerrain()
     m_statusLabel->setText("Loading terrain...");
     m_ogreWidget->loadTerrain(heightmapPath, albedoPath, terrainSize, heightScale);
 
+    if (!m_ogreWidget->hasTerrain()) {
+        m_statusLabel->setText("Terrain load failed");
+        appendLog("Terrain load failed. Check the selected heightmap and OGRE log.");
+        QMessageBox::warning(this, "Terrain Load Failed",
+            QString("The selected heightmap could not be loaded:\n%1").arg(heightmapPath));
+        return;
+    }
     m_statusLabel->setText("Terrain loaded");
     appendLog("Terrain loaded successfully.");
 }
@@ -641,11 +709,56 @@ void Studio3DWidget::onLoadScene()
     m_statusLabel->setText("Scene loaded");
 }
 
+void Studio3DWidget::loadMissingProjectAssets()
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return;
+
+    // A previously saved scene may exist without terrain because the scene
+    // was saved before Terrain Studio finished exporting. Always discover
+    // project assets that are still missing instead of treating that scene
+    // file as authoritative for all resources.
+    if (!m_ogreWidget->hasTerrain()) {
+        const QString hmPath = findHeightmapInProject();
+        if (!hmPath.isEmpty()) {
+            const QString albPath = findAlbedoInProject();
+            float heightScale = static_cast<float>(m_heightScaleSlider->value());
+            float terrainSize = 4000.0f;
+            if (m_ctx->projects().current().bounds.valid) {
+                const auto& b = m_ctx->projects().current().bounds;
+                const double latMid = (b.minLat + b.maxLat) / 2.0;
+                const double latM = (b.maxLat - b.minLat) * 111320.0;
+                const double lonM = (b.maxLon - b.minLon) * 111320.0 *
+                    cos(latMid * 3.14159265358979 / 180.0);
+                terrainSize = static_cast<float>(std::max(latM, lonM));
+                if (terrainSize < 10.0f) terrainSize = 4000.0f;
+            }
+            m_ogreWidget->loadTerrain(hmPath, albPath, terrainSize, heightScale);
+            appendLog("Terrain auto-loaded from project: " + hmPath);
+        } else {
+            appendLog("No exported heightmap found under project/Terrain.");
+        }
+    }
+
+    if (!m_ogreWidget->hasRoads()) {
+        const QString xodrPath = findXodrInProject();
+        if (!xodrPath.isEmpty()) {
+            m_ogreWidget->loadRoads(xodrPath);
+            appendLog("Roads auto-loaded from project: " + xodrPath);
+        }
+    }
+}
+
 void Studio3DWidget::onProjectOpened()
 {
-    // Auto-load the saved scene if it exists (only once per project open)
+    // Auto-load the saved scene if it exists (only once per project open),
+    // then independently load any terrain/road artifacts missing from it.
     if (!m_ctx || !m_ctx->projects().hasProject()) return;
-    if (m_sceneAutoLoaded) return;  // Already loaded for this session
+    if (m_sceneAutoLoaded) {
+        // This supports the workflow: export terrain in Terrain Studio,
+        // then return to an already-open 3D Studio workspace.
+        QTimer::singleShot(100, this, [this]() { loadMissingProjectAssets(); });
+        return;
+    }
     m_sceneAutoLoaded = true;
 
     QString path = sceneFilePath();
@@ -657,42 +770,18 @@ void Studio3DWidget::onProjectOpened()
             file.close();
             QJsonDocument doc = QJsonDocument::fromJson(data);
             if (!doc.isNull()) {
-                // Defer to allow OGRE to initialize first
                 QTimer::singleShot(500, this, [this, doc]() {
                     m_ogreWidget->loadScene(resolveScenePaths(doc.object()));
                     appendLog("Scene auto-loaded from project.");
+                    loadMissingProjectAssets();
                 });
+                return;
             }
         }
-    } else {
-        // No saved scene — try auto-loading terrain + roads individually
-        QTimer::singleShot(500, this, [this]() {
-            QString hmPath = findHeightmapInProject();
-            if (!hmPath.isEmpty()) {
-                QString albPath = findAlbedoInProject();
-                float heightScale = static_cast<float>(m_heightScaleSlider->value());
-                float terrainSize = 4000.0f;
-                if (m_ctx && m_ctx->projects().hasProject() &&
-                    m_ctx->projects().current().bounds.valid) {
-                    auto& b = m_ctx->projects().current().bounds;
-                    double latMid = (b.minLat + b.maxLat) / 2.0;
-                    double latM = (b.maxLat - b.minLat) * 111320.0;
-                    double lonM = (b.maxLon - b.minLon) * 111320.0 *
-                        cos(latMid * 3.14159265358979 / 180.0);
-                    terrainSize = static_cast<float>(std::max(latM, lonM));
-                    if (terrainSize < 10.0f) terrainSize = 4000.0f;
-                }
-                m_ogreWidget->loadTerrain(hmPath, albPath, terrainSize, heightScale);
-                appendLog("Terrain auto-loaded from project.");
-            }
-
-            QString xodrPath = findXodrInProject();
-            if (!xodrPath.isEmpty()) {
-                m_ogreWidget->loadRoads(xodrPath);
-                appendLog("Roads auto-loaded from project.");
-            }
-        });
     }
+
+    // No usable saved scene — load terrain and roads independently.
+    QTimer::singleShot(500, this, [this]() { loadMissingProjectAssets(); });
 }
 
 void Studio3DWidget::onProjectClosed()
