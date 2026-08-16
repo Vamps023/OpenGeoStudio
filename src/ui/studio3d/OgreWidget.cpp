@@ -7,10 +7,14 @@
 #include <QMouseEvent>
 #include <QTimer>
 #include <QDir>
+#include <QFile>
 #include "../../core/logger/Logger.hpp"
 #include <QImage>
 #include <QFileInfo>
 #include <QDateTime>
+#include <algorithm>
+#include <limits>
+#include "../terrain/DemDecoder.hpp"
 
 // OGRE-Next headers
 #include "OgreRoot.h"
@@ -291,11 +295,57 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
 
     clearTerrain();
 
-    QImage heightImg(heightmapPath);
-    if (heightImg.isNull()) {
-        appLog().warn("Failed to load heightmap image:", heightmapPath);
-        return;
+    QImage heightImg;
+    bool demLoaded = false;
+
+    // QImage cannot read Float32/Int16 GeoTIFFs. Decode those with DemDecoder.
+    if (heightmapPath.endsWith(".tif", Qt::CaseInsensitive) ||
+        heightmapPath.endsWith(".tiff", Qt::CaseInsensitive)) {
+        QFile f(heightmapPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            QByteArray data = f.readAll();
+            f.close();
+            terrain::DemTile dem = terrain::DemDecoder::decodeAuto(data, "dem");
+            if (dem.valid && dem.width > 0 && dem.height > 0) {
+                float zMin = std::numeric_limits<float>::max();
+                float zMax = std::numeric_limits<float>::lowest();
+                for (float e : dem.elevations) {
+                    if (e != dem.nodataValue) {
+                        zMin = std::min(zMin, e);
+                        zMax = std::max(zMax, e);
+                    }
+                }
+                if (zMax <= zMin) { zMin = 0.0f; zMax = 1.0f; }
+                float range = zMax - zMin;
+
+                heightImg = QImage(dem.width, dem.height, QImage::Format_Grayscale8);
+                for (int y = 0; y < dem.height; ++y) {
+                    uint8_t* line = heightImg.scanLine(y);
+                    for (int x = 0; x < dem.width; ++x) {
+                        float e = dem.elevations[y * dem.width + x];
+                        if (e == dem.nodataValue) e = zMin;
+                        int v = qBound(0, static_cast<int>(((e - zMin) / range) * 255.0f), 255);
+                        line[x] = static_cast<uint8_t>(v);
+                    }
+                }
+                demLoaded = true;
+                appLog().info("Decoded GeoTIFF heightmap:", dem.width, "x", dem.height);
+            } else {
+                appLog().warn("Failed to decode GeoTIFF heightmap:", heightmapPath);
+            }
+        } else {
+            appLog().warn("Failed to open GeoTIFF heightmap:", heightmapPath);
+        }
     }
+
+    if (!demLoaded) {
+        heightImg = QImage(heightmapPath);
+        if (heightImg.isNull()) {
+            appLog().warn("Failed to load heightmap image:", heightmapPath);
+            return;
+        }
+    }
+
     heightImg = heightImg.convertToFormat(QImage::Format_Grayscale8);
     int hmW = heightImg.width();
     int hmH = heightImg.height();
@@ -322,7 +372,9 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     }
     Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
 
-    if (!albedoPath.isEmpty() && QFile::exists(albedoPath)) {
+    if (!albedoPath.isEmpty() && QFile::exists(albedoPath) &&
+        !albedoPath.endsWith(".tif", Qt::CaseInsensitive) &&
+        !albedoPath.endsWith(".tiff", Qt::CaseInsensitive)) {
         QString albDir = QFileInfo(albedoPath).absolutePath();
         QString albName = QFileInfo(albedoPath).fileName();
         Ogre::String ogreAlbDir = albDir.toStdString();
