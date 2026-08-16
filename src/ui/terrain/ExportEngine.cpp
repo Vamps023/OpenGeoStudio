@@ -200,7 +200,9 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
                 sourceName = "dem";
 
             // Decode DEM data using DemDecoder (QGIS-style auto-detection)
+            m_log.info("Decoding DEM for tile", tile.id(), "size", data.size());
             terrain::DemTile demTile = terrain::DemDecoder::decodeAuto(data, sourceName);
+            m_log.info("DEM decoded for tile", tile.id(), "->", demTile.width, "x", demTile.height, "valid:", demTile.valid);
 
             if (!demTile.valid) {
                 // Decoding failed — report error with details, do NOT write fake data
@@ -222,13 +224,17 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
 
             // Resample to target resolution (QGIS bilinear interpolation pattern)
             if (demTile.width != res || demTile.height != res) {
+                m_log.info("Resampling DEM for tile", tile.id(), "from", demTile.width, "x", demTile.height, "to", res, "x", res);
                 demTile = terrain::DemDecoder::resample(demTile, res, res);
+                m_log.info("DEM resampled for tile", tile.id());
             }
+            m_log.info("Writing DEM output for tile", tile.id(), "->", outputPath);
             if (!writeDemOutput(demTile.elevations, res, res, tile, outputPath)) {
                 emit finished(false, QString("Failed to write DEM output for tile %1: %2")
                                   .arg(tile.id(), outputPath));
                 return;
             }
+            m_log.info("DEM output written for tile", tile.id());
 
             m_tileDemData[tile.id()] = std::move(demTile.elevations);
             m_demDownloaded = true;

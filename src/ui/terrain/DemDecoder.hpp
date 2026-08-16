@@ -51,7 +51,8 @@ struct TiffMemoryClient {
 
 static tmsize_t tiffMemRead(thandle_t handle, void* buf, tmsize_t size) {
     TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
-    if (!c || !c->data) return 0;
+    if (!c || !c->data || size <= 0) return 0;
+    if (c->pos < 0 || c->pos >= c->data->size()) return 0;
     tmsize_t remaining = c->data->size() - c->pos;
     tmsize_t toRead = (size < remaining) ? size : remaining;
     if (toRead > 0) {
@@ -61,7 +62,7 @@ static tmsize_t tiffMemRead(thandle_t handle, void* buf, tmsize_t size) {
     return toRead;
 }
 
-static tmsize_t tiffMemWrite(thandle_t, void*, tmsize_t) { return 0; }
+static tmsize_t tiffMemWrite(thandle_t, void*, tmsize_t size) { return (size > 0) ? 0 : 0; }
 
 static toff_t tiffMemSeek(thandle_t handle, toff_t off, int whence) {
     TiffMemoryClient* c = static_cast<TiffMemoryClient*>(handle);
