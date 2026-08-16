@@ -57,6 +57,12 @@ static TestRunner g_runner;
     struct name##_Reg { name##_Reg() { g_runner.add(#name, name); } } name##_reg; \
     static void name()
 
+// Undef libOpenDRIVE's CHECK macro (from Utils.hpp via OpenDriveMap.h)
+// so our test CHECK below doesn't trigger a redefinition warning.
+#ifdef CHECK
+#undef CHECK
+#endif
+
 #define CHECK(cond, msg) \
     do { \
         if (cond) { \
@@ -212,6 +218,29 @@ TEST(test_houston_rail_pipeline_filters_highways) {
     // Houston OSM is road-heavy; rail count should be smaller than road count
     CHECK(railResult.stats.tracksCreated <= roadResult.stats.roadsCreated,
           "Rail tracks should be <= road count (rail filters out highways)");
+
+    // Rail export: rail tracks export to OpenDRIVE and reload correctly
+    if (railResult.stats.tracksCreated > 0) {
+        QTemporaryDir tmpDir;
+        QString railXodr = tmpDir.path() + "/rail.xodr";
+        OsmExporter::OpenDriveParams params;
+        QString railError;
+        bool railExported = OsmExporter::exportToOpenDrive(
+            railXodr, railResult.network, {}, railResult.converter, params, &railError);
+        CHECK(railExported, "Rail OpenDRIVE export should succeed");
+        if (railExported) {
+            CHECK(QFileInfo::exists(railXodr), "Rail XODR file should exist");
+            odr::OpenDriveMap railMap;
+            bool railLoaded = railMap.Load(railXodr.toStdString());
+            CHECK(railLoaded, "Rail XODR should reload with libOpenDRIVE");
+            if (railLoaded) {
+                auto railRoads = railMap.get_roads();
+                CHECK(!railRoads.empty(), "Reloaded rail XODR should contain tracks");
+                std::cout << "[houston] Rail export/reload OK:"
+                          << railRoads.size() << " tracks" << std::endl;
+            }
+        }
+    }
 }
 
 // ─── Test 4: Reload exported XODR with libOpenDRIVE ───

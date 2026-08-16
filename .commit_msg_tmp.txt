@@ -1,8 +1,11 @@
-Add complete Houston workflow restoration test
+Document road_v2 dual layers, fix test macro warning, verify rail export
 
-- Extend test_houston_roundtrip with test_houston_full_workflow_restoration:
-  real Houston OSM -> road network -> OpenDRIVE artifact -> World model
-  (terrain + road splines + buildings + PCG vegetation + lake + lighting)
-  -> save -> close (destroy state) -> reopen -> verify EXACT restoration
-- Verify XODR artifact reload count matches file content (4527 roads)
-- Houston round-trip suite now 44 assertions across 5 tests, all passing
+- Add docs/ROAD_V2_DUAL_LAYERS.md explaining the intentional two-copy
+  road_v2.hpp layout (internal full LaneSection vs public placeholder)
+  and the include-conflict constraint
+- Add Road Engine Layout section to AGENTS.md
+- Fix CHECK macro redefinition warning in test_houston_roundtrip.cpp by
+  undefining libOpenDRIVE's CHECK before defining the test macro
+- Extend rail pipeline test: export rail tracks to OpenDRIVE and verify
+  libOpenDRIVE reload (83 Houston tracks round-trip OK)
+- Houston round-trip suite now 48 assertions, all passing

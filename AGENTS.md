@@ -87,6 +87,16 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 - Q_OBJECT headers included from .cpp files need a corresponding .cpp entry
   in CMakeLists.txt for AUTOMOC to process them
 
+## Road Engine Layout
+
+- `src/engine/road/road_v2.hpp` (root) — INTERNAL full RoadV2 model; LaneSection
+  comes from `lane_engine.hpp`. Used by the OSM pipeline and internal road
+  engine headers.
+- `src/engine/road/road_engine/public/road_v2.hpp` — PUBLIC API facade with a
+  self-contained placeholder LaneSection. Used by `road_engine.hpp`.
+- Both are intentional and must stay in sync for the RoadV2 class surface.
+  See `docs/ROAD_V2_DUAL_LAYERS.md` for the full explanation.
+
 ## Logging Conventions
 
 - Use the centralized `Logger` (via `appLog()` from `src/core/logger/Logger.hpp`)
