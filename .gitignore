@@ -1,6 +1,7 @@
 # Build directories
 build/
 deploy/
+dist/
 out/
 x64/
 Debug/
