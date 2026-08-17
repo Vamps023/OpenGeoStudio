@@ -125,7 +125,10 @@ private:
 };
 
 // ============================================================
-// ContentBrowser — Asset browser
+// ContentBrowser — Asset library (Unreal-style content browser)
+//
+// Combines a built-in placeable-actor palette with the project's
+// asset files. Double-click places an actor into the viewport.
 // ============================================================
 
 class ContentBrowser : public QWidget {
@@ -138,14 +141,27 @@ public:
 
 private slots:
     void onItemDoubleClicked(QListWidgetItem* item);
+    void onSearchChanged(const QString& text);
+    void onCategoryChanged(int index);
+    void onImportClicked();
 
 signals:
+    // Built-in palette entries emit type "actor" with the ActorType value
+    // as a string; file entries emit "mesh"/"texture" with the file path.
     void assetRequested(const QString& path, const QString& type);
 
 private:
+    void addActorEntry(const QString& label, world::ActorType type, const QColor& color);
+    void addFileEntry(const QFileInfo& fi);
+    void applyFilter();
+    static QPixmap makeSwatch(const QColor& color, const QString& glyph);
+
     OgreWidget* m_ogre;
     QListWidget* m_list;
-    QLineEdit* m_pathEdit;
+    QLineEdit* m_search;
+    QComboBox* m_categoryCombo;
+    QPushButton* m_importBtn;
     QPushButton* m_browseBtn;
+    QLabel* m_pathLabel;
     QString m_currentDir;
 };

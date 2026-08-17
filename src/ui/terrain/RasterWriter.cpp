@@ -6,8 +6,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 // ============================================================
 // GeoTIFF tag constants (from GeoTIFF spec, same as libgeotiff uses)
@@ -103,6 +105,9 @@ static TIFF* openTiffForWrite(const QString& path) {
     if (!tif) {
         f->close();
         delete f;
+        // The Truncate above already created the file on disk — remove the
+        // empty leftover so consumers never see a 0-byte GeoTIFF.
+        QFile::remove(path);
     }
     return tif;
 }
@@ -130,9 +135,9 @@ static constexpr uint16_t PROJECTEDCSTYPE_GEOKEY = 3072;
 static constexpr uint16_t PCSCITATION_GEOKEY     = 3073;
 static constexpr uint16_t PROJLINEARUNITS_GEOKEY = 3076;
 
-// GeoKey values
+// GeoKey values — GeoTIFF spec 6.3.1.1: Projected=1, Geographic=2, Geocentric=3
 static constexpr uint16_t MODELTYPE_GEOGRAPHIC = 2;
-static constexpr uint16_t MODELTYPE_PROJECTED  = 3;
+static constexpr uint16_t MODELTYPE_PROJECTED  = 1;
 static constexpr uint16_t RASTERTYPE_PIXELAREA = 1;
 static constexpr uint16_t ANGULARUNIT_DEGREE   = 9102;
 static constexpr uint16_t LINEARUNIT_METER     = 9001;
@@ -292,7 +297,7 @@ RasterWriter::GeoKeySet RasterWriter::buildGeoKeys(
 
     } else if (crsMode == terrain::GeoCrsMode::WebMercator) {
         // EPSG:3857 — Web Mercator (Projected)
-        const int numKeys = 4;
+        const int numKeys = 6;
         set.keyDirectory.resize(4 + numKeys * 4);
 
         set.keyDirectory[0] = 1;
@@ -313,6 +318,19 @@ RasterWriter::GeoKeySet RasterWriter::buildGeoKeys(
         set.keyDirectory[idx++] = 1;
         set.keyDirectory[idx++] = RASTERTYPE_PIXELAREA;
 
+        // GeographicTypeGeoKey = WGS84 (4326). GDAL always pairs the
+        // projected CS with its geographic CS; consumers that reproject
+        // (QGIS, Unigine, ArcGIS) resolve the datum through this key.
+        set.keyDirectory[idx++] = GEOGRAPHICTYPE_GEOKEY;
+        set.keyDirectory[idx++] = 0;
+        set.keyDirectory[idx++] = 1;
+        set.keyDirectory[idx++] = 4326;
+
+        set.keyDirectory[idx++] = GEOGANGULARUNITS_GEOKEY;
+        set.keyDirectory[idx++] = 0;
+        set.keyDirectory[idx++] = 1;
+        set.keyDirectory[idx++] = ANGULARUNIT_DEGREE;
+
         // ProjectedCSTypeGeoKey = EPSG:3857
         set.keyDirectory[idx++] = PROJECTEDCSTYPE_GEOKEY;
         set.keyDirectory[idx++] = 0;
@@ -330,7 +348,7 @@ RasterWriter::GeoKeySet RasterWriter::buildGeoKeys(
         int epsg = utmEpsg;
         if (epsg <= 0) epsg = 32633;  // Default UTM 33N
 
-        const int numKeys = 4;
+        const int numKeys = 6;
         set.keyDirectory.resize(4 + numKeys * 4);
 
         set.keyDirectory[0] = 1;
@@ -348,6 +366,19 @@ RasterWriter::GeoKeySet RasterWriter::buildGeoKeys(
         set.keyDirectory[idx++] = 0;
         set.keyDirectory[idx++] = 1;
         set.keyDirectory[idx++] = RASTERTYPE_PIXELAREA;
+
+        // GeographicTypeGeoKey = WGS84 (4326) — see WebMercator note above.
+        // Without it, strict reprojection pipelines cannot resolve the
+        // datum of the projected coordinates.
+        set.keyDirectory[idx++] = GEOGRAPHICTYPE_GEOKEY;
+        set.keyDirectory[idx++] = 0;
+        set.keyDirectory[idx++] = 1;
+        set.keyDirectory[idx++] = 4326;
+
+        set.keyDirectory[idx++] = GEOGANGULARUNITS_GEOKEY;
+        set.keyDirectory[idx++] = 0;
+        set.keyDirectory[idx++] = 1;
+        set.keyDirectory[idx++] = ANGULARUNIT_DEGREE;
 
         set.keyDirectory[idx++] = PROJECTEDCSTYPE_GEOKEY;
         set.keyDirectory[idx++] = 0;
@@ -416,6 +447,289 @@ void RasterWriter::setGeoTags(void* tifPtr, int width, int height,
 }
 
 // ============================================================
+// Manual GeoTIFF writer — 1:1 port of GeoTerrain's proven
+// geotiff-writer.ts (the files Unigine accepts).
+//
+// Byte layout: little-endian, IFD at offset 8, single strip,
+// external tag blobs after the IFD, pixel data last.
+// GeoKeys use the GeoTIFF spec model codes Projected=1 /
+// Geographic=2 (never 3=Geocentric) and always carry the
+// citation + WGS84 ellipsoid parameters.
+// ============================================================
+
+// TIFF Deflate (32946) payloads are raw zlib streams. Qt's qCompress emits
+// the same zlib stream behind a 4-byte big-endian size prefix — strip it.
+// (zlib.lib itself is not linked to every consumer of this file.)
+
+namespace {
+
+constexpr uint16_t kTiffTypeAscii = 2;
+constexpr uint16_t kTiffTypeShort = 3;
+constexpr uint16_t kTiffTypeLong = 4;
+constexpr uint16_t kTiffTypeDouble = 12;
+
+size_t manualTypeSize(uint16_t t) {
+    switch (t) {
+    case 1: case 2: return 1;
+    case 3: return 2;
+    case 4: case 11: return 4;
+    case 5: case 12: return 8;
+    default: return 1;
+    }
+}
+
+struct ManualEntry {
+    uint16_t tag = 0;
+    uint16_t type = 0;
+    uint32_t count = 0;
+    std::vector<uint64_t> values;   // SHORT/LONG values
+    QByteArray ascii;               // ASCII payload (count included)
+    std::vector<double> doubles;    // DOUBLE payload
+};
+
+ManualEntry shortEntry(uint16_t tag, std::vector<uint64_t> v) {
+    ManualEntry e; e.tag = tag; e.type = kTiffTypeShort;
+    e.count = static_cast<uint32_t>(v.size()); e.values = std::move(v); return e;
+}
+ManualEntry longEntry(uint16_t tag, uint64_t v) {
+    ManualEntry e; e.tag = tag; e.type = kTiffTypeLong; e.count = 1; e.values = {v}; return e;
+}
+ManualEntry doubleEntry(uint16_t tag, std::vector<double> v) {
+    ManualEntry e; e.tag = tag; e.type = kTiffTypeDouble;
+    e.count = static_cast<uint32_t>(v.size()); e.doubles = std::move(v); return e;
+}
+ManualEntry asciiEntry(uint16_t tag, QByteArray bytes, uint32_t count) {
+    ManualEntry e; e.tag = tag; e.type = kTiffTypeAscii; e.count = count;
+    e.ascii = std::move(bytes); return e;
+}
+
+void putU16(QByteArray& b, qint64 off, uint16_t v) { memcpy(b.data() + off, &v, 2); }
+void putU32(QByteArray& b, qint64 off, uint32_t v) { memcpy(b.data() + off, &v, 4); }
+void putF64(QByteArray& b, qint64 off, double v) { memcpy(b.data() + off, &v, 8); }
+
+QByteArray deflateZlib(const QByteArray& raw, bool& ok) {
+    const QByteArray compressed = qCompress(raw, -1);  // -1 = zlib default level
+    if (compressed.size() > 4) {
+        ok = true;
+        return compressed.mid(4);  // drop the size prefix → raw zlib stream
+    }
+    ok = false;
+    return raw;
+}
+
+bool writeGeoTiffManual(const QString& path,
+                        const QByteArray& pixelStrip,
+                        int width, int height,
+                        int bitsPerSample, int samplesPerPixel,
+                        int sampleFormat, int photometric,
+                        const terrain::RasterExtent& extent,
+                        bool rasterIsPoint,
+                        double nodataValue,
+                        bool deflate)
+{
+    // ── CRS branch (mirrors geotiff-writer.ts) ──
+    int epsg = 4326;
+    bool isProjected = false;
+    QString citation = QStringLiteral("WGS 84");
+    if (extent.crsMode == terrain::GeoCrsMode::UTM) {
+        epsg = extent.utmEpsg > 0 ? extent.utmEpsg : 32633;
+        isProjected = true;
+        const int zone = (epsg >= 32701) ? (epsg - 32700) : (epsg - 32600);
+        citation = QStringLiteral("WGS 84 / UTM zone %1%2")
+                       .arg(zone).arg(epsg < 32701 ? QStringLiteral("N") : QStringLiteral("S"));
+    } else if (extent.crsMode == terrain::GeoCrsMode::WebMercator) {
+        epsg = 3857;
+        isProjected = true;
+        citation = QStringLiteral("WGS 84 / Pseudo-Mercator");
+    }
+
+    // PixelIsPoint: samples sit at pixel corners → divisor (size - 1)
+    const double divW = rasterIsPoint ? (width - 1) : width;
+    const double divH = rasterIsPoint ? (height - 1) : height;
+    const double pixelW = (extent.east - extent.west) / (divW > 0 ? divW : 1);
+    const double pixelH = (extent.south - extent.north) / (divH > 0 ? divH : 1);  // negative, north-up
+    if (std::abs(pixelW) < 1e-10 || std::abs(pixelH) < 1e-10) return false;
+
+    std::vector<ManualEntry> entries;
+    entries.push_back(longEntry(256, static_cast<uint64_t>(width)));
+    entries.push_back(longEntry(257, static_cast<uint64_t>(height)));
+    entries.push_back(shortEntry(258, std::vector<uint64_t>(
+        samplesPerPixel, static_cast<uint64_t>(bitsPerSample))));
+    entries.push_back(shortEntry(259, std::vector<uint64_t>{deflate ? 32946u : 1u}));
+    entries.push_back(shortEntry(262, std::vector<uint64_t>{
+        static_cast<uint64_t>(photometric)}));
+    entries.push_back(longEntry(273, 0));                                   // StripOffsets (patched)
+    entries.push_back(shortEntry(277, std::vector<uint64_t>{
+        static_cast<uint64_t>(samplesPerPixel)}));
+    entries.push_back(longEntry(278, static_cast<uint64_t>(height)));        // single strip
+    entries.push_back(longEntry(279, static_cast<uint32_t>(pixelStrip.size())));  // patched if deflated
+    entries.push_back(shortEntry(284, std::vector<uint64_t>{1}));
+    entries.push_back(shortEntry(339, std::vector<uint64_t>(
+        samplesPerPixel, static_cast<uint64_t>(sampleFormat))));
+
+    entries.push_back(doubleEntry(33550, {std::abs(pixelW), std::abs(pixelH), 0.0}));
+    entries.push_back(doubleEntry(33922, {0.0, 0.0, 0.0, extent.west, extent.north, 0.0}));
+
+    // ── GeoKey directory ──
+    const uint16_t rasterTypeCode = rasterIsPoint ? 2 : 1;
+    std::vector<uint64_t> kd;
+    auto key = [&kd](uint16_t id, uint16_t loc, uint16_t cnt, uint16_t val) {
+        kd.push_back(id); kd.push_back(loc); kd.push_back(cnt); kd.push_back(val);
+    };
+    if (isProjected) {
+        key(1024, 0, 1, 1);   // GTModelTypeGeoKey = Projected (1)
+        key(1025, 0, 1, rasterTypeCode);
+        key(3072, 0, 1, static_cast<uint16_t>(epsg));  // ProjectedCSTypeGeoKey
+        key(3073, 34737, uint16_t(citation.size() + 1), 0);  // PCSCitation
+        key(2057, 34736, 1, 0);  // GeogSemiMajorAxis → doubleParams[0]
+        key(2059, 34736, 1, 1);  // GeogInvFlattening → doubleParams[1]
+    } else {
+        key(1024, 0, 1, 2);   // GTModelTypeGeoKey = Geographic (2)
+        key(1025, 0, 1, rasterTypeCode);
+        key(2048, 0, 1, static_cast<uint16_t>(epsg));  // GeographicTypeGeoKey
+        key(2049, 34737, uint16_t(citation.size() + 1), 0);  // GeogCitation
+        key(2054, 0, 1, 9102);  // GeogAngularUnits = Degree
+        key(2057, 34736, 1, 0);
+        key(2059, 34736, 1, 1);
+    }
+    // Header: version 1, revision 1.0, key count
+    const uint32_t numKeys = uint32_t(kd.size() / 4);
+    std::vector<uint64_t> geoKeys = {1, 1, 0, numKeys};
+    geoKeys.insert(geoKeys.end(), kd.begin(), kd.end());
+    entries.push_back(shortEntry(34735, std::move(geoKeys)));
+    entries.push_back(doubleEntry(34736, {6378137.0, 298.257223563}));
+
+    QByteArray asciiRaw = citation.toUtf8();
+    asciiRaw.append('\0');
+    if (asciiRaw.size() % 2 != 0) asciiRaw.append('\0');
+    entries.push_back(asciiEntry(34737, asciiRaw, uint32_t(asciiRaw.size())));
+
+    if (!std::isnan(nodataValue)) {
+        const QByteArray nd = QByteArray::number(nodataValue, 'f', 6).append('\0');
+        entries.push_back(asciiEntry(42113, nd, uint32_t(nd.size())));
+    }
+
+    std::sort(entries.begin(), entries.end(),
+              [](const ManualEntry& a, const ManualEntry& b) { return a.tag < b.tag; });
+
+    // ── Compression ──
+    QByteArray stripData = pixelStrip;
+    if (deflate) {
+        bool ok = false;
+        stripData = deflateZlib(pixelStrip, ok);
+        if (!ok) {
+            for (auto& e : entries)
+                if (e.tag == 259) e.values = {1};
+        } else {
+            for (auto& e : entries)
+                if (e.tag == 279) e.values = {uint64_t(stripData.size())};
+        }
+    }
+
+    // ── Layout: header(8) + IFD + blobs + pixel data ──
+    const qint64 ifdSize = 2 + qint64(entries.size()) * 12 + 4;
+    qint64 cursor = 8 + ifdSize;
+
+    struct Blob { int entryIndex; qint64 offset; QByteArray bytes; };
+    std::vector<Blob> blobs;
+    for (int i = 0; i < int(entries.size()); ++i) {
+        const ManualEntry& e = entries[i];
+        size_t sz = 0;
+        QByteArray bytes;
+        if (e.type == kTiffTypeAscii) {
+            sz = size_t(e.ascii.size());
+            bytes = e.ascii;
+        } else if (e.type == kTiffTypeDouble) {
+            sz = e.doubles.size() * 8;
+            bytes.resize(int(sz));
+            for (int j = 0; j < int(e.doubles.size()); ++j)
+                putF64(bytes, j * 8, e.doubles[j]);
+        } else {
+            sz = e.values.size() * manualTypeSize(e.type);
+            bytes.resize(int(sz));
+            for (int j = 0; j < int(e.values.size()); ++j) {
+                if (e.type == kTiffTypeShort)
+                    putU16(bytes, j * 2, uint16_t(e.values[j]));
+                else
+                    putU32(bytes, j * 4, uint32_t(e.values[j]));
+            }
+        }
+        if (sz > 4) {
+            if (cursor % 2 != 0) cursor++;
+            blobs.push_back({i, cursor, bytes});
+            cursor += qint64(sz);
+        }
+    }
+    const qint64 stripOffset = cursor;
+    // Patch StripOffsets
+    for (auto& e : entries)
+        if (e.tag == 273) e.values = {uint64_t(stripOffset)};
+
+    QByteArray file(int(stripOffset + stripData.size()), Qt::Uninitialized);
+    file.fill(0);
+    putU16(file, 0, 0x4949);          // "II"
+    putU16(file, 2, 42);
+    putU32(file, 4, 8);               // IFD at offset 8
+
+    qint64 pos = 8;
+    putU16(file, pos, uint16_t(entries.size()));
+    pos += 2;
+    for (int i = 0; i < int(entries.size()); ++i) {
+        const ManualEntry& e = entries[i];
+        putU16(file, pos, e.tag);
+        putU16(file, pos + 2, e.type);
+        putU32(file, pos + 4, e.count);
+        // Value / offset field
+        size_t sz = 0;
+        if (e.type == kTiffTypeAscii) sz = size_t(e.ascii.size());
+        else if (e.type == kTiffTypeDouble) sz = e.doubles.size() * 8;
+        else sz = e.values.size() * manualTypeSize(e.type);
+
+        if (sz <= 4) {
+            QByteArray inlineBytes(4, Qt::Uninitialized);
+            inlineBytes.fill(0);
+            if (e.type == kTiffTypeAscii) {
+                memcpy(inlineBytes.data(), e.ascii.constData(),
+                       std::min<size_t>(e.ascii.size(), 4));
+            } else if (e.type == kTiffTypeDouble) {
+                // 1 double never fits inline; only 0-length would
+            } else {
+                for (int j = 0; j < int(e.values.size()); ++j) {
+                    if (e.type == kTiffTypeShort && j < 2)
+                        putU16(inlineBytes, j * 2, uint16_t(e.values[j]));
+                    else if (e.type == kTiffTypeLong && j == 0)
+                        putU32(inlineBytes, 0, uint32_t(e.values[0]));
+                }
+            }
+            memcpy(file.data() + pos + 8, inlineBytes.constData(), 4);
+        } else {
+            // find blob offset
+            qint64 off = 0;
+            for (const auto& b : blobs)
+                if (b.entryIndex == i) { off = b.offset; break; }
+            putU32(file, pos + 8, uint32_t(off));
+        }
+        pos += 12;
+    }
+    putU32(file, pos, 0);             // next IFD = none
+    for (const auto& b : blobs)
+        memcpy(file.data() + b.offset, b.bytes.constData(), b.bytes.size());
+    memcpy(file.data() + stripOffset, stripData.constData(), stripData.size());
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    if (f.write(file) != file.size()) {
+        f.close();
+        QFile::remove(path);
+        return false;
+    }
+    f.close();
+    return true;
+}
+
+} // namespace
+
+// ============================================================
 // Internal: write 1-band GeoTIFF
 // ============================================================
 bool RasterWriter::writeGeoTiffBand(
@@ -427,76 +741,40 @@ bool RasterWriter::writeGeoTiffBand(
     double nodataValue,
     terrain::Compression compression)
 {
-    // Use TIFFClientOpen with a QFile so Unicode paths work on Windows
-    TIFF* tif = openTiffForWrite(path);
-    if (!tif) return false;
-
-    // Register GeoTIFF tags so TIFFSetField doesn't silently fail
-    registerGeoTiffTags(tif);
-
-    // Determine bits per sample and sample format
-    uint16_t bitsPerSample = 8;
-    uint16_t sampleFormat = SAMPLEFORMAT_UINT;
+    int bitsPerSample = 8;
+    int sampleFormat = 1;  // 1 = unsigned int
 
     switch (dataType) {
     case terrain::RasterDataType::Byte:
         bitsPerSample = 8;
-        sampleFormat = SAMPLEFORMAT_UINT;
+        sampleFormat = 1;
         break;
     case terrain::RasterDataType::UInt16:
         bitsPerSample = 16;
-        sampleFormat = SAMPLEFORMAT_UINT;
+        sampleFormat = 1;
         break;
     case terrain::RasterDataType::Int16:
         bitsPerSample = 16;
-        sampleFormat = SAMPLEFORMAT_INT;
+        sampleFormat = 2;  // signed int
         break;
     case terrain::RasterDataType::Float32:
         bitsPerSample = 32;
-        sampleFormat = SAMPLEFORMAT_IEEEFP;
+        sampleFormat = 3;  // IEEE float
         break;
     }
 
-    // Basic TIFF tags
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bitsPerSample);
-    TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, sampleFormat);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    // Use libtiff's default strip size (typically ~8KB) instead of 1 row/strip
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, TIFFDefaultStripSize(tif, 0));
+    const int bytesPerSample = bitsPerSample / 8;
+    QByteArray strip(int(qint64(width) * height * bytesPerSample), Qt::Uninitialized);
+    memcpy(strip.data(), data, size_t(strip.size()));
 
-    // Compression (QGIS/GDAL creation option pattern)
-    int comp = compressionTag(compression);
-    TIFFSetField(tif, TIFFTAG_COMPRESSION, comp);
-    if (comp != COMPRESSION_NONE) {
-        TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_NONE);
-    }
-
-    // Nodata value (QGIS pattern: GDALSetRasterNoDataValue).
-    // TIFFTAG_GDAL_NODATA is an ASCII tag; pass byte count explicitly
-    std::string nodataString = std::to_string(nodataValue);
-    TIFFSetField(tif, TIFFTAG_GDAL_NODATA, (uint32_t)nodataString.size() + 1, nodataString.c_str());
-
-    // GeoTIFF tags
-    GeoKeySet geoKeys = buildGeoKeys(extent.crsMode, extent.utmEpsg);
-    setGeoTags(tif, width, height, extent, geoKeys);
-
-    // Write scanlines
-    int bytesPerSample = bitsPerSample / 8;
-    const uint8_t* src = static_cast<const uint8_t*>(data);
-    for (int y = 0; y < height; ++y) {
-        const uint8_t* row = src + (y * width * bytesPerSample);
-        if (TIFFWriteScanline(tif, const_cast<uint8_t*>(row), y, 0) < 0) {
-            TIFFClose(tif);
-            return false;
-        }
-    }
-
-    TIFFClose(tif);
-    return true;
+    // DEM bands use PixelIsPoint like GeoTerrain's heightmap exports
+    // (samples at pixel corners; scale divisor size-1)
+    return writeGeoTiffManual(path, strip, width, height,
+                              bitsPerSample, 1, sampleFormat,
+                              1 /* black-is-zero */, extent,
+                              true /* rasterIsPoint */, nodataValue,
+                              compression == terrain::Compression::Deflate ||
+                              compression == terrain::Compression::LZW);
 }
 
 // ============================================================
@@ -576,46 +854,23 @@ bool RasterWriter::writeRgbGeoTiff(
     const terrain::RasterExtent& extent,
     terrain::Compression compression)
 {
-    // Use TIFFClientOpen with a QFile so Unicode paths work on Windows
-    TIFF* tif = openTiffForWrite(path);
-    if (!tif) return false;
+    const int width = image.width();
+    const int height = image.height();
 
-    // Register GeoTIFF tags so TIFFSetField doesn't silently fail
-    registerGeoTiffTags(tif);
-
-    int width = image.width();
-    int height = image.height();
-
-    // Basic tags
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);  // RGB
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
-    TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, TIFFDefaultStripSize(tif, 0));
-
-    // Compression
-    int comp = compressionTag(compression);
-    TIFFSetField(tif, TIFFTAG_COMPRESSION, comp);
-
-    // GeoTIFF tags
-    GeoKeySet geoKeys = buildGeoKeys(extent.crsMode, extent.utmEpsg);
-    setGeoTags(tif, width, height, extent, geoKeys);
-
-    // Write scanlines (convert to RGB888)
+    // Imagery uses PixelIsArea (like GeoTerrain's albedo exports)
     QImage rgbImg = image.convertToFormat(QImage::Format_RGB888);
-    for (int y = 0; y < height; ++y) {
-        const unsigned char* row = rgbImg.scanLine(y);
-        if (TIFFWriteScanline(tif, const_cast<unsigned char*>(row), y, 0) < 0) {
-            TIFFClose(tif);
-            return false;
-        }
-    }
+    QByteArray strip(int(qint64(width) * height * 3), Qt::Uninitialized);
+    for (int y = 0; y < height; ++y)
+        memcpy(strip.data() + qint64(y) * width * 3, rgbImg.scanLine(y),
+               size_t(width) * 3);
 
-    TIFFClose(tif);
-    return true;
+    return writeGeoTiffManual(path, strip, width, height,
+                              8, 3, 1 /* unsigned */,
+                              2 /* RGB */, extent,
+                              false /* rasterIsArea */,
+                              std::numeric_limits<double>::quiet_NaN(),
+                              compression == terrain::Compression::Deflate ||
+                              compression == terrain::Compression::LZW);
 }
 
 // ============================================================

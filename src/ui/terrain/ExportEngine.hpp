@@ -44,6 +44,35 @@ private:
                       const terrain::GeoBounds& bounds);
     void processNextTile();
 
+    // ─── Slippy-tile mosaic download ───
+    // Tiled sources (AWS Terrarium, Mapbox, Google, ArcGIS, ...) must cover
+    // the full tile bounds, not just the slippy tile containing the center.
+    // All sub-tiles covering the bounds are fetched and stitched, then sampled
+    // to the exact geo-referenced output extent.
+    struct MosaicState {
+        bool active = false;
+        bool isDem = false;
+        int zoom = 0;
+        int x0 = 0, y0 = 0, nx = 0, ny = 0;  // slippy tile range
+        int done = 0;                          // finished sub-requests
+        int failed = 0;                        // failed sub-requests
+        QMap<qint64, QByteArray> blobs;        // key = iy * nx + ix
+        QString outputPath;
+        terrain::Tile tile;
+    };
+    MosaicState m_demMosaic;
+    MosaicState m_imgMosaic;
+
+    void startDemMosaic(const terrain::Tile& tile, const QString& outputPath);
+    void startImageryMosaic(const terrain::Tile& tile, const QString& outputPath);
+    void finishDemMosaic();
+    void finishImageryMosaic();
+    void fetchMosaicSubTile(MosaicState& mosaic, int ix, int iy, const QUrl& url,
+                            const QMap<QByteArray, QByteArray>& headers);
+    static int autoZoomForBounds(const terrain::GeoBounds& b, int targetRes, int maxZoom);
+    static void slippyRangeForBounds(const terrain::GeoBounds& b, int zoom,
+                                     int& x0, int& y0, int& nx, int& ny);
+
     // QGIS-style DEM output using RasterWriter
     bool writeDemOutput(const std::vector<float>& elevations,
                         int width, int height,
@@ -79,6 +108,8 @@ private:
     QMap<QString, QImage> m_tileAlbedoData;
     Logger m_log{"ExportEngine"};
 
-    QString demUrlForTile(const terrain::Tile& tile) const;
+    // URL for one slippy sub-tile of a tiled source (z/x/y); bbox-based
+    // providers ignore z/x/y and return their area URL for the tile.
+    QString demTileUrl(const terrain::Tile& tile, int z, int x, int y) const;
     QString imageryTileUrl(int z, int x, int y, const terrain::Tile& tile) const;
 };

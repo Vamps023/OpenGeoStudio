@@ -15,6 +15,8 @@
 #include <QComboBox>
 #include <QListWidget>
 #include <QSplitter>
+#include <QPainter>
+#include <QFile>
 
 // ============================================================
 // WorldOutliner
@@ -490,74 +492,212 @@ ContentBrowser::ContentBrowser(OgreWidget* ogre, QWidget* parent)
     layout->setSpacing(6);
     setObjectName(QStringLiteral("contentBrowser"));
 
-    // Path bar
-    auto* pathLayout = new QHBoxLayout();
-    m_pathEdit = new QLineEdit(this);
-    m_pathEdit->setReadOnly(true);
-    pathLayout->addWidget(m_pathEdit);
-    m_browseBtn = new QPushButton("...", this);
-    m_browseBtn->setMaximumWidth(30);
+    // Header: category filter + search + import + browse
+    auto* headerLayout = new QHBoxLayout();
+    headerLayout->setSpacing(6);
+
+    m_categoryCombo = new QComboBox(this);
+    m_categoryCombo->addItems({"All", "Placeable Actors", "Meshes", "Textures"});
+    m_categoryCombo->setToolTip("Filter the asset library by category");
+    connect(m_categoryCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ContentBrowser::onCategoryChanged);
+    headerLayout->addWidget(m_categoryCombo);
+
+    m_search = new QLineEdit(this);
+    m_search->setPlaceholderText("Search assets…");
+    m_search->setClearButtonEnabled(true);
+    connect(m_search, &QLineEdit::textChanged, this, &ContentBrowser::onSearchChanged);
+    headerLayout->addWidget(m_search, 1);
+
+    m_importBtn = new QPushButton("Import…", this);
+    m_importBtn->setToolTip("Copy mesh or texture files into the project asset folder");
+    connect(m_importBtn, &QPushButton::clicked, this, &ContentBrowser::onImportClicked);
+    headerLayout->addWidget(m_importBtn);
+
+    m_browseBtn = new QPushButton("Folder…", this);
+    m_browseBtn->setToolTip("Choose a different asset folder to browse");
     connect(m_browseBtn, &QPushButton::clicked, [this]() {
         QString dir = QFileDialog::getExistingDirectory(this, "Select Asset Directory");
         if (!dir.isEmpty()) setAssetDirectory(dir);
     });
-    pathLayout->addWidget(m_browseBtn);
-    layout->addLayout(pathLayout);
+    headerLayout->addWidget(m_browseBtn);
+    layout->addLayout(headerLayout);
 
-    // Asset list
+    m_pathLabel = new QLabel(this);
+    m_pathLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    layout->addWidget(m_pathLabel);
+
+    // Asset grid
     m_list = new QListWidget(this);
     m_list->setViewMode(QListWidget::IconMode);
-    m_list->setIconSize(QSize(56, 56));
-    m_list->setGridSize(QSize(110, 82));
+    m_list->setIconSize(QSize(48, 48));
+    m_list->setGridSize(QSize(96, 86));
     m_list->setResizeMode(QListWidget::Adjust);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_list->setToolTip("Double-click an asset to select it for the active editor workflow");
+    m_list->setWordWrap(true);
+    m_list->setSpacing(6);
+    m_list->setToolTip("Double-click a placeable actor to add it to the scene at the camera focus");
     connect(m_list, &QListWidget::itemDoubleClicked, this, &ContentBrowser::onItemDoubleClicked);
-    layout->addWidget(m_list);
+    layout->addWidget(m_list, 1);
 
     setLayout(layout);
+}
+
+QPixmap ContentBrowser::makeSwatch(const QColor& color, const QString& glyph)
+{
+    QPixmap pm(64, 64);
+    pm.fill(color);
+    QPainter p(&pm);
+    p.setPen(Qt::white);
+    QFont f = p.font();
+    f.setPixelSize(30);
+    f.setBold(true);
+    p.setFont(f);
+    p.drawText(pm.rect(), Qt::AlignCenter, glyph);
+    return pm;
+}
+
+void ContentBrowser::addActorEntry(const QString& label, world::ActorType type, const QColor& color)
+{
+    auto* item = new QListWidgetItem(label, m_list);
+    item->setIcon(QIcon(makeSwatch(color, label.left(1))));
+    item->setData(Qt::UserRole, QStringLiteral("actor"));
+    item->setData(Qt::UserRole + 1, static_cast<int>(type));
+    item->setToolTip(QString("Double-click to place a %1 at the camera focus").arg(label));
+}
+
+void ContentBrowser::addFileEntry(const QFileInfo& fi)
+{
+    auto* item = new QListWidgetItem(fi.fileName(), m_list);
+    const QString path = fi.absoluteFilePath();
+    const QString ext = fi.suffix().toLower();
+    item->setData(Qt::UserRole, QStringLiteral("file"));
+    item->setData(Qt::UserRole + 2, path);
+    if (ext == "png" || ext == "jpg" || ext == "jpeg")
+        item->setIcon(QIcon(path));
+    else if (ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")
+        item->setIcon(QIcon(makeSwatch(QColor(56, 108, 176), "T")));
+    else
+        item->setIcon(QIcon(makeSwatch(QColor(47, 79, 79), "M")));
+    item->setToolTip(QString("Double-click to place as a prop:\n%1").arg(path));
 }
 
 void ContentBrowser::setAssetDirectory(const QString& path)
 {
     m_currentDir = path;
-    m_pathEdit->setText(path);
+    // Make sure imports have somewhere to land
+    if (!m_currentDir.isEmpty())
+        QDir().mkpath(m_currentDir);
+    m_pathLabel->setText(m_currentDir);
     refresh();
 }
 
 void ContentBrowser::refresh()
 {
     m_list->clear();
-    if (m_currentDir.isEmpty()) return;
+
+    // Built-in placeable palette — always available, even with no files
+    addActorEntry("Cube", world::ActorType::Prop, QColor(120, 128, 144));
+    addActorEntry("Empty", world::ActorType::Empty, QColor(60, 66, 78));
+    addActorEntry("Building", world::ActorType::Building, QColor(141, 153, 174));
+    addActorEntry("Prop", world::ActorType::Prop, QColor(176, 125, 98));
+    addActorEntry("Tree", world::ActorType::Tree, QColor(45, 106, 79));
+    addActorEntry("Vegetation", world::ActorType::Vegetation, QColor(64, 145, 108));
+    addActorEntry("Grass", world::ActorType::Grass, QColor(116, 198, 157));
+    addActorEntry("Rock", world::ActorType::Rock, QColor(108, 117, 125));
+    addActorEntry("Lake", world::ActorType::Water, QColor(67, 97, 238));
+    addActorEntry("Sun Light", world::ActorType::SunLight, QColor(255, 209, 102));
+    addActorEntry("Sky Light", world::ActorType::SkyLight, QColor(114, 239, 221));
+
+    if (m_currentDir.isEmpty()) { applyFilter(); return; }
 
     QDir dir(m_currentDir);
-    if (!dir.exists()) return;
+    if (!dir.exists()) { applyFilter(); return; }
 
-    // List files
     QStringList filters;
     filters << "*.obj" << "*.fbx" << "*.mesh" << "*.glb" << "*.gltf"
             << "*.png" << "*.jpg" << "*.jpeg" << "*.tif" << "*.tiff"
             << "*.dds" << "*.tga";
-    QStringList files = dir.entryList(filters, QDir::Files);
-    for (const auto& f : files) {
-        auto* item = new QListWidgetItem(f, m_list);
-        item->setData(Qt::UserRole, m_currentDir + "/" + f);
-        // Set icon based on type
-        QString ext = QFileInfo(f).suffix().toLower();
-        if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
-            ext == "tif" || ext == "tiff")
-            item->setIcon(QIcon(m_currentDir + "/" + f));
-        else if (ext == "dds" || ext == "tga")
-            item->setIcon(QIcon::fromTheme("image-x-generic"));
-        else
-            item->setIcon(QIcon::fromTheme("document"));
+    const QFileInfoList files = dir.entryInfoList(filters, QDir::Files, QDir::Name);
+    for (const QFileInfo& fi : files)
+        addFileEntry(fi);
+
+    applyFilter();
+}
+
+void ContentBrowser::applyFilter()
+{
+    const QString needle = m_search->text().trimmed();
+    const int category = m_categoryCombo->currentIndex(); // 0 all, 1 actors, 2 meshes, 3 textures
+
+    for (int i = 0; i < m_list->count(); ++i) {
+        auto* item = m_list->item(i);
+        const QString kind = item->data(Qt::UserRole).toString();
+        bool visible = true;
+
+        if (category == 1 && kind != "actor") visible = false;
+        if (category == 2 || category == 3) {
+            if (kind != "file") visible = false;
+            const QString ext = QFileInfo(item->data(Qt::UserRole + 2).toString()).suffix().toLower();
+            const bool isMesh = (ext == "obj" || ext == "fbx" || ext == "mesh" ||
+                                 ext == "glb" || ext == "gltf");
+            if (category == 2 && !isMesh) visible = false;
+            if (category == 3 && isMesh) visible = false;
+        }
+        if (visible && !needle.isEmpty())
+            visible = item->text().contains(needle, Qt::CaseInsensitive);
+
+        item->setHidden(!visible);
     }
+}
+
+void ContentBrowser::onSearchChanged(const QString& text)
+{
+    Q_UNUSED(text);
+    applyFilter();
+}
+
+void ContentBrowser::onCategoryChanged(int index)
+{
+    Q_UNUSED(index);
+    applyFilter();
+}
+
+void ContentBrowser::onImportClicked()
+{
+    QString targetDir = m_currentDir;
+    if (targetDir.isEmpty()) {
+        targetDir = QFileDialog::getExistingDirectory(this, "Select Asset Directory to Import Into");
+        if (targetDir.isEmpty()) return;
+        setAssetDirectory(targetDir);
+    }
+
+    const QStringList files = QFileDialog::getOpenFileNames(this, "Import Assets", targetDir,
+        "Assets (*.obj *.fbx *.mesh *.glb *.gltf *.png *.jpg *.jpeg *.tif *.tiff *.dds *.tga)");
+    if (files.isEmpty()) return;
+
+    int imported = 0;
+    for (const QString& src : files) {
+        const QString dst = QDir(targetDir).filePath(QFileInfo(src).fileName());
+        if (QFile::exists(dst)) continue;
+        if (QFile::copy(src, dst)) imported++;
+    }
+    refresh();
+    if (imported > 0)
+        m_pathLabel->setText(QString("Imported %1 file(s) → %2").arg(imported).arg(targetDir));
 }
 
 void ContentBrowser::onItemDoubleClicked(QListWidgetItem* item)
 {
-    QString path = item->data(Qt::UserRole).toString();
-    QString ext = QFileInfo(path).suffix().toLower();
+    const QString kind = item->data(Qt::UserRole).toString();
+    if (kind == "actor") {
+        const int typeValue = item->data(Qt::UserRole + 1).toInt();
+        emit assetRequested(QString::number(typeValue), QStringLiteral("actor"));
+        return;
+    }
+
+    const QString path = item->data(Qt::UserRole + 2).toString();
+    const QString ext = QFileInfo(path).suffix().toLower();
     QString type = "mesh";
     if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
         ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")

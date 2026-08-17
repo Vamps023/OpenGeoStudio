@@ -35,6 +35,75 @@
 #ifndef TIFFTAG_GEOKEYDIRECTORY
 #define TIFFTAG_GEOKEYDIRECTORY 34735
 #endif
+
+// ============================================================
+// Shared DEM sampling helpers
+// ============================================================
+
+// Bilinear sample with invalid-value renormalization (NaN or nodata)
+static float sampleBilinear(const std::vector<float>& grid, int w, int h,
+                            double fx, double fy,
+                            float nodata = std::numeric_limits<float>::quiet_NaN()) {
+    fx = qBound(0.0, fx, static_cast<double>(w - 1) - 1e-3);
+    fy = qBound(0.0, fy, static_cast<double>(h - 1) - 1e-3);
+    const int x0 = static_cast<int>(fx);
+    const int y0 = static_cast<int>(fy);
+    const int x1 = std::min(x0 + 1, w - 1);
+    const int y1 = std::min(y0 + 1, h - 1);
+    const double gx = fx - x0;
+    const double gy = fy - y0;
+    const float vs[4] = {
+        grid[static_cast<size_t>(y0) * w + x0], grid[static_cast<size_t>(y0) * w + x1],
+        grid[static_cast<size_t>(y1) * w + x0], grid[static_cast<size_t>(y1) * w + x1]
+    };
+    const double ws[4] = {
+        (1.0 - gx) * (1.0 - gy), gx * (1.0 - gy),
+        (1.0 - gx) * gy, gx * gy
+    };
+    double acc = 0.0, wsum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const bool invalid = std::isnan(vs[i]) || vs[i] == nodata;
+        if (!invalid) {
+            acc += static_cast<double>(vs[i]) * ws[i];
+            wsum += ws[i];
+        }
+    }
+    if (wsum <= 0.0) return -9999.0f;
+    return static_cast<float>(acc / wsum);
+}
+
+// Crop an area-provider DEM raster (which may cover MORE than the requested
+// tile — e.g. the Copernicus 1°x1° COG cell) to the tile bounds and sample
+// to the target resolution. Without this, elevation from outside the
+// selection is stretched over the tile and misaligns with the albedo.
+static terrain::DemTile cropDemToTile(const terrain::DemTile& src,
+                                      double rasterWest, double rasterNorth,
+                                      double rasterEast, double rasterSouth,
+                                      const terrain::GeoBounds& target, int res) {
+    terrain::DemTile out;
+    out.width = res;
+    out.height = res;
+    out.nodataValue = -9999.0f;
+    out.valid = true;
+    out.elevations.resize(static_cast<size_t>(res) * res);
+
+    const double spanX = rasterEast - rasterWest;
+    const double spanY = rasterNorth - rasterSouth;
+    for (int py = 0; py < res; ++py) {
+        const double lat = target.north -
+            (target.north - target.south) * ((py + 0.5) / res);
+        const double fy = (rasterNorth - lat) / spanY * src.height;
+        for (int px = 0; px < res; ++px) {
+            const double lon = target.west +
+                (target.east - target.west) * ((px + 0.5) / res);
+            const double fx = (lon - rasterWest) / spanX * src.width;
+            out.elevations[static_cast<size_t>(py) * res + px] =
+                sampleBilinear(src.elevations, src.width, src.height, fx, fy,
+                               src.nodataValue);
+        }
+    }
+    return out;
+}
 ExportEngine::ExportEngine(TerrainStore* store, QObject* parent)
     : QObject(parent), m_store(store) {
     m_network = new QNetworkAccessManager(this);
@@ -88,27 +157,34 @@ void ExportEngine::processNextTile() {
     emit progress(percent, QString("Exporting tile %1/%2: %3")
         .arg(m_completedTiles + 1).arg(m_totalTiles).arg(m_currentTile.id()));
 
-    // Download DEM (heightmap) or load from local file
-    QString demExt;
-    switch (m_store->exportSettings().heightmapFormat) {
-    case terrain::HeightmapFormat::GeoTIFF_Float32:
-    case terrain::HeightmapFormat::GeoTIFF_Int16:
-    case terrain::HeightmapFormat::GeoTIFF_UInt16:
-        demExt = ".tif";
-        break;
-    case terrain::HeightmapFormat::PNG16:
-        demExt = ".png";
-        break;
-    case terrain::HeightmapFormat::R16:
-        demExt = ".r16";
-        break;
-    case terrain::HeightmapFormat::None:
-    default:
-        demExt = ".png";
-        break;
+    // Download DEM (heightmap) or load from local file. Heightmap-less
+    // exports ("albedo only") skip the DEM stage instead of stalling.
+    const bool wantDem =
+        m_store->exportSettings().heightmapFormat != terrain::HeightmapFormat::None;
+    QString demExt = ".png";
+    if (wantDem) {
+        switch (m_store->exportSettings().heightmapFormat) {
+        case terrain::HeightmapFormat::GeoTIFF_Float32:
+        case terrain::HeightmapFormat::GeoTIFF_Int16:
+        case terrain::HeightmapFormat::GeoTIFF_UInt16:
+            demExt = ".tif";
+            break;
+        case terrain::HeightmapFormat::PNG16:
+            demExt = ".png";
+            break;
+        case terrain::HeightmapFormat::R16:
+            demExt = ".r16";
+            break;
+        case terrain::HeightmapFormat::None:
+        default:
+            demExt = ".png";
+            break;
+        }
     }
     QString demPath = m_exportDir + "/heightmaps/tile_" + m_currentTile.id() + demExt;
-    if (m_store->exportSettings().demSource == terrain::DemSource::Local_File) {
+    if (!wantDem) {
+        m_demDownloaded = true;
+    } else if (m_store->exportSettings().demSource == terrain::DemSource::Local_File) {
         loadLocalDemForTile(m_currentTile, demPath);
     } else {
         downloadDemForTile(m_currentTile, demPath);
@@ -126,11 +202,24 @@ void ExportEngine::processNextTile() {
 }
 
 void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& outputPath) {
-    const QString url = demUrlForTile(tile);
+    const auto src = m_store->exportSettings().demSource;
+
+    // Tiled raster sources must cover the whole tile bounds. Downloading only
+    // the slippy tile containing the tile center and stretching it exports
+    // geographically wrong elevation, so fetch a mosaic instead.
+    if (src == terrain::DemSource::AWS_Terrarium ||
+        src == terrain::DemSource::Mapzen_Terrarium ||
+        src == terrain::DemSource::Mapbox_TerrainRGB) {
+        startDemMosaic(tile, outputPath);
+        return;
+    }
+
+    // Area providers (Copernicus S3, OpenTopography, GPXZ, GLAD): one request
+    // already covers the tile bounds.
+    const QString url = demTileUrl(tile, 0, 0, 0);
     if (url.isEmpty()) {
         // No URL available — API key missing or source not configured
         QString reason;
-        auto src = m_store->exportSettings().demSource;
         if (src == terrain::DemSource::Mapbox_TerrainRGB)
             reason = "Mapbox token is required for Terrain-RGB DEM source";
         else if (src == terrain::DemSource::GPXZ_LiDAR)
@@ -222,8 +311,48 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
                 return;
             }
 
-            // Resample to target resolution (QGIS bilinear interpolation pattern)
-            if (demTile.width != res || demTile.height != res) {
+            // Resample to target resolution (QGIS bilinear interpolation pattern).
+            // Copernicus is an area provider whose raster spans a whole 1°x1°
+            // cell — crop it to the tile bounds first, or the cell's elevation
+            // gets stretched over the tile and misaligns with the albedo.
+            //
+            // Warn when the native source resolution is far coarser than the
+            // requested tile — a small selected tile over a coarse-resolution
+            // DEM (e.g. a few hundred meters against 30m Copernicus pixels)
+            // gets bilinearly blown up into a smooth gradient with no real
+            // terrain detail. This is not a decode/crash bug — it means the
+            // source simply doesn't have enough native pixels for that tile.
+            {
+                double latMid = (tile.bounds.north + tile.bounds.south) * 0.5;
+                double tileWidthM = (tile.bounds.east - tile.bounds.west) * 111320.0 * std::cos(latMid * M_PI / 180.0);
+                double tileHeightM = (tile.bounds.north - tile.bounds.south) * 111320.0;
+                double nativePixelsAcrossTile = 0.0;
+                if (demSrc == terrain::DemSource::NASA_EarthData_Copernicus) {
+                    // demTile still covers the full 1x1 degree cell here — the
+                    // fraction of it spanned by the tile determines native pixels used.
+                    double tileWidthDeg = tile.bounds.east - tile.bounds.west;
+                    nativePixelsAcrossTile = tileWidthDeg * demTile.width;
+                } else {
+                    nativePixelsAcrossTile = demTile.width;
+                }
+                if (nativePixelsAcrossTile > 0.0 && res > nativePixelsAcrossTile * 4.0) {
+                    double nativeResM = tileWidthM / nativePixelsAcrossTile;
+                    m_log.warn("Tile", tile.id(), ": requested", res, "x", res,
+                               "heightmap but source DEM only has ~", (int)nativePixelsAcrossTile,
+                               "native pixels across this", (int)tileWidthM, "x", (int)tileHeightM,
+                               "m tile (~", nativeResM, "m/pixel). Output will look smooth/",
+                               "gradient-like — select a larger tile area or a higher-resolution",
+                               "DEM source (e.g. GPXZ LiDAR) for real terrain detail.");
+                }
+            }
+            if (demSrc == terrain::DemSource::NASA_EarthData_Copernicus) {
+                const double lat0 = std::floor(tile.bounds.south);
+                const double lon0 = std::floor(tile.bounds.west);
+                m_log.info("Cropping Copernicus cell (SW", lat0, lon0, ") to tile",
+                           tile.id(), "bounds", demTile.width, "x", demTile.height);
+                demTile = cropDemToTile(demTile, lon0, lat0 + 1.0, lon0 + 1.0, lat0,
+                                        tile.bounds, res);
+            } else if (demTile.width != res || demTile.height != res) {
                 m_log.info("Resampling DEM for tile", tile.id(), "from", demTile.width, "x", demTile.height, "to", res, "x", res);
                 demTile = terrain::DemDecoder::resample(demTile, res, res);
                 m_log.info("DEM resampled for tile", tile.id());
@@ -352,45 +481,24 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
 }
 
 void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QString& outputPath) {
-    // Compute tile coordinates for the tile center
-    double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
-    double centerLon = (tile.bounds.east + tile.bounds.west) / 2.0;
+    const auto src = m_store->exportSettings().imagerySource;
 
-    // Compute zoom level — use manual override if set, otherwise auto-calculate
-    int manualZoom = m_store->exportSettings().imageryZoomLevel;
-    int zoom;
-    if (manualZoom > 0) {
-        zoom = manualZoom;
-    } else {
-        // Auto-calculate based on tile size
-        double tileSizeKm = m_store->tileSizeKm();
-        if (tileSizeKm <= 1) zoom = 15;
-        else if (tileSizeKm <= 2) zoom = 14;
-        else if (tileSizeKm <= 4) zoom = 13;
-        else if (tileSizeKm <= 8) zoom = 12;
-        else zoom = 11; // 16km tiles
+    // All satellite imagery sources are slippy-tiled; mosaic every sub-tile
+    // covering the bounds so the exported albedo matches the selected area.
+    if (src != terrain::ImagerySource::GLAD_ARD_Landsat &&
+        src != terrain::ImagerySource::Local_File) {
+        startImageryMosaic(tile, outputPath);
+        return;
     }
 
-    // Compute tile X/Y from lat/lon at the given zoom
-    double n = std::pow(2.0, zoom);
-    int x = static_cast<int>((centerLon + 180.0) / 360.0 * n);
-    double latRad = centerLat * M_PI / 180.0;
-    int y = static_cast<int>((1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 * n);
-
-    QString url = imageryTileUrl(zoom, x, y, tile);
+    // GLAD ARD Landsat: single center-point GeoTIFF with basic auth
+    QString url = imageryTileUrl(0, 0, 0, tile);
     if (url.isEmpty()) {
-        // No URL — API key missing or source not configured
         QString reason;
-        auto src = m_store->exportSettings().imagerySource;
-        if (src == terrain::ImagerySource::Mapbox_Satellite)
-            reason = "Mapbox token is required for Mapbox Satellite imagery";
-        else if (src == terrain::ImagerySource::MapTiler_Satellite)
-            reason = "MapTiler token is required for MapTiler Satellite imagery";
-        else if (src == terrain::ImagerySource::Local_File)
+        if (src == terrain::ImagerySource::Local_File)
             reason = "Local imagery file path is not set — select a file in the export panel";
         else
             reason = "Imagery source URL is empty — check source settings";
-
         emit finished(false, QString("Imagery export failed for tile %1: %2")
                           .arg(tile.id()).arg(reason));
         return;
@@ -398,8 +506,14 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
 
     QNetworkRequest request((QUrl(url)));
     request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
+    // GLAD uses basic auth: glad/ardpas
+    request.setRawHeader("Authorization",
+                         "Basic " + QByteArray("glad:ardpas").toBase64());
 
     QNetworkReply* reply = m_network->get(request);
+    QTimer::singleShot(60000, reply, [reply]() {
+        if (reply->isRunning()) reply->abort();
+    });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
         QByteArray data = reply->readAll();
@@ -429,13 +543,13 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
                 img.height() != m_store->exportSettings().albedoResolution) {
                 img = img.scaled(m_store->exportSettings().albedoResolution,
                                 m_store->exportSettings().albedoResolution,
-                                Qt::KeepAspectRatioByExpanding,
+                                Qt::IgnoreAspectRatio,
                                 Qt::SmoothTransformation);
             }
             // Use QGIS-style imagery output (PNG+world file or GeoTIFF RGB)
             if (!writeImageryOutput(img, tile, outputPath)) {
                 emit finished(false, QString("Failed to write imagery output for tile %1: %2")
-                                  .arg(tile.id(), outputPath));
+                                  .arg(tile.id()).arg(outputPath));
                 return;
             }
 
@@ -457,37 +571,21 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
     });
 }
 
-QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
+QString ExportEngine::demTileUrl(const terrain::Tile& tile, int z, int x, int y) const {
     const auto& settings = m_store->exportSettings();
 
     QString demType;
     switch (settings.demSource) {
-    // Tiled DEM sources (no API key needed)
+    // Tiled DEM sources (no API key needed) — z/x/y sub-tiles
     case terrain::DemSource::AWS_Terrarium:
     case terrain::DemSource::Mapzen_Terrarium:
-    case terrain::DemSource::Mapbox_TerrainRGB: {
-        double centerLat = (tile.bounds.north + tile.bounds.south) / 2.0;
-        double centerLon = (tile.bounds.east + tile.bounds.west) / 2.0;
-        double tileSizeKm = m_store->tileSizeKm();
-        int zoom;
-        if (tileSizeKm <= 1) zoom = 15;
-        else if (tileSizeKm <= 2) zoom = 14;
-        else if (tileSizeKm <= 4) zoom = 13;
-        else if (tileSizeKm <= 8) zoom = 12;
-        else zoom = 11;
-        double n = std::pow(2.0, zoom);
-        int x = static_cast<int>((centerLon + 180.0) / 360.0 * n);
-        double latRad = centerLat * M_PI / 180.0;
-        int y = static_cast<int>((1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 * n);
-
-        if (settings.demSource == terrain::DemSource::Mapbox_TerrainRGB) {
-            if (settings.mapboxToken.isEmpty()) return {};
-            return QString("https://api.mapbox.com/v4/mapbox.terrain-rgb/%1/%2/%3.png?access_token=%4")
-                .arg(zoom).arg(x).arg(y).arg(settings.mapboxToken);
-        }
         return QString("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%1/%2/%3.png")
-            .arg(zoom).arg(x).arg(y);
-    }
+            .arg(z).arg(x).arg(y);
+    case terrain::DemSource::Mapbox_TerrainRGB:
+        if (settings.mapboxToken.isEmpty()) return {};
+        // Current Mapbox raster DEM endpoint (classic v4 is retired)
+        return QString("https://api.mapbox.com/raster-dem/v1/mapbox.terrain-rgb/%1/%2/%3.pngraw?access_token=%4")
+            .arg(z).arg(x).arg(y).arg(settings.mapboxToken);
     case terrain::DemSource::NASA_EarthData_Copernicus: {
         // Copernicus DEM GLO-30 via AWS S3 (free, no key)
         // Tiles are named by SOUTHWEST (lower-left) corner, 1x1 degree grid
@@ -538,8 +636,10 @@ QString ExportEngine::demUrlForTile(const terrain::Tile& tile) const {
                 .arg(resM, 0, 'f', 6);
         }
     case terrain::DemSource::GLAD_SRTM:
+        // GLAD SRTM tiles are addressed by integer degree of the SW corner
         return QString("https://glad.umd.edu/dataset/srtm-90m/%1/%2")
-            .arg(tile.bounds.south, 0, 'f', 4).arg(tile.bounds.west, 0, 'f', 4);
+            .arg(std::floor(tile.bounds.south), 0, 'f', 0)
+            .arg(std::floor(tile.bounds.west), 0, 'f', 0);
     case terrain::DemSource::Local_File:
         return {}; // handled separately via local file path
     }
@@ -572,11 +672,13 @@ QString ExportEngine::imageryTileUrl(int z, int x, int y, const terrain::Tile& t
             .arg(z).arg(y).arg(x);
     case terrain::ImagerySource::Mapbox_Satellite:
         if (settings.mapboxToken.isEmpty()) return {};
-        return QString("https://api.mapbox.com/v4/mapbox.satellite/%1/%2/%3.png?access_token=%4")
+        // Current Mapbox styles endpoint (classic v4 is retired)
+        return QString("https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/256/%1/%2/%3?access_token=%4")
             .arg(z).arg(x).arg(y).arg(settings.mapboxToken);
     case terrain::ImagerySource::MapTiler_Satellite:
         if (settings.maptilerToken.isEmpty()) return {};
-        return QString("https://api.maptiler.com/tiles/satellite/%1/%2/%3.jpg?key=%4")
+        // Current dataset is satellite-v2
+        return QString("https://api.maptiler.com/tiles/satellite-v2/%1/%2/%3.jpg?key=%4")
             .arg(z).arg(x).arg(y).arg(settings.maptilerToken);
     case terrain::ImagerySource::GLAD_ARD_Landsat: {
         // GLAD ARD Landsat — uses UMD GLAD tile scheme
@@ -594,6 +696,306 @@ QString ExportEngine::imageryTileUrl(int z, int x, int y, const terrain::Tile& t
         return {};
     }
     return {};
+}
+
+// ============================================================
+// Slippy-tile mosaic download — full coverage of the tile bounds
+// ============================================================
+
+static double slippyLonToX(double lon, int zoom) {
+    return (lon + 180.0) / 360.0 * std::ldexp(1.0, zoom);
+}
+
+static double slippyLatToY(double lat, int zoom) {
+    const double latRad = lat * M_PI / 180.0;
+    return (1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0
+        * std::ldexp(1.0, zoom);
+}
+
+// Keep the mosaic at most 8x8 sub-tiles so request counts stay bounded
+static int clampMosaicZoom(const terrain::GeoBounds& b, int zoom) {
+    while (zoom > 3) {
+        const double spanX = std::abs(slippyLonToX(b.east, zoom) - slippyLonToX(b.west, zoom));
+        const double spanY = std::abs(slippyLatToY(b.south, zoom) - slippyLatToY(b.north, zoom));
+        if (std::ceil(spanX) <= 8.0 && std::ceil(spanY) <= 8.0) return zoom;
+        --zoom;
+    }
+    return 3;
+}
+
+int ExportEngine::autoZoomForBounds(const terrain::GeoBounds& b, int targetRes, int maxZoom) {
+    const double latMid = (b.north + b.south) * 0.5;
+    const double widthM = (b.east - b.west) * 111320.0 * std::cos(latMid * M_PI / 180.0);
+    const double heightM = (b.north - b.south) * 111320.0;
+    const double tileM = std::max(std::max(widthM, heightM), 1.0);
+    const double targetMpp = tileM / static_cast<double>(std::max(targetRes, 1));
+    const double equatorMpp = 156543.03392 * std::cos(latMid * M_PI / 180.0);
+    int zoom = targetMpp > 0.0
+        ? static_cast<int>(std::ceil(std::log2(std::max(equatorMpp / targetMpp, 1.0))))
+        : 12;
+    zoom = qBound(3, zoom, maxZoom);
+    return clampMosaicZoom(b, zoom);
+}
+
+void ExportEngine::slippyRangeForBounds(const terrain::GeoBounds& b, int zoom,
+                                        int& x0, int& y0, int& nx, int& ny) {
+    const int maxIdx = (1 << zoom) - 1;
+    const int xa = qBound(0, static_cast<int>(std::floor(slippyLonToX(b.west, zoom))), maxIdx);
+    const int xb = qBound(0, static_cast<int>(std::floor(slippyLonToX(b.east, zoom))), maxIdx);
+    const int ya = qBound(0, static_cast<int>(std::floor(slippyLatToY(b.north, zoom))), maxIdx);
+    const int yb = qBound(0, static_cast<int>(std::floor(slippyLatToY(b.south, zoom))), maxIdx);
+    x0 = std::min(xa, xb);
+    nx = std::abs(xb - xa) + 1;
+    y0 = std::min(ya, yb);
+    ny = std::abs(yb - ya) + 1;
+}
+
+void ExportEngine::fetchMosaicSubTile(MosaicState& mosaic, int ix, int iy,
+                                      const QUrl& url,
+                                      const QMap<QByteArray, QByteArray>& headers) {
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
+    for (auto it = headers.constBegin(); it != headers.constEnd(); ++it)
+        request.setRawHeader(it.key(), it.value());
+
+    const qint64 key = static_cast<qint64>(iy) * mosaic.nx + ix;
+    const bool isDem = mosaic.isDem;
+
+    QNetworkReply* reply = m_network->get(request);
+    QTimer::singleShot(60000, reply, [reply]() {
+        if (reply->isRunning()) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, key, isDem]() {
+        reply->deleteLater();
+        MosaicState& mosaic = isDem ? m_demMosaic : m_imgMosaic;
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
+            mosaic.blobs.insert(key, reply->readAll());
+        } else {
+            mosaic.failed++;
+            m_log.warn("Mosaic sub-tile failed (HTTP", status, "):", reply->errorString());
+        }
+        mosaic.done++;
+        if (mosaic.done >= mosaic.nx * mosaic.ny) {
+            if (isDem) finishDemMosaic();
+            else finishImageryMosaic();
+        }
+    });
+}
+
+void ExportEngine::startDemMosaic(const terrain::Tile& tile, const QString& outputPath) {
+    const auto& settings = m_store->exportSettings();
+    if (settings.demSource == terrain::DemSource::Mapbox_TerrainRGB &&
+        settings.mapboxToken.isEmpty()) {
+        emit finished(false, QString("DEM export failed for tile %1: "
+                          "Mapbox token is required for Terrain-RGB DEM source")
+                          .arg(tile.id()));
+        return;
+    }
+
+    const int zoom = autoZoomForBounds(tile.bounds, settings.heightmapResolution, 15);
+    MosaicState& m = m_demMosaic;
+    m = MosaicState{};
+    m.active = true;
+    m.isDem = true;
+    m.zoom = zoom;
+    m.outputPath = outputPath;
+    m.tile = tile;
+    slippyRangeForBounds(tile.bounds, zoom, m.x0, m.y0, m.nx, m.ny);
+
+    m_log.info("DEM mosaic for tile", tile.id(), ": zoom", zoom,
+               m.nx, "x", m.ny, "sub-tiles");
+    const QMap<QByteArray, QByteArray> noHeaders;
+    for (int iy = 0; iy < m.ny; ++iy) {
+        for (int ix = 0; ix < m.nx; ++ix) {
+            const QString url = demTileUrl(tile, zoom, m.x0 + ix, m.y0 + iy);
+            if (url.isEmpty()) {
+                emit finished(false, QString("DEM export failed for tile %1: "
+                                  "DEM source URL is empty — check API key and source settings")
+                                  .arg(tile.id()));
+                return;
+            }
+            fetchMosaicSubTile(m, ix, iy, QUrl(url), noHeaders);
+        }
+    }
+}
+
+void ExportEngine::startImageryMosaic(const terrain::Tile& tile, const QString& outputPath) {
+    const auto& settings = m_store->exportSettings();
+    if ((settings.imagerySource == terrain::ImagerySource::Mapbox_Satellite &&
+         settings.mapboxToken.isEmpty()) ||
+        (settings.imagerySource == terrain::ImagerySource::MapTiler_Satellite &&
+         settings.maptilerToken.isEmpty())) {
+        emit finished(false, QString("Imagery export failed for tile %1: "
+                          "API token is required for the selected imagery source")
+                          .arg(tile.id()));
+        return;
+    }
+
+    int zoom;
+    if (settings.imageryZoomLevel > 0)
+        zoom = clampMosaicZoom(tile.bounds, qMin(settings.imageryZoomLevel, 19));
+    else
+        zoom = autoZoomForBounds(tile.bounds, settings.albedoResolution, 19);
+
+    MosaicState& m = m_imgMosaic;
+    m = MosaicState{};
+    m.active = true;
+    m.isDem = false;
+    m.zoom = zoom;
+    m.outputPath = outputPath;
+    m.tile = tile;
+    slippyRangeForBounds(tile.bounds, zoom, m.x0, m.y0, m.nx, m.ny);
+
+    m_log.info("Imagery mosaic for tile", tile.id(), ": zoom", zoom,
+               m.nx, "x", m.ny, "sub-tiles");
+    const QMap<QByteArray, QByteArray> noHeaders;
+    for (int iy = 0; iy < m.ny; ++iy) {
+        for (int ix = 0; ix < m.nx; ++ix) {
+            const QString url = imageryTileUrl(zoom, m.x0 + ix, m.y0 + iy, tile);
+            if (url.isEmpty()) {
+                emit finished(false, QString("Imagery export failed for tile %1: "
+                                  "imagery source URL is empty — check API token and source settings")
+                                  .arg(tile.id()));
+                return;
+            }
+            fetchMosaicSubTile(m, ix, iy, QUrl(url), noHeaders);
+        }
+    }
+}
+
+void ExportEngine::finishDemMosaic() {
+    MosaicState& m = m_demMosaic;
+    m.active = false;
+    const auto& settings = m_store->exportSettings();
+    const int res = settings.heightmapResolution;
+
+    QString sourceName = "terrarium";
+    if (settings.demSource == terrain::DemSource::Mapbox_TerrainRGB)
+        sourceName = "mapbox-terrain";
+
+    const int mw = m.nx * 256;
+    const int mh = m.ny * 256;
+    std::vector<float> mosaic(static_cast<size_t>(mw) * mh,
+                              std::numeric_limits<float>::quiet_NaN());
+    bool anyValid = false;
+    for (auto it = m.blobs.constBegin(); it != m.blobs.constEnd(); ++it) {
+        const int ix = static_cast<int>(it.key() % m.nx);
+        const int iy = static_cast<int>(it.key() / m.nx);
+        terrain::DemTile t = terrain::DemDecoder::decodeAuto(it.value(), sourceName);
+        if (!t.valid) {
+            m_log.warn("DEM sub-tile", ix, iy, "failed to decode for tile", m.tile.id());
+            continue;
+        }
+        const int tw = std::min(t.width, 256);
+        const int th = std::min(t.height, 256);
+        for (int y = 0; y < th; ++y)
+            for (int x = 0; x < tw; ++x)
+                mosaic[static_cast<size_t>(iy * 256 + y) * mw + (ix * 256 + x)] =
+                    t.elevations[static_cast<size_t>(y) * t.width + x];
+        anyValid = true;
+    }
+    if (!anyValid) {
+        emit finished(false, QString("DEM download failed for tile %1 — all %2 sub-tile requests failed")
+                          .arg(m.tile.id()).arg(m.nx * m.ny));
+        return;
+    }
+    if (m.failed > 0)
+        m_log.warn("DEM mosaic for tile", m.tile.id(), ":", m.failed, "of",
+                   m.nx * m.ny, "sub-tiles missing (filled as nodata)");
+
+    // Sample the mosaic to exactly the geo-referenced output extent.
+    // X is linear in longitude; Y is linear in Web-Mercator tile space.
+    const double xw = slippyLonToX(m.tile.bounds.west, m.zoom);
+    const double xe = slippyLonToX(m.tile.bounds.east, m.zoom);
+    const double yn = slippyLatToY(m.tile.bounds.north, m.zoom);
+    const double ys = slippyLatToY(m.tile.bounds.south, m.zoom);
+
+    std::vector<float> out(static_cast<size_t>(res) * res, -9999.0f);
+    for (int py = 0; py < res; ++py) {
+        const double ty = yn + (ys - yn) * ((py + 0.5) / res);
+        const double fy = ty * 256.0 - m.y0 * 256.0;
+        for (int px = 0; px < res; ++px) {
+            const double tx = xw + (xe - xw) * ((px + 0.5) / res);
+            const double fx = tx * 256.0 - m.x0 * 256.0;
+            out[static_cast<size_t>(py) * res + px] = sampleBilinear(mosaic, mw, mh, fx, fy);
+        }
+    }
+
+    if (!writeDemOutput(out, res, res, m.tile, m.outputPath)) {
+        emit finished(false, QString("Failed to write DEM output for tile %1: %2")
+                          .arg(m.tile.id()).arg(m.outputPath));
+        return;
+    }
+    m_log.info("DEM mosaic written for tile", m.tile.id(), "->", m.outputPath);
+
+    m_tileDemData[m.tile.id()] = std::move(out);
+    m_demDownloaded = true;
+    if (m_imageryDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
+void ExportEngine::finishImageryMosaic() {
+    MosaicState& m = m_imgMosaic;
+    m.active = false;
+    const auto& settings = m_store->exportSettings();
+    const int res = settings.albedoResolution;
+
+    const int mw = m.nx * 256;
+    const int mh = m.ny * 256;
+    QImage mosaicImg(mw, mh, QImage::Format_RGB888);
+    mosaicImg.fill(QColor(28, 30, 34));
+    int painted = 0;
+    {
+        QPainter painter(&mosaicImg);
+        for (auto it = m.blobs.constBegin(); it != m.blobs.constEnd(); ++it) {
+            const int ix = static_cast<int>(it.key() % m.nx);
+            const int iy = static_cast<int>(it.key() / m.nx);
+            QImage t;
+            if (!t.loadFromData(it.value())) continue;
+            painter.drawImage(ix * 256, iy * 256,
+                              t.convertToFormat(QImage::Format_RGB888));
+            painted++;
+        }
+        painter.end();
+    }
+    if (painted == 0) {
+        emit finished(false, QString("Imagery download failed for tile %1 — all %2 sub-tile requests failed")
+                          .arg(m.tile.id()).arg(m.nx * m.ny));
+        return;
+    }
+    if (m.failed > 0)
+        m_log.warn("Imagery mosaic for tile", m.tile.id(), ":", m.failed, "of",
+                   m.nx * m.ny, "sub-tiles missing (filled dark)");
+
+    // Crop the exact bounds out of the mosaic, then scale to the target res
+    const double xwPx = slippyLonToX(m.tile.bounds.west, m.zoom) * 256.0 - m.x0 * 256.0;
+    const double xePx = slippyLonToX(m.tile.bounds.east, m.zoom) * 256.0 - m.x0 * 256.0;
+    const double ynPx = slippyLatToY(m.tile.bounds.north, m.zoom) * 256.0 - m.y0 * 256.0;
+    const double ysPx = slippyLatToY(m.tile.bounds.south, m.zoom) * 256.0 - m.y0 * 256.0;
+    const int cx = qBound(0, static_cast<int>(std::round(xwPx)), mw - 1);
+    const int cy = qBound(0, static_cast<int>(std::round(ynPx)), mh - 1);
+    const int cw = qBound(1, static_cast<int>(std::round(xePx - xwPx)), mw - cx);
+    const int ch = qBound(1, static_cast<int>(std::round(ysPx - ynPx)), mh - cy);
+
+    QImage out = mosaicImg.copy(cx, cy, cw, ch)
+                     .scaled(res, res, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+    if (!writeImageryOutput(out, m.tile, m.outputPath)) {
+        emit finished(false, QString("Failed to write imagery output for tile %1: %2")
+                          .arg(m.tile.id()).arg(m.outputPath));
+        return;
+    }
+    m_log.info("Imagery mosaic written for tile", m.tile.id(), "->", m.outputPath);
+
+    m_tileAlbedoData[m.tile.id()] = out;
+    m_imageryDownloaded = true;
+    if (m_demDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
 }
 
 void ExportEngine::writeGeoTiff(const QString& path, const QImage& heightmap,
@@ -651,12 +1053,11 @@ static void latLonToWebMercator(double lat, double lon, double& x, double& y) {
     y = R * log(tan(M_PI / 4.0 + lat * M_PI / 360.0));
 }
 
-// Lat/Lon to UTM conversion (returns zone + easting/northing)
-static void latLonToUtm(double lat, double lon, int& zone, bool& north,
-                        double& easting, double& northing) {
-    zone = static_cast<int>((lon + 180.0) / 6.0) + 1;
-    north = lat >= 0.0;
-
+// Lat/Lon to UTM using an explicitly given zone (both corners of a tile must
+// use the SAME zone, or extents that straddle a zone boundary get garbage
+// eastings from two different projections).
+static void latLonToUtmZone(double lat, double lon, int zone, bool north,
+                            double& easting, double& northing) {
     const double a = 6378137.0;
     const double f = 1.0 / 298.257223563;
     const double k0 = 0.9996;
@@ -681,6 +1082,14 @@ static void latLonToUtm(double lat, double lon, int& zone, bool& north,
     northing = k0 * (M + N * tan(latRad) * (A*A / 2.0
               + (5.0 - T + 9.0*C) * A*A*A*A / 24.0));
     if (!north) northing += 10000000.0;
+}
+
+// Lat/Lon to UTM conversion (auto zone from longitude)
+static void latLonToUtm(double lat, double lon, int& zone, bool& north,
+                        double& easting, double& northing) {
+    zone = static_cast<int>((lon + 180.0) / 6.0) + 1;
+    north = lat >= 0.0;
+    latLonToUtmZone(lat, lon, zone, north, easting, northing);
 }
 
 terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile) const {
@@ -719,14 +1128,17 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
 
     case terrain::CrsSource::Auto_UTM:
     {
-        // Compute UTM zone from centroid
+        // Compute UTM zone ONCE from the centroid and convert both corners
+        // with that fixed zone. Using each corner's own zone breaks extents
+        // that straddle a zone boundary (mismatched eastings).
         double clat = (north + south) / 2.0;
         double clon = (west + east) / 2.0;
-        int zone;
-        bool isNorth;
+        int zone = static_cast<int>((clon + 180.0) / 6.0) + 1;
+        zone = qBound(1, zone, 60);
+        bool isNorth = clat >= 0.0;
         double e_w, n_n, e_e, n_s;
-        latLonToUtm(north, west, zone, isNorth, e_w, n_n);
-        latLonToUtm(south, east, zone, isNorth, e_e, n_s);
+        latLonToUtmZone(north, west, zone, isNorth, e_w, n_n);
+        latLonToUtmZone(south, east, zone, isNorth, e_e, n_s);
         ext.crsMode = terrain::GeoCrsMode::UTM;
         ext.utmEpsg = isNorth ? (32600 + zone) : (32700 + zone);
         ext.west = e_w;
@@ -751,34 +1163,11 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
         else if (crs == terrain::CrsSource::EPSG_25832) { targetZone = 32; isNorth = true; ext.utmEpsg = 25832; }
         else { targetZone = 33; isNorth = true; ext.utmEpsg = 25833; }
 
-        // Use the target zone for conversion (not auto-computed)
-        // We need to compute UTM with the specific zone
-        double clon = (west + east) / 2.0;
-        (void)clon;  // suppress unused warning
-
-        // Convert all 4 corners using the target zone
+        // Convert the corners using the target zone
         auto convertPoint = [&](double lat, double lon) -> std::pair<double, double> {
-            const double a = 6378137.0;
-            const double f = 1.0 / 298.257223563;
-            const double k0 = 0.9996;
-            const double e2 = f * (2.0 - f);
-            const double e2sq = e2 * e2;
-            double latRad = lat * M_PI / 180.0;
-            double lonRad = lon * M_PI / 180.0;
-            double lonOrigin = (targetZone - 1) * 6.0 - 180.0 + 3.0;
-            double lonOriginRad = lonOrigin * M_PI / 180.0;
-            double N = a / sqrt(1.0 - e2 * sin(latRad) * sin(latRad));
-            double T = tan(latRad) * tan(latRad);
-            double C = e2sq * cos(latRad) * cos(latRad) / (1.0 - e2);
-            double A = cos(latRad) * (lonRad - lonOriginRad);
-            double M = a * ((1.0 - e2/4.0 - 3.0*e2sq/64.0) * latRad
-                      - (3.0*e2/8.0 + 3.0*e2sq/32.0) * sin(2.0*latRad)
-                      + (15.0*e2sq/256.0) * sin(4.0*latRad));
-            double easting = k0 * N * (A + (1.0 - T + C) * A*A*A / 6.0) + 500000.0;
-            double northing = k0 * (M + N * tan(latRad) * (A*A / 2.0
-                      + (5.0 - T + 9.0*C) * A*A*A*A / 24.0));
-            if (!isNorth) northing += 10000000.0;
-            return {easting, northing};
+            double e, n;
+            latLonToUtmZone(lat, lon, targetZone, isNorth, e, n);
+            return {e, n};
         };
 
         auto [e_w, n_n] = convertPoint(north, west);
@@ -816,8 +1205,13 @@ bool ExportEngine::writeDemOutput(const std::vector<float>& elevations,
     // PNG fallback keeps the terrain usable by OGRE even if libtiff cannot
     // write to a synced/Unicode project path. It stores normalized elevation;
     // the selected GeoTIFF remains the preferred output when it succeeds.
+    // The preview is written to a .png SIBLING — never into the .tif/.r16
+    // path, because a mislabeled PNG breaks every GeoTIFF consumer
+    // (Unigine/QGIS report it as an unreadable or non-reprojectable layer).
     auto writePreviewPng = [&]() {
         if (elevations.empty() || width <= 0 || height <= 0) return false;
+        const QFileInfo outInfo(outputPath);
+        QString pngPath = outInfo.absolutePath() + "/" + outInfo.completeBaseName() + ".png";
         float zMin = std::numeric_limits<float>::max();
         float zMax = std::numeric_limits<float>::lowest();
         for (float e : elevations) {
@@ -837,8 +1231,14 @@ bool ExportEngine::writeDemOutput(const std::vector<float>& elevations,
                 preview.setPixelColor(x, y, QColor(value, value, value));
             }
         }
-        return RasterWriter::writePngWithWorldFile(outputPath, preview, ext) &&
-               QFileInfo::exists(outputPath);
+        // Clear any partial binary output before dropping a PNG next to it
+        QFile::remove(outputPath);
+        bool ok = RasterWriter::writePngWithWorldFile(pngPath, preview, ext) &&
+                  QFileInfo::exists(pngPath);
+        if (ok)
+            m_log.warn("GeoTIFF write failed for", outputPath,
+                       "— wrote normalized PNG preview instead:", pngPath);
+        return ok;
     };
 
     // Compression setting
@@ -962,8 +1362,9 @@ bool ExportEngine::writeDemOutput(const std::vector<float>& elevations,
 
     case terrain::HeightmapFormat::None:
     default:
-        // No heightmap output (albedo only)
-        break;
+        // No heightmap output requested (albedo only) — nothing to write,
+        // but not a failure either.
+        return true;
     }
     return written;
 }

@@ -1,15 +1,16 @@
 #pragma once
 
 // ============================================================
-// Studio3DWidget — 3D Studio workspace with OGRE-Next
+// Studio3DWidget — Unreal-style 3D Studio workspace
 // ============================================================
 //
-// OGRE-Next is embedded directly in Qt (no external process).
-// This widget provides:
-//   - Embedded 3D viewport using OgreWidget
-//   - Load terrain heightmap + albedo from project
-//   - Orbit/zoom camera controls
-//   - Export terrain data for external use
+// Layout follows the UE editor:
+//   - Toolbar: save/load, transform tools (Q/W/E/R), snap + grid
+//   - Left:    World Outliner + Layers
+//   - Center:  OGRE-Next viewport
+//   - Right:   Inspector (Details) + Place Actors / World tabs
+//   - Bottom:  Content Browser (asset library) + Output Log tabs
+//   - Status bar with live hints
 //
 
 #include <QWidget>
@@ -23,8 +24,11 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QSlider>
+#include <QToolButton>
 #include <QJsonObject>
 #include <QDir>
+
+#include "../../core/world/World.hpp"
 
 class ApplicationContext;
 class OgreWidget;
@@ -32,6 +36,8 @@ class WorldOutliner;
 class Inspector;
 class LayerPanel;
 class ContentBrowser;
+class QTabWidget;
+class QButtonGroup;
 
 class Studio3DWidget : public QWidget {
     Q_OBJECT
@@ -44,7 +50,6 @@ private slots:
     void onLoadTerrain();
     void onClearTerrain();
     void onLoadRoads();
-    void onResetCamera();
     void onExportTerrain();
     void onExportRoads();
     void onHeightScaleChanged(int value);
@@ -63,6 +68,15 @@ private slots:
     void onLoadWorld();
     void onActorSelected(const QString& id);
 
+    // Toolbar-driven editor state
+    void onTransformModeChanged(int mode);
+    void onSnapToggled(bool enabled);
+    void onSnapSizeChanged(int index);
+    void onGridToggled(bool visible);
+
+    // Asset library placement (ContentBrowser::assetRequested)
+    void onPlaceAsset(const QString& pathOrType, const QString& type);
+
 public:
     // Called by main window when project is opened/closed
     void onProjectOpened();
@@ -70,7 +84,13 @@ public:
 
 private:
     void setupUI();
+    QWidget* setupToolbar();
+    QWidget* setupLeftPanel();
+    QWidget* setupRightPanel();
+    QWidget* setupStatusBar();
     void appendLog(const QString& msg);
+    void setStatus(const QString& text);
+    void refreshStats();
     QString findHeightmapInProject();
     QString findAlbedoInProject();
     QString findXodrInProject();
@@ -78,6 +98,13 @@ private:
     QString worldFilePath() const;
     QJsonObject resolveScenePaths(const QJsonObject& scene);
     void loadMissingProjectAssets();
+
+    // Places an actor at the camera focus, snapped to the terrain surface.
+    // Returns the new actor's id.
+    QString placeActorAtFocus(world::ActorType type, float sx, float sy, float sz,
+                              const QString& layerId, const QString& name = QString());
+    // Size/layer presets for the built-in actor palette
+    void placePreset(world::ActorType type);
 
     ApplicationContext* m_ctx;
 
@@ -89,32 +116,27 @@ private:
     Inspector* m_inspector = nullptr;
     LayerPanel* m_layerPanel = nullptr;
     ContentBrowser* m_contentBrowser = nullptr;
+    QTabWidget* m_bottomTabs = nullptr;
 
-    // Controls
-    QPushButton* m_loadTerrainBtn = nullptr;
-    QPushButton* m_clearTerrainBtn = nullptr;
-    QPushButton* m_loadRoadsBtn = nullptr;
-    QPushButton* m_resetCameraBtn = nullptr;
-    QPushButton* m_exportTerrainBtn = nullptr;
-    QPushButton* m_exportRoadsBtn = nullptr;
-    QPushButton* m_addBuildingBtn = nullptr;
-    QPushButton* m_addTreeBtn = nullptr;
-    QPushButton* m_addBoxBtn = nullptr;
-    QPushButton* m_clearObjectsBtn = nullptr;
-    QPushButton* m_genBuildingsBtn = nullptr;
-    QPushButton* m_genVegetationBtn = nullptr;
-    QPushButton* m_addLakeBtn = nullptr;
-    QPushButton* m_addSunBtn = nullptr;
-    QPushButton* m_addSkyBtn = nullptr;
-    QPushButton* m_saveSceneBtn = nullptr;
-    QPushButton* m_loadSceneBtn = nullptr;
-    QPushButton* m_saveWorldBtn = nullptr;
-    QPushButton* m_loadWorldBtn = nullptr;
+    // Toolbar
+    QToolButton* m_selectToolBtn = nullptr;
+    QToolButton* m_moveToolBtn = nullptr;
+    QToolButton* m_rotateToolBtn = nullptr;
+    QToolButton* m_scaleToolBtn = nullptr;
+    QButtonGroup* m_toolGroup = nullptr;
+    QToolButton* m_snapBtn = nullptr;
+    QToolButton* m_gridBtn = nullptr;
+    QComboBox* m_snapSizeCombo = nullptr;
+
+    // Terrain controls (World tab)
     QSlider* m_heightScaleSlider = nullptr;
     QLabel* m_heightScaleLabel = nullptr;
 
-    // Status
+    // Status bar
     QLabel* m_statusLabel = nullptr;
+    QLabel* m_statsLabel = nullptr;
+
+    // Output log
     QTextEdit* m_logEdit = nullptr;
 
     // Track whether scene has been auto-loaded for current project

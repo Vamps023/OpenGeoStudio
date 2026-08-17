@@ -118,12 +118,13 @@ public:
     void orbitCamera(float yaw, float pitch);
     void zoomCamera(float delta);
     void panCamera(float dx, float dy);
+    struct WorldPos;
+    WorldPos cameraTarget() const;
 
     // ─── Get the QWidget wrapper for embedding in layouts ───
     QWidget* containerWidget();
 
     // ─── Raycast from screen coordinates to world ───
-    struct WorldPos { float x, y, z; };
     bool screenToWorld(int screenX, int screenY, WorldPos& worldPos);
     QString pickActor(int screenX, int screenY);
 
@@ -147,6 +148,7 @@ signals:
     void actorRemoved(const QString& id);
     void sceneChanged();
     void worldChanged();
+    void transformModeChanged(int mode);
 
 protected:
     void exposeEvent(QExposeEvent* event) override;
@@ -267,3 +269,10 @@ private:
     int m_lastMouseX = 0;
     int m_lastMouseY = 0;
 };
+
+struct OgreWidget::WorldPos { float x, y, z; };
+
+inline OgreWidget::WorldPos OgreWidget::cameraTarget() const
+{
+    return {m_camTargetX, m_camTargetY, m_camTargetZ};
+}

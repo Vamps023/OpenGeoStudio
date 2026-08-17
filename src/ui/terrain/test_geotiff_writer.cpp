@@ -14,12 +14,58 @@
 
 // Register GeoTIFF tags for reading (same as in RasterWriter.cpp)
 static const TIFFFieldInfo kReadFieldInfo[] = {
-    { 33550, 3, 3, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelPixelScale") },
-    { 33922, 6, 6, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelTiepoint") },
+    { 33550, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelPixelScale") },
+    { 33922, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("ModelTiepoint") },
     { 34735, -1, -1, TIFF_SHORT, FIELD_CUSTOM, true, true, const_cast<char*>("GeoKeyDirectory") },
     { 34736, -1, -1, TIFF_DOUBLE, FIELD_CUSTOM, true, true, const_cast<char*>("GeoDoubleParams") },
     { 34737, -1, -1, TIFF_ASCII, FIELD_CUSTOM, true, true, const_cast<char*>("GeoAsciiParams") },
 };
+
+// Dump all geo tags of an open TIFF exactly as a reader (GDAL/Unigine) sees them
+static void dumpGeoTags(TIFF* tif) {
+    // passcount custom tags need (count*, data**) varargs
+    uint16_t count = 0;
+    double* doubles = nullptr;
+    uint16_t* shorts = nullptr;
+
+    if (TIFFGetField(tif, 33550, &count, &doubles) && doubles && count >= 3) {
+        printf("  ModelPixelScale (33550): count=%u ScaleX=%.10f ScaleY=%.10f\n",
+               count, doubles[0], doubles[1]);
+    } else {
+        printf("  ModelPixelScale (33550): MISSING!\n");
+    }
+
+    if (TIFFGetField(tif, 33922, &count, &doubles) && doubles && count >= 6) {
+        printf("  ModelTiepoint (33922): count=%u raster(%.1f,%.1f) -> world(%.10f, %.10f)\n",
+               count, doubles[0], doubles[1], doubles[3], doubles[4]);
+    } else {
+        printf("  ModelTiepoint (33922): MISSING!\n");
+    }
+
+    if (TIFFGetField(tif, 34735, &count, &shorts) && shorts && count >= 4) {
+        const int numKeys = shorts[3];
+        printf("  GeoKeyDirectory (34735): count=%u shorts, %d keys, header v%d.%d.%d\n",
+               count, numKeys, shorts[0], shorts[1], shorts[2]);
+        for (int i = 4; i + 3 < static_cast<int>(count) && (i - 4) / 4 < numKeys; i += 4) {
+            printf("    key %u: location=%u count=%u value=%u\n",
+                   shorts[i], shorts[i + 1], shorts[i + 2], shorts[i + 3]);
+        }
+    } else {
+        printf("  GeoKeyDirectory (34735): MISSING!\n");
+    }
+
+    if (TIFFGetField(tif, 34736, &count, &doubles) && doubles && count > 0) {
+        printf("  GeoDoubleParams (34736): count=%u", count);
+        for (int i = 0; i < count && i < 4; ++i) printf(" [%.6f]", doubles[i]);
+        printf("\n");
+    }
+
+    char* ascii = nullptr;
+    if (TIFFGetField(tif, 34737, &count, &ascii) && ascii) {
+        printf("  GeoAsciiParams (34737): count=%u '%s'\n", count, ascii);
+    }
+    fflush(stdout);
+}
 
 static void tiffSilentWarning(const char*, const char*, va_list) {}
 
@@ -49,37 +95,10 @@ int main(int argc, char* argv[]) {
 
         // Read back and check for GeoTIFF tags
         TIFF* tif = TIFFOpen(path.toUtf8().constData(), "r");
-        TIFFMergeFieldInfo(tif, kReadFieldInfo, sizeof(kReadFieldInfo) / sizeof(kReadFieldInfo[0]));
-        TIFFSetWarningHandler(tiffSilentWarning);
         if (tif) {
-            // Check tag 33550 (ModelPixelScale) — custom tag returns pointer
-            printf("  Checking ModelPixelScale (33550)...\n"); fflush(stdout);
-            double* scalePtr = nullptr;
-            int hasScale = TIFFGetField(tif, 33550, &scalePtr);
-            printf("  ModelPixelScale (33550): %s\n", hasScale ? "PRESENT" : "MISSING"); fflush(stdout);
-            if (hasScale && scalePtr) {
-                printf("    ScaleX=%.10f ScaleY=%.10f\n", scalePtr[0], scalePtr[1]); fflush(stdout);
-            }
-
-            // Check tag 33922 (ModelTiepoint) — custom tag returns pointer
-            printf("  Checking ModelTiepoint (33922)...\n"); fflush(stdout);
-            double* tiepointPtr = nullptr;
-            int hasTiepoint = TIFFGetField(tif, 33922, &tiepointPtr);
-            printf("  ModelTiepoint (33922): %s\n", hasTiepoint ? "PRESENT" : "MISSING"); fflush(stdout);
-            if (hasTiepoint && tiepointPtr) {
-                printf("    X=%.10f Y=%.10f\n", tiepointPtr[3], tiepointPtr[4]); fflush(stdout);
-            }
-
-            // Check tag 34735 (GeoKeyDirectory)
-            uint16_t* geokeys = nullptr;
-            uint16_t keycount = 0;
-            bool hasKeys = TIFFGetField(tif, 34735, &keycount, &geokeys);
-            std::cerr << "  GeoKeyDirectory (34735): " << (hasKeys ? "PRESENT" : "MISSING") << std::endl;
-            if (hasKeys && geokeys) {
-                int numKeys = geokeys[3];
-                std::cerr << "    Number of keys: " << numKeys << std::endl;
-            }
-
+            TIFFMergeFieldInfo(tif, kReadFieldInfo, sizeof(kReadFieldInfo) / sizeof(kReadFieldInfo[0]));
+            TIFFSetWarningHandler(tiffSilentWarning);
+            dumpGeoTags(tif);
             TIFFClose(tif);
         }
         // Keep file for inspection
@@ -105,35 +124,7 @@ int main(int argc, char* argv[]) {
         if (tif) {
             TIFFMergeFieldInfo(tif, kReadFieldInfo, sizeof(kReadFieldInfo) / sizeof(kReadFieldInfo[0]));
             TIFFSetWarningHandler(tiffSilentWarning);
-            double* scalePtr = nullptr;
-            int hasScale = TIFFGetField(tif, 33550, &scalePtr);
-            printf("  ModelPixelScale (33550): %s\n", hasScale ? "PRESENT" : "MISSING"); fflush(stdout);
-            if (hasScale && scalePtr) {
-                printf("    ScaleX=%.4f ScaleY=%.4f\n", scalePtr[0], scalePtr[1]); fflush(stdout);
-            }
-
-            double* tiepointPtr = nullptr;
-            int hasTiepoint = TIFFGetField(tif, 33922, &tiepointPtr);
-            printf("  ModelTiepoint (33922): %s\n", hasTiepoint ? "PRESENT" : "MISSING"); fflush(stdout);
-            if (hasTiepoint && tiepointPtr) {
-                printf("    X=%.4f Y=%.4f\n", tiepointPtr[3], tiepointPtr[4]); fflush(stdout);
-            }
-
-            uint16_t* geokeys = nullptr;
-            uint16_t keycount = 0;
-            bool hasKeys = TIFFGetField(tif, 34735, &keycount, &geokeys);
-            std::cerr << "  GeoKeyDirectory (34735): " << (hasKeys ? "PRESENT" : "MISSING") << std::endl;
-            if (hasKeys && geokeys) {
-                int numKeys = geokeys[3];
-                std::cerr << "    Number of keys: " << numKeys << std::endl;
-                // Print the ProjectedCSTypeGeoKey (should be 32630)
-                for (int i = 4; i < 4 + numKeys * 4; i += 4) {
-                    if (geokeys[i] == 3072) {  // PROJECTEDCSTYPE_GEOKEY
-                        std::cerr << "    ProjectedCSTypeGeoKey = " << geokeys[i+3] << std::endl;
-                    }
-                }
-            }
-
+            dumpGeoTags(tif);
             TIFFClose(tif);
         }
         QFile::remove(path);

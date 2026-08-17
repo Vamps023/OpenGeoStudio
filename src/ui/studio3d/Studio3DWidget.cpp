@@ -13,6 +13,9 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolButton>
+#include <QButtonGroup>
+#include <QTabWidget>
 #include <QTextEdit>
 #include <QSlider>
 #include <QProgressBar>
@@ -25,6 +28,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QTime>
+#include <QPair>
 #include <QCoreApplication>
 #include <cmath>
 #include <cstdlib>
@@ -37,89 +42,338 @@ Studio3DWidget::Studio3DWidget(ApplicationContext* ctx, QWidget* parent)
 
 Studio3DWidget::~Studio3DWidget() = default;
 
+namespace {
+QLabel* makePanelHeader(const QString& title, QWidget* parent)
+{
+    auto* lbl = new QLabel(title, parent);
+    lbl->setObjectName("panelHeader");
+    return lbl;
+}
+
+QFrame* makeVSeparator(QWidget* parent)
+{
+    auto* sep = new QFrame(parent);
+    sep->setObjectName("vsep");
+    sep->setFrameShape(QFrame::VLine);
+    sep->setFixedWidth(2);
+    return sep;
+}
+} // namespace
+
 void Studio3DWidget::setupUI()
 {
+    setStyleSheet(QStringLiteral(
+        "QLabel#panelHeader { background: #161b22; color: #7d8590; font-size: 10px;"
+        "  font-weight: bold; text-transform: uppercase; letter-spacing: 1px;"
+        "  padding: 6px 8px; border: 1px solid #30363d; }"
+        "QWidget#studioToolbar { background: #0d1117; border: 1px solid #30363d; }"
+        "QToolButton { background: transparent; color: #e6edf3; padding: 6px 12px;"
+        "  border-radius: 4px; font-size: 12px; }"
+        "QToolButton:hover { background: #21262d; }"
+        "QToolButton:pressed { background: #30363d; }"
+        "QToolButton:checked { background: #1f6feb; color: #ffffff; }"
+        "QFrame#vsep { background: #30363d; }"
+        "QWidget#studioStatusBar { background: #161b22; border: 1px solid #30363d; }"
+        "QSplitter::handle { background: #21262d; }"
+        "QSplitter::handle:horizontal { width: 3px; }"
+        "QSplitter::handle:vertical { height: 3px; }"
+        "QTabWidget::pane { border: 1px solid #30363d; }"
+        "QTabBar::tab { background: #0d1117; color: #7d8590; padding: 6px 16px;"
+        "  border: 1px solid #30363d; border-bottom: none; }"
+        "QTabBar::tab:selected { background: #161b22; color: #e6edf3;"
+        "  border-bottom: 2px solid #1f6feb; }"
+    ));
+
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(4, 4, 4, 4);
     mainLayout->setSpacing(4);
 
-    // ─── Left: OGRE 3D Viewport ───
-    auto* viewportGroup = new QGroupBox("3D Viewport (OGRE-Next)", this);
-    auto* viewportLayout = new QVBoxLayout(viewportGroup);
+    // ─── Viewport (created first; panels attach to it) ───
+    m_ogreWidget = new OgreWidget(this);
 
-    m_ogreWidget = new OgreWidget(viewportGroup);
+    // ─── Toolbar ───
+    mainLayout->addWidget(setupToolbar());
+
+    // ─── Editor row: outliner | viewport | details ───
+    auto* editorRow = new QSplitter(Qt::Horizontal, this);
+    editorRow->setChildrenCollapsible(false);
+    editorRow->addWidget(setupLeftPanel());
+
+    auto* viewportWrap = new QWidget(this);
+    auto* viewportLayout = new QVBoxLayout(viewportWrap);
+    viewportLayout->setContentsMargins(0, 0, 0, 0);
     viewportLayout->addWidget(m_ogreWidget->containerWidget());
+    editorRow->addWidget(viewportWrap);
 
-    // Camera controls
-    auto* camLayout = new QHBoxLayout();
-    m_resetCameraBtn = new QPushButton("Reset Camera", viewportGroup);
-    m_resetCameraBtn->setStyleSheet("QPushButton { padding: 6px 12px; }");
-    connect(m_resetCameraBtn, &QPushButton::clicked, this, &Studio3DWidget::onResetCamera);
-    camLayout->addWidget(m_resetCameraBtn);
-    camLayout->addStretch();
-    viewportLayout->addLayout(camLayout);
+    editorRow->addWidget(setupRightPanel());
+    editorRow->setStretchFactor(0, 0);
+    editorRow->setStretchFactor(1, 1);
+    editorRow->setStretchFactor(2, 0);
+    editorRow->setSizes({250, 900, 340});
 
-    viewportGroup->setLayout(viewportLayout);
+    // ─── Bottom: content browser + output log ───
+    m_bottomTabs = new QTabWidget(this);
+    m_bottomTabs->setMinimumHeight(190);
 
-    // ─── Left: Unreal-style World Outliner + Layers ───
+    m_contentBrowser = new ContentBrowser(m_ogreWidget, this);
+    QString assetDir;
+    if (m_ctx && m_ctx->projects().hasProject()) {
+        assetDir = QDir(m_ctx->projects().current().basePath).filePath("Assets");
+    }
+    if (assetDir.isEmpty() || !QDir(assetDir).exists()) {
+        assetDir = QCoreApplication::applicationDirPath();
+    }
+    m_contentBrowser->setAssetDirectory(assetDir);
+    connect(m_contentBrowser, &ContentBrowser::assetRequested,
+            this, &Studio3DWidget::onPlaceAsset);
+    m_bottomTabs->addTab(m_contentBrowser, "Content Browser");
+
+    auto* logWrap = new QWidget(this);
+    auto* logLayout = new QVBoxLayout(logWrap);
+    logLayout->setContentsMargins(4, 4, 4, 4);
+    m_logEdit = new QTextEdit(logWrap);
+    m_logEdit->setReadOnly(true);
+    m_logEdit->setStyleSheet(
+        "QTextEdit { background-color: #1e1e2e; color: #cdd6f4; "
+        "font-family: Consolas; font-size: 11px; }");
+    logLayout->addWidget(m_logEdit);
+    m_bottomTabs->addTab(logWrap, "Output Log");
+
+    // ─── Main vertical splitter: editor row over bottom tabs ───
+    auto* mainSplit = new QSplitter(Qt::Vertical, this);
+    mainSplit->setChildrenCollapsible(false);
+    mainSplit->addWidget(editorRow);
+    mainSplit->addWidget(m_bottomTabs);
+    mainSplit->setStretchFactor(0, 1);
+    mainSplit->setStretchFactor(1, 0);
+    mainSplit->setSizes({620, 230});
+    mainLayout->addWidget(mainSplit, 1);
+
+    // ─── Status bar ───
+    mainLayout->addWidget(setupStatusBar());
+
+    setLayout(mainLayout);
+
+    // ─── Signal wiring ───
+    connect(m_outliner, &WorldOutliner::actorSelected, this, &Studio3DWidget::onActorSelected);
+    connect(m_ogreWidget, &OgreWidget::actorSelected, this, &Studio3DWidget::onActorSelected);
+    connect(m_ogreWidget, &OgreWidget::actorAdded, [this](const QString&) { m_outliner->refresh(); refreshStats(); });
+    connect(m_ogreWidget, &OgreWidget::actorRemoved, [this](const QString&) { m_outliner->refresh(); refreshStats(); });
+    connect(m_ogreWidget, &OgreWidget::sceneChanged, [this]() { m_outliner->refresh(); m_layerPanel->refresh(); refreshStats(); });
+    connect(m_ogreWidget, &OgreWidget::transformModeChanged, this, &Studio3DWidget::onTransformModeChanged);
+
+    setStatus("Ready");
+    refreshStats();
+    appendLog("3D Studio ready (Unreal-style editor layout)");
+}
+
+QWidget* Studio3DWidget::setupToolbar()
+{
+    auto* bar = new QWidget(this);
+    bar->setObjectName("studioToolbar");
+    auto* lay = new QHBoxLayout(bar);
+    lay->setContentsMargins(6, 4, 6, 4);
+    lay->setSpacing(2);
+
+    auto makeBtn = [bar](const QString& text, const QString& tip, bool checkable) {
+        auto* b = new QToolButton(bar);
+        b->setText(text);
+        b->setToolTip(tip);
+        b->setCheckable(checkable);
+        return b;
+    };
+
+    // Scene save/load
+    auto* saveBtn = makeBtn("Save Scene",
+        "Save the 3D scene (terrain, roads, actors, camera) to the project", false);
+    connect(saveBtn, &QToolButton::clicked, this, &Studio3DWidget::onSaveScene);
+    lay->addWidget(saveBtn);
+
+    auto* loadBtn = makeBtn("Load Scene",
+        "Load the saved 3D scene from the project", false);
+    connect(loadBtn, &QToolButton::clicked, this, &Studio3DWidget::onLoadScene);
+    lay->addWidget(loadBtn);
+
+    lay->addWidget(makeVSeparator(bar));
+
+    // Transform tools (mirrored by Q/W/E/R in the viewport)
+    m_selectToolBtn = makeBtn("Select", "Select tool (Q)", true);
+    m_moveToolBtn = makeBtn("Move", "Move tool (W)", true);
+    m_rotateToolBtn = makeBtn("Rotate", "Rotate tool (E)", true);
+    m_scaleToolBtn = makeBtn("Scale", "Scale tool (R)", true);
+    m_toolGroup = new QButtonGroup(this);
+    m_toolGroup->setExclusive(true);
+    m_toolGroup->addButton(m_selectToolBtn);
+    m_toolGroup->addButton(m_moveToolBtn);
+    m_toolGroup->addButton(m_rotateToolBtn);
+    m_toolGroup->addButton(m_scaleToolBtn);
+    m_selectToolBtn->setChecked(true);
+    connect(m_selectToolBtn, &QToolButton::clicked, this, [this]() {
+        m_ogreWidget->setTransformMode(TransformMode::None); });
+    connect(m_moveToolBtn, &QToolButton::clicked, this, [this]() {
+        m_ogreWidget->setTransformMode(TransformMode::Move); });
+    connect(m_rotateToolBtn, &QToolButton::clicked, this, [this]() {
+        m_ogreWidget->setTransformMode(TransformMode::Rotate); });
+    connect(m_scaleToolBtn, &QToolButton::clicked, this, [this]() {
+        m_ogreWidget->setTransformMode(TransformMode::Scale); });
+    lay->addWidget(m_selectToolBtn);
+    lay->addWidget(m_moveToolBtn);
+    lay->addWidget(m_rotateToolBtn);
+    lay->addWidget(m_scaleToolBtn);
+
+    lay->addWidget(makeVSeparator(bar));
+
+    // Snapping
+    m_snapBtn = makeBtn("Snap", "Snap actor transforms to the grid size", true);
+    m_snapBtn->setChecked(m_ogreWidget->isSnapEnabled());
+    connect(m_snapBtn, &QToolButton::toggled, this, &Studio3DWidget::onSnapToggled);
+    lay->addWidget(m_snapBtn);
+
+    m_snapSizeCombo = new QComboBox(bar);
+    m_snapSizeCombo->addItems({"0.1 m", "0.5 m", "1 m", "2 m", "5 m", "10 m"});
+    m_snapSizeCombo->setCurrentIndex(2); // 1 m — matches OgreWidget default
+    m_snapSizeCombo->setToolTip("Grid snap size");
+    connect(m_snapSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &Studio3DWidget::onSnapSizeChanged);
+    lay->addWidget(m_snapSizeCombo);
+
+    m_gridBtn = makeBtn("Grid", "Show/hide the viewport grid", true);
+    m_gridBtn->setChecked(m_ogreWidget->isGridVisible());
+    connect(m_gridBtn, &QToolButton::toggled, this, &Studio3DWidget::onGridToggled);
+    lay->addWidget(m_gridBtn);
+
+    lay->addStretch();
+
+    auto* resetCamBtn = makeBtn("Reset Camera", "Reset the camera to the world origin", false);
+    connect(resetCamBtn, &QToolButton::clicked, this, [this]() {
+        m_ogreWidget->resetCamera();
+        appendLog("Camera reset.");
+    });
+    lay->addWidget(resetCamBtn);
+
+    return bar;
+}
+
+QWidget* Studio3DWidget::setupLeftPanel()
+{
     auto* leftPanel = new QWidget(this);
     leftPanel->setMinimumWidth(220);
     leftPanel->setMaximumWidth(300);
     auto* leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->setSpacing(4);
+    leftLayout->setSpacing(3);
 
+    leftLayout->addWidget(makePanelHeader("World Outliner", leftPanel));
     m_outliner = new WorldOutliner(m_ogreWidget, leftPanel);
-    m_layerPanel = new LayerPanel(m_ogreWidget, leftPanel);
     leftLayout->addWidget(m_outliner, 3);
+
+    leftLayout->addWidget(makePanelHeader("Layers", leftPanel));
+    m_layerPanel = new LayerPanel(m_ogreWidget, leftPanel);
     leftLayout->addWidget(m_layerPanel, 1);
 
+    return leftPanel;
+}
+
+QWidget* Studio3DWidget::setupRightPanel()
+{
+    auto* rightPanel = new QSplitter(Qt::Vertical, this);
+    rightPanel->setChildrenCollapsible(false);
+    rightPanel->setMinimumWidth(300);
+    rightPanel->setMaximumWidth(400);
+
+    // Details (Inspector) on top
     m_inspector = new Inspector(m_ogreWidget, this);
+    rightPanel->addWidget(m_inspector);
 
-    // Connect signals
-    connect(m_outliner, &WorldOutliner::actorSelected, this, &Studio3DWidget::onActorSelected);
-    connect(m_ogreWidget, &OgreWidget::actorSelected, this, &Studio3DWidget::onActorSelected);
-    connect(m_ogreWidget, &OgreWidget::actorAdded, [this](const QString&) { m_outliner->refresh(); });
-    connect(m_ogreWidget, &OgreWidget::actorRemoved, [this](const QString&) { m_outliner->refresh(); });
-    connect(m_ogreWidget, &OgreWidget::sceneChanged, [this]() { m_outliner->refresh(); m_layerPanel->refresh(); });
+    // Place Actors / World tabs below
+    auto* tabs = new QTabWidget(this);
 
-    // ─── Right: Details + world controls ───
-    auto* sidePanel = new QWidget(this);
-    auto* sideLayout = new QVBoxLayout(sidePanel);
-    sidePanel->setMaximumWidth(350);
+    // ─── Place Actors tab ───
+    auto* placeScroll = new QScrollArea(this);
+    placeScroll->setWidgetResizable(true);
+    placeScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    placeScroll->setFrameShape(QFrame::NoFrame);
+    auto* placePanel = new QWidget(this);
+    auto* placeLayout = new QVBoxLayout(placePanel);
+    placeLayout->setContentsMargins(6, 6, 6, 6);
+    placeLayout->setSpacing(8);
 
-    // ─── Terrain ───
-    auto* terrainGroup = new QGroupBox("Terrain", sidePanel);
+    auto addPlaceSection = [this, placeLayout, placePanel](const QString& title,
+                                                           std::initializer_list<QPair<QString, world::ActorType>> entries) {
+        placeLayout->addWidget(makePanelHeader(title, placePanel));
+        auto* grid = new QGridLayout();
+        grid->setSpacing(4);
+        int col = 0, row = 0;
+        for (const auto& entry : entries) {
+            auto* b = new QToolButton(placePanel);
+            b->setText(entry.first);
+            b->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            b->setToolTip(QString("Place a %1 at the camera focus").arg(entry.first));
+            const world::ActorType t = entry.second;
+            connect(b, &QToolButton::clicked, this, [this, t]() {
+                onPlaceAsset(QString::number(static_cast<int>(t)), "actor");
+            });
+            grid->addWidget(b, row, col);
+            if (++col == 3) { col = 0; ++row; }
+        }
+        grid->setColumnStretch(2, 1);
+        placeLayout->addLayout(grid);
+    };
+
+    addPlaceSection("Basics", {
+        {"Cube", world::ActorType::Prop},
+        {"Empty", world::ActorType::Empty},
+        {"Prop", world::ActorType::Prop},
+    });
+    addPlaceSection("Nature", {
+        {"Tree", world::ActorType::Tree},
+        {"Vegetation", world::ActorType::Vegetation},
+        {"Grass", world::ActorType::Grass},
+        {"Rock", world::ActorType::Rock},
+        {"Lake", world::ActorType::Water},
+    });
+    addPlaceSection("City", {
+        {"Building", world::ActorType::Building},
+    });
+    addPlaceSection("Lights", {
+        {"Sun Light", world::ActorType::SunLight},
+        {"Sky Light", world::ActorType::SkyLight},
+    });
+
+    auto* placeHint = new QLabel("Actors are placed at the camera focus and snap to the terrain surface.", placePanel);
+    placeHint->setWordWrap(true);
+    placeHint->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    placeLayout->addWidget(placeHint);
+    placeLayout->addStretch();
+    placeScroll->setWidget(placePanel);
+    tabs->addTab(placeScroll, "Place Actors");
+
+    // ─── World tab: terrain, roads, generation, project data ───
+    auto* worldScroll = new QScrollArea(this);
+    worldScroll->setWidgetResizable(true);
+    worldScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    worldScroll->setFrameShape(QFrame::NoFrame);
+    auto* worldPanel = new QWidget(this);
+    auto* worldLayout = new QVBoxLayout(worldPanel);
+    worldLayout->setContentsMargins(6, 6, 6, 6);
+    worldLayout->setSpacing(8);
+
+    // Terrain
+    auto* terrainGroup = new QGroupBox("Terrain", worldPanel);
     auto* terrainLayout = new QVBoxLayout(terrainGroup);
-
-    m_loadTerrainBtn = new QPushButton("Load Terrain from Project", terrainGroup);
-    m_loadTerrainBtn->setStyleSheet(
+    auto* loadTerrainBtn = new QPushButton("Load Terrain from Project", terrainGroup);
+    loadTerrainBtn->setStyleSheet(
         "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-        "font-weight: bold; padding: 10px; border-radius: 4px; }"
+        "font-weight: bold; padding: 8px; border-radius: 4px; }"
         "QPushButton:hover { background-color: #b4befe; }");
-    m_loadTerrainBtn->setToolTip("Load heightmap + albedo from the current project's Terrain folder");
-    connect(m_loadTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadTerrain);
-    terrainLayout->addWidget(m_loadTerrainBtn);
+    loadTerrainBtn->setToolTip("Load heightmap + albedo from the current project's Terrain folder");
+    connect(loadTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadTerrain);
+    terrainLayout->addWidget(loadTerrainBtn);
 
-    m_clearTerrainBtn = new QPushButton("Clear Terrain", terrainGroup);
-    m_clearTerrainBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_clearTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearTerrain);
-    terrainLayout->addWidget(m_clearTerrainBtn);
+    auto* clearTerrainBtn = new QPushButton("Clear Terrain", terrainGroup);
+    connect(clearTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearTerrain);
+    terrainLayout->addWidget(clearTerrainBtn);
 
-    // Roads section
-    auto* roadsGroup = new QGroupBox("Roads", sidePanel);
-    auto* roadsLayout = new QVBoxLayout(roadsGroup);
-    m_loadRoadsBtn = new QPushButton("Load Roads from Project", roadsGroup);
-    m_loadRoadsBtn->setStyleSheet(
-        "QPushButton { background-color: #a6e3a1; color: #1e1e2e; "
-        "font-weight: bold; padding: 10px; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b4e3b4; }");
-    m_loadRoadsBtn->setToolTip("Load road network (XODR) from the current project's Roads folder");
-    connect(m_loadRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadRoads);
-    roadsLayout->addWidget(m_loadRoadsBtn);
-    sideLayout->addWidget(roadsGroup);
-
-    // Height scale slider
     auto* hsLayout = new QHBoxLayout();
     auto* hsLabel = new QLabel("Height Scale:", terrainGroup);
     m_heightScaleLabel = new QLabel("100m", terrainGroup);
@@ -132,206 +386,193 @@ void Studio3DWidget::setupUI()
     hsLayout->addWidget(m_heightScaleSlider);
     hsLayout->addWidget(m_heightScaleLabel);
     terrainLayout->addLayout(hsLayout);
+    worldLayout->addWidget(terrainGroup);
 
-    sideLayout->addWidget(terrainGroup);
+    // Roads
+    auto* roadsGroup = new QGroupBox("Roads", worldPanel);
+    auto* roadsLayout = new QVBoxLayout(roadsGroup);
+    auto* loadRoadsBtn = new QPushButton("Load Roads from Project", roadsGroup);
+    loadRoadsBtn->setStyleSheet(
+        "QPushButton { background-color: #a6e3a1; color: #1e1e2e; "
+        "font-weight: bold; padding: 8px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: #b4e3b4; }");
+    loadRoadsBtn->setToolTip("Load road network (XODR) from the current project's Roads folder");
+    connect(loadRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadRoads);
+    roadsLayout->addWidget(loadRoadsBtn);
 
-    // ─── Export ───
-    auto* exportGroup = new QGroupBox("Export", sidePanel);
-    auto* exportLayout = new QVBoxLayout(exportGroup);
+    auto* exportRoadsBtn = new QPushButton("Export Road Network", roadsGroup);
+    exportRoadsBtn->setToolTip("Copy road network files to the project Exports folder");
+    connect(exportRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportRoads);
+    roadsLayout->addWidget(exportRoadsBtn);
+    worldLayout->addWidget(roadsGroup);
 
-    m_exportTerrainBtn = new QPushButton("Export Terrain Data", exportGroup);
-    m_exportTerrainBtn->setToolTip("Export terrain heightmap + albedo to project Exports folder");
-    m_exportTerrainBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_exportTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportTerrain);
-    exportLayout->addWidget(m_exportTerrainBtn);
+    // Procedural generation
+    auto* genGroup = new QGroupBox("World Generation", worldPanel);
+    auto* genLayout = new QVBoxLayout(genGroup);
+    auto* genHint = new QLabel("Procedural authoring via WorldBuilder:", genGroup);
+    genHint->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    genLayout->addWidget(genHint);
 
-    m_exportRoadsBtn = new QPushButton("Export Road Network", exportGroup);
-    m_exportRoadsBtn->setToolTip("Export road network mesh for 3D rendering");
-    m_exportRoadsBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_exportRoadsBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportRoads);
-    exportLayout->addWidget(m_exportRoadsBtn);
+    auto* genBuildingsBtn = new QPushButton("Generate Buildings (100)", genGroup);
+    genBuildingsBtn->setToolTip("Generate 100 buildings at terrain height via WorldBuilder");
+    connect(genBuildingsBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateBuildings);
+    genLayout->addWidget(genBuildingsBtn);
 
-    sideLayout->addWidget(exportGroup);
+    auto* genVegBtn = new QPushButton("Generate Vegetation (PCG)", genGroup);
+    genVegBtn->setToolTip("Run the PCG vegetation graph (scatter, height/slope filters)");
+    connect(genVegBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateVegetation);
+    genLayout->addWidget(genVegBtn);
+    worldLayout->addWidget(genGroup);
 
-    // ─── Objects ───
-    auto* objGroup = new QGroupBox("3D Objects", sidePanel);
-    auto* objLayout = new QVBoxLayout(objGroup);
+    // Project data
+    auto* projectGroup = new QGroupBox("Project Data", worldPanel);
+    auto* projectLayout = new QVBoxLayout(projectGroup);
 
-    auto* objHint = new QLabel("Click an object type to place it at the terrain center:", objGroup);
-    objHint->setWordWrap(true);
-    objHint->setStyleSheet("QLabel { color: #888; font-size: 10px; }");
-    objLayout->addWidget(objHint);
+    auto* saveWorldBtn = new QPushButton("Save World", projectGroup);
+    saveWorldBtn->setStyleSheet(
+        "QPushButton { background-color: #89b4fa; color: #1e1e2e; font-weight: bold; padding: 8px; }");
+    saveWorldBtn->setToolTip("Save the complete World (actors, layers, splines, PCG, terrain) to the project");
+    connect(saveWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onSaveWorld);
+    projectLayout->addWidget(saveWorldBtn);
 
-    auto* objBtnRow1 = new QHBoxLayout();
-    m_addBuildingBtn = new QPushButton("Building", objGroup);
-    m_addBuildingBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addBuildingBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddBuilding);
-    objBtnRow1->addWidget(m_addBuildingBtn);
+    auto* loadWorldBtn = new QPushButton("Load World", projectGroup);
+    loadWorldBtn->setStyleSheet(
+        "QPushButton { background-color: #a6e3a1; color: #1e1e2e; font-weight: bold; padding: 8px; }");
+    loadWorldBtn->setToolTip("Load the complete World from the project");
+    connect(loadWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadWorld);
+    projectLayout->addWidget(loadWorldBtn);
 
-    m_addTreeBtn = new QPushButton("Tree", objGroup);
-    m_addTreeBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addTreeBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddTree);
-    objBtnRow1->addWidget(m_addTreeBtn);
-    objLayout->addLayout(objBtnRow1);
+    auto* exportTerrainBtn = new QPushButton("Export Terrain Data", projectGroup);
+    exportTerrainBtn->setToolTip("Copy terrain heightmap + albedo to the project Exports folder");
+    connect(exportTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onExportTerrain);
+    projectLayout->addWidget(exportTerrainBtn);
 
-    m_addBoxBtn = new QPushButton("Box", objGroup);
-    m_addBoxBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addBoxBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddBox);
-    objLayout->addWidget(m_addBoxBtn);
+    auto* clearObjectsBtn = new QPushButton("Clear All Objects", projectGroup);
+    connect(clearObjectsBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearObjects);
+    projectLayout->addWidget(clearObjectsBtn);
+    worldLayout->addWidget(projectGroup);
 
-    m_clearObjectsBtn = new QPushButton("Clear All Objects", objGroup);
-    m_clearObjectsBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_clearObjectsBtn, &QPushButton::clicked, this, &Studio3DWidget::onClearObjects);
-    objLayout->addWidget(m_clearObjectsBtn);
+    worldLayout->addStretch();
+    worldScroll->setWidget(worldPanel);
+    tabs->addTab(worldScroll, "World");
 
-    sideLayout->addWidget(objGroup);
-
-    // ─── World Authoring (WorldBuilder procedural generation) ───
-    auto* worldGroup = new QGroupBox("World Authoring", sidePanel);
-    auto* worldLayout = new QVBoxLayout(worldGroup);
-
-    auto* worldHint = new QLabel("Procedural world generation (WorldBuilder):", worldGroup);
-    worldHint->setWordWrap(true);
-    worldHint->setStyleSheet("QLabel { color: #888; font-size: 10px; }");
-    worldLayout->addWidget(worldHint);
-
-    m_genBuildingsBtn = new QPushButton("Generate Buildings (100)", worldGroup);
-    m_genBuildingsBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    m_genBuildingsBtn->setToolTip("Generate 100 buildings at terrain height via WorldBuilder");
-    connect(m_genBuildingsBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateBuildings);
-    worldLayout->addWidget(m_genBuildingsBtn);
-
-    m_genVegetationBtn = new QPushButton("Generate Vegetation (PCG)", worldGroup);
-    m_genVegetationBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    m_genVegetationBtn->setToolTip("Run the PCG vegetation graph (scatter, height/slope filters)");
-    connect(m_genVegetationBtn, &QPushButton::clicked, this, &Studio3DWidget::onGenerateVegetation);
-    worldLayout->addWidget(m_genVegetationBtn);
-
-    auto* worldBtnRow = new QHBoxLayout();
-    m_addLakeBtn = new QPushButton("Add Lake", worldGroup);
-    m_addLakeBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addLakeBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddLake);
-    worldBtnRow->addWidget(m_addLakeBtn);
-
-    m_addSunBtn = new QPushButton("Add Sun", worldGroup);
-    m_addSunBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addSunBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddSunLight);
-    worldBtnRow->addWidget(m_addSunBtn);
-
-    m_addSkyBtn = new QPushButton("Add Sky", worldGroup);
-    m_addSkyBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    connect(m_addSkyBtn, &QPushButton::clicked, this, &Studio3DWidget::onAddSkyLight);
-    worldBtnRow->addWidget(m_addSkyBtn);
-    worldLayout->addLayout(worldBtnRow);
-
-    sideLayout->addWidget(worldGroup);
-
-    // ─── Scene ───
-    auto* sceneGroup = new QGroupBox("Scene", sidePanel);
-    auto* sceneLayout = new QVBoxLayout(sceneGroup);
-
-    m_saveSceneBtn = new QPushButton("Save Scene", sceneGroup);
-    m_saveSceneBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    m_saveSceneBtn->setToolTip("Save the current 3D scene (terrain, roads, objects, camera) to the project");
-    connect(m_saveSceneBtn, &QPushButton::clicked, this, &Studio3DWidget::onSaveScene);
-    sceneLayout->addWidget(m_saveSceneBtn);
-
-    m_loadSceneBtn = new QPushButton("Load Scene", sceneGroup);
-    m_loadSceneBtn->setStyleSheet("QPushButton { padding: 8px; }");
-    m_loadSceneBtn->setToolTip("Load the saved 3D scene from the project");
-    connect(m_loadSceneBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadScene);
-    sceneLayout->addWidget(m_loadSceneBtn);
-
-    m_saveWorldBtn = new QPushButton("Save World", sceneGroup);
-    m_saveWorldBtn->setStyleSheet("QPushButton { background-color: #89b4fa; color: #1e1e2e; font-weight: bold; padding: 8px; }");
-    m_saveWorldBtn->setToolTip("Save the complete World (actors, layers, splines, PCG, terrain) to the project");
-    connect(m_saveWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onSaveWorld);
-    sceneLayout->addWidget(m_saveWorldBtn);
-
-    m_loadWorldBtn = new QPushButton("Load World", sceneGroup);
-    m_loadWorldBtn->setStyleSheet("QPushButton { background-color: #a6e3a1; color: #1e1e2e; font-weight: bold; padding: 8px; }");
-    m_loadWorldBtn->setToolTip("Load the complete World from the project");
-    connect(m_loadWorldBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadWorld);
-    sceneLayout->addWidget(m_loadWorldBtn);
-
-    sideLayout->addWidget(sceneGroup);
-
-    // ─── Status ───
-    auto* statusGroup = new QGroupBox("Status", sidePanel);
-    auto* statusLayout = new QVBoxLayout(statusGroup);
-    m_statusLabel = new QLabel("Ready", statusGroup);
-    statusLayout->addWidget(m_statusLabel);
-    sideLayout->addWidget(statusGroup);
-
-    // ─── Log ───
-    auto* logGroup = new QGroupBox("Log", sidePanel);
-    auto* logLayout = new QVBoxLayout(logGroup);
-    m_logEdit = new QTextEdit(logGroup);
-    m_logEdit->setReadOnly(true);
-    m_logEdit->setMaximumHeight(150);
-    m_logEdit->setStyleSheet(
-        "QTextEdit { background-color: #1e1e2e; color: #cdd6f4; "
-        "font-family: Consolas; font-size: 11px; }");
-    logLayout->addWidget(m_logEdit);
-    sideLayout->addWidget(logGroup);
-
-    sideLayout->addStretch();
-
-    sidePanel->setMaximumWidth(QWIDGETSIZE_MAX);
-    auto* controlsScroll = new QScrollArea(this);
-    controlsScroll->setWidgetResizable(true);
-    controlsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    controlsScroll->setFrameShape(QFrame::NoFrame);
-    controlsScroll->setWidget(sidePanel);
-
-    auto* rightPanel = new QSplitter(Qt::Vertical, this);
-    rightPanel->setMinimumWidth(300);
-    rightPanel->setMaximumWidth(380);
-    rightPanel->addWidget(m_inspector);
-    rightPanel->addWidget(controlsScroll);
+    rightPanel->addWidget(tabs);
     rightPanel->setStretchFactor(0, 3);
     rightPanel->setStretchFactor(1, 2);
-    rightPanel->setSizes({420, 420});
+    rightPanel->setSizes({420, 380});
 
-    // ─── Main Unreal-style editor row ───
-    auto* editorRow = new QSplitter(Qt::Horizontal, this);
-    editorRow->setChildrenCollapsible(false);
-    editorRow->addWidget(leftPanel);
-    editorRow->addWidget(viewportGroup);
-    editorRow->addWidget(rightPanel);
-    editorRow->setStretchFactor(0, 0);
-    editorRow->setStretchFactor(1, 1);
-    editorRow->setStretchFactor(2, 0);
-    editorRow->setSizes({250, 900, 350});
-    mainLayout->addWidget(editorRow, 1);
+    return rightPanel;
+}
 
-    // ─── Bottom: Unreal-style Content Browser / Asset Library ───
-    m_contentBrowser = new ContentBrowser(m_ogreWidget, this);
-    m_contentBrowser->setMinimumHeight(150);
-    m_contentBrowser->setMaximumHeight(230);
-    QString assetDir;
-    if (m_ctx && m_ctx->projects().hasProject()) {
-        assetDir = QDir(m_ctx->projects().current().basePath).filePath("Assets");
-    }
-    if (assetDir.isEmpty() || !QDir(assetDir).exists()) {
-        assetDir = QCoreApplication::applicationDirPath();
-    }
-    m_contentBrowser->setAssetDirectory(assetDir);
-    connect(m_contentBrowser, &ContentBrowser::assetRequested,
-            this, [this](const QString& path, const QString& type) {
-        appendLog(QString("Asset selected (%1): %2").arg(type, path));
-        m_statusLabel->setText(QString("Asset selected: %1").arg(QFileInfo(path).fileName()));
-    });
-    mainLayout->addWidget(m_contentBrowser, 0);
+QWidget* Studio3DWidget::setupStatusBar()
+{
+    auto* bar = new QWidget(this);
+    bar->setObjectName("studioStatusBar");
+    auto* lay = new QHBoxLayout(bar);
+    lay->setContentsMargins(10, 4, 10, 4);
+    lay->setSpacing(12);
 
-    setLayout(mainLayout);
+    m_statusLabel = new QLabel("Ready", bar);
+    lay->addWidget(m_statusLabel);
 
-    appendLog("3D Studio ready (Unreal-style editor layout)");
+    lay->addStretch();
+
+    auto* hintLabel = new QLabel(
+        "LMB Select · Drag Orbit · MMB Pan · Wheel Zoom · Q/W/E/R Tools · F Frame · Del Delete",
+        bar);
+    hintLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    lay->addWidget(hintLabel);
+
+    m_statsLabel = new QLabel("0 actors", bar);
+    lay->addWidget(m_statsLabel);
+
+    return bar;
 }
 
 void Studio3DWidget::appendLog(const QString& msg)
 {
     m_logEdit->append("[" + QTime::currentTime().toString("HH:mm:ss") + "] " + msg);
+}
+
+void Studio3DWidget::setStatus(const QString& text)
+{
+    m_statusLabel->setText(text);
+}
+
+void Studio3DWidget::refreshStats()
+{
+    m_statsLabel->setText(QString("%1 actors").arg(m_ogreWidget->actorCount()));
+}
+
+QString Studio3DWidget::placeActorAtFocus(world::ActorType type, float sx, float sy, float sz,
+                                          const QString& layerId, const QString& name)
+{
+    const OgreWidget::WorldPos target = m_ogreWidget->cameraTarget();
+    // Small offset so repeated placements don't stack exactly on one spot
+    const float x = target.x + static_cast<float>(rand() % 40 - 20) * 0.5f;
+    const float z = target.z + static_cast<float>(rand() % 40 - 20) * 0.5f;
+    const float groundY = m_ogreWidget->hasTerrain()
+        ? m_ogreWidget->sampleTerrainHeight(x, z) : 0.0f;
+
+    const QString id = m_ogreWidget->addActor(type, x, groundY + sy * 0.5f, z, 0,
+                                               sx, sy, sz, layerId);
+    if (!name.isEmpty())
+        m_ogreWidget->renameActor(id, name);
+    m_outliner->refresh();
+    refreshStats();
+    setStatus(QString("Placed %1").arg(name.isEmpty() ? "actor" : name));
+    return id;
+}
+
+void Studio3DWidget::placePreset(world::ActorType type)
+{
+    switch (type) {
+    case world::ActorType::Building:
+        placeActorAtFocus(type, 10, 15, 10, "buildings", "Building"); break;
+    case world::ActorType::Tree:
+        placeActorAtFocus(type, 3, 8, 3, "vegetation", "Tree"); break;
+    case world::ActorType::Vegetation:
+        placeActorAtFocus(type, 2, 2, 2, "vegetation", "Vegetation"); break;
+    case world::ActorType::Grass:
+        placeActorAtFocus(type, 1, 0.5f, 1, "vegetation", "Grass"); break;
+    case world::ActorType::Rock:
+        placeActorAtFocus(type, 2, 1.5f, 2, "default", "Rock"); break;
+    case world::ActorType::Empty:
+        placeActorAtFocus(type, 1, 1, 1, "default", "Empty"); break;
+    default:
+        placeActorAtFocus(world::ActorType::Prop, 4, 4, 4, "default", "Prop"); break;
+    }
+}
+
+void Studio3DWidget::onPlaceAsset(const QString& pathOrType, const QString& type)
+{
+    if (type == "actor") {
+        const auto actorType = static_cast<world::ActorType>(pathOrType.toInt());
+        switch (actorType) {
+        case world::ActorType::SunLight:
+            onAddSunLight();
+            return;
+        case world::ActorType::SkyLight:
+            onAddSkyLight();
+            return;
+        case world::ActorType::Water:
+            onAddLake();
+            return;
+        default:
+            placePreset(actorType);
+            return;
+        }
+    }
+
+    // File asset — place a prop carrying the asset path (mesh support pending;
+    // the path is preserved on the actor for when real mesh loading lands)
+    const QFileInfo fi(pathOrType);
+    if (!fi.exists()) return;
+    const QString id = placeActorAtFocus(world::ActorType::Prop, 4, 4, 4, "default",
+                                         fi.completeBaseName());
+    if (world::Actor* a = m_ogreWidget->world()->findActor(id))
+        a->assetPath = fi.absoluteFilePath();
+    appendLog(QString("Placed %1 asset: %2").arg(type, fi.fileName()));
 }
 
 QString Studio3DWidget::findHeightmapInProject()
@@ -360,7 +601,14 @@ QString Studio3DWidget::findHeightmapInProject()
         if (!QDir(root).exists()) continue;
         QDirIterator it(root, {"*.png", "*.tif", "*.tiff"},
                         QDir::Files, QDirIterator::Subdirectories);
-        if (it.hasNext()) return it.next();
+        while (it.hasNext()) {
+            const QString candidate = it.next();
+            const QFileInfo info(candidate);
+            // Never fall back to an albedo image as a heightmap
+            if (info.dir().dirName().compare("albedo", Qt::CaseInsensitive) == 0) continue;
+            if (info.fileName().startsWith("albedo", Qt::CaseInsensitive)) continue;
+            return candidate;
+        }
     }
     return QString();
 }
@@ -385,11 +633,21 @@ QString Studio3DWidget::findAlbedoInProject()
             if (it.hasNext()) return it.next();
         }
     }
-    for (const QString& root : roots) {
-        if (!QDir(root).exists()) continue;
-        QDirIterator it(root, {"*.png", "*.tif", "*.tiff"},
-                        QDir::Files, QDirIterator::Subdirectories);
-        if (it.hasNext()) return it.next();
+    // PNG/JPEG first (displayable directly), then TIFF
+    for (const QStringList& patterns : {QStringList{"*.png", "*.jpg", "*.jpeg"},
+                                        QStringList{"*.tif", "*.tiff"}}) {
+        for (const QString& root : roots) {
+            if (!QDir(root).exists()) continue;
+            QDirIterator it(root, patterns, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString candidate = it.next();
+                const QFileInfo info(candidate);
+                // Never fall back to a heightmap as albedo
+                if (info.dir().dirName().compare("heightmaps", Qt::CaseInsensitive) == 0) continue;
+                if (info.fileName().startsWith("heightmap", Qt::CaseInsensitive)) continue;
+                return candidate;
+            }
+        }
     }
     return QString();
 }
@@ -440,24 +698,24 @@ void Studio3DWidget::onLoadTerrain()
         appendLog("  Albedo: " + albedoPath);
     appendLog(QString("  Height scale: %1m").arg(heightScale));
 
-    m_statusLabel->setText("Loading terrain...");
+    setStatus("Loading terrain...");
     m_ogreWidget->loadTerrain(heightmapPath, albedoPath, terrainSize, heightScale);
 
     if (!m_ogreWidget->hasTerrain()) {
-        m_statusLabel->setText("Terrain load failed");
+        setStatus("Terrain load failed");
         appendLog("Terrain load failed. Check the selected heightmap and OGRE log.");
         QMessageBox::warning(this, "Terrain Load Failed",
             QString("The selected heightmap could not be loaded:\n%1").arg(heightmapPath));
         return;
     }
-    m_statusLabel->setText("Terrain loaded");
+    setStatus("Terrain loaded");
     appendLog("Terrain loaded successfully.");
 }
 
 void Studio3DWidget::onClearTerrain()
 {
     m_ogreWidget->clearTerrain();
-    m_statusLabel->setText("Terrain cleared");
+    setStatus("Terrain cleared");
     appendLog("Terrain cleared.");
 }
 
@@ -495,68 +753,51 @@ void Studio3DWidget::onLoadRoads()
     appendLog("Loading roads...");
     appendLog("  XODR: " + xodrPath);
 
-    m_statusLabel->setText("Loading roads...");
+    setStatus("Loading roads...");
     m_ogreWidget->loadRoads(xodrPath);
 
-    m_statusLabel->setText("Roads loaded");
+    setStatus("Roads loaded");
     appendLog("Roads loaded successfully.");
 }
 
 void Studio3DWidget::onAddBuilding()
 {
-    // Place a building at a random position near terrain center
-    float x = (rand() % 200 - 100);
-    float z = (rand() % 200 - 100);
-    float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addActor(world::ActorType::Building, x, y, z, 0,
-                                          10.0f, 15.0f, 10.0f, "buildings");
-    appendLog("Added building: " + id);
-    m_statusLabel->setText("Building added");
+    placeActorAtFocus(world::ActorType::Building, 10, 15, 10, "buildings", "Building");
 }
 
 void Studio3DWidget::onAddTree()
 {
-    float x = (rand() % 400 - 200);
-    float z = (rand() % 400 - 200);
-    float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addActor(world::ActorType::Tree, x, y, z, 0,
-                                          3.0f, 8.0f, 3.0f, "vegetation");
-    appendLog("Added tree: " + id);
-    m_statusLabel->setText("Tree added");
+    placeActorAtFocus(world::ActorType::Tree, 3, 8, 3, "vegetation", "Tree");
 }
 
 void Studio3DWidget::onAddBox()
 {
-    float x = (rand() % 200 - 100);
-    float z = (rand() % 200 - 100);
-    float y = m_heightScaleSlider->value() * 0.3f;
-    QString id = m_ogreWidget->addActor(world::ActorType::Prop, x, y, z, 0,
-                                          5.0f, 5.0f, 5.0f);
-    appendLog("Added box: " + id);
-    m_statusLabel->setText("Box added");
+    placeActorAtFocus(world::ActorType::Prop, 5, 5, 5, "default", "Cube");
 }
 
 void Studio3DWidget::onClearObjects()
 {
     m_ogreWidget->clearActors();
     appendLog("All objects cleared.");
-    m_statusLabel->setText("Objects cleared");
+    setStatus("Objects cleared");
 }
 
 void Studio3DWidget::onGenerateBuildings()
 {
     m_ogreWidget->generateBuildings(100);
     appendLog("Generated 100 buildings via WorldBuilder.");
-    m_statusLabel->setText("Buildings generated");
+    setStatus("Buildings generated");
     m_outliner->refresh();
+    refreshStats();
 }
 
 void Studio3DWidget::onGenerateVegetation()
 {
     m_ogreWidget->generateVegetation(500, 0.01f);
     appendLog("Generated vegetation via PCG (scatter + height/slope filters).");
-    m_statusLabel->setText("Vegetation generated");
+    setStatus("Vegetation generated");
     m_outliner->refresh();
+    refreshStats();
 }
 
 void Studio3DWidget::onAddLake()
@@ -565,22 +806,52 @@ void Studio3DWidget::onAddLake()
     if (terrainSize <= 0) terrainSize = 1000.0f;
     m_ogreWidget->addLake("Lake", 0, 0, terrainSize * 0.3f, terrainSize * 0.3f, 5.0f);
     appendLog("Added lake at world center.");
-    m_statusLabel->setText("Lake added");
+    setStatus("Lake added");
     m_outliner->refresh();
+    refreshStats();
 }
 
 void Studio3DWidget::onAddSunLight()
 {
     m_ogreWidget->addSunLight(45.0f, 60.0f, 3.0f);
     appendLog("Added sun light (yaw=45, pitch=60, intensity=3).");
-    m_statusLabel->setText("Sun light added");
+    setStatus("Sun light added");
+    refreshStats();
 }
 
 void Studio3DWidget::onAddSkyLight()
 {
     m_ogreWidget->addSkyLight(1.0f);
     appendLog("Added sky light.");
-    m_statusLabel->setText("Sky light added");
+    setStatus("Sky light added");
+    refreshStats();
+}
+
+void Studio3DWidget::onTransformModeChanged(int mode)
+{
+    const auto m = static_cast<TransformMode>(mode);
+    m_selectToolBtn->setChecked(m == TransformMode::None);
+    m_moveToolBtn->setChecked(m == TransformMode::Move);
+    m_rotateToolBtn->setChecked(m == TransformMode::Rotate);
+    m_scaleToolBtn->setChecked(m == TransformMode::Scale);
+}
+
+void Studio3DWidget::onSnapToggled(bool enabled)
+{
+    m_ogreWidget->setSnapEnabled(enabled);
+    setStatus(enabled ? "Snapping enabled" : "Snapping disabled");
+}
+
+void Studio3DWidget::onSnapSizeChanged(int index)
+{
+    static const float sizes[] = {0.1f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f};
+    if (index < 0 || index >= 6) return;
+    m_ogreWidget->setSnapSize(sizes[index]);
+}
+
+void Studio3DWidget::onGridToggled(bool visible)
+{
+    m_ogreWidget->setGridVisible(visible);
 }
 
 QString Studio3DWidget::sceneFilePath() const
@@ -668,7 +939,7 @@ void Studio3DWidget::onSaveScene()
     file.close();
 
     appendLog("Scene saved to: " + path);
-    m_statusLabel->setText("Scene saved");
+    setStatus("Scene saved");
     QMessageBox::information(this, "Scene Saved",
         QString("3D scene saved to:\n%1").arg(path));
 }
@@ -706,7 +977,8 @@ void Studio3DWidget::onLoadScene()
 
     m_ogreWidget->loadScene(resolveScenePaths(doc.object()));
     appendLog("Scene loaded from: " + path);
-    m_statusLabel->setText("Scene loaded");
+    setStatus("Scene loaded");
+    refreshStats();
 }
 
 void Studio3DWidget::loadMissingProjectAssets()
@@ -774,6 +1046,7 @@ void Studio3DWidget::onProjectOpened()
                     m_ogreWidget->loadScene(resolveScenePaths(doc.object()));
                     appendLog("Scene auto-loaded from project.");
                     loadMissingProjectAssets();
+                    refreshStats();
                 });
                 return;
             }
@@ -791,13 +1064,8 @@ void Studio3DWidget::onProjectClosed()
     m_ogreWidget->clearTerrain();
     m_sceneAutoLoaded = false;  // Reset for next project
     appendLog("Project closed — 3D scene cleared.");
-    m_statusLabel->setText("Ready");
-}
-
-void Studio3DWidget::onResetCamera()
-{
-    m_ogreWidget->resetCamera();
-    appendLog("Camera reset.");
+    setStatus("Ready");
+    refreshStats();
 }
 
 void Studio3DWidget::onHeightScaleChanged(int value)
@@ -909,7 +1177,7 @@ void Studio3DWidget::onSaveWorld()
 
     if (m_ogreWidget->saveWorld(path)) {
         appendLog("World saved to: " + path);
-        m_statusLabel->setText("World saved");
+        setStatus("World saved");
         QMessageBox::information(this, "World Saved",
             QString("World saved to:\n%1\n\nActors: %2\nLayers: %3\nSplines: %4")
                 .arg(path)
@@ -938,9 +1206,10 @@ void Studio3DWidget::onLoadWorld()
 
     if (m_ogreWidget->loadWorld(path)) {
         appendLog("World loaded from: " + path);
-        m_statusLabel->setText("World loaded");
+        setStatus("World loaded");
         if (m_outliner) m_outliner->refresh();
         if (m_layerPanel) m_layerPanel->refresh();
+        refreshStats();
         QMessageBox::information(this, "World Loaded",
             QString("World loaded from:\n%1\n\nActors: %2\nLayers: %3")
                 .arg(path)

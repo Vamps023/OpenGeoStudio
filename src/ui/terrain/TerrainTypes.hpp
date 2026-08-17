@@ -116,7 +116,7 @@ struct ExportSettings {
     AlbedoFormat albedoFormat = AlbedoFormat::PNG;
     DemSource demSource = DemSource::GPXZ_LiDAR;
     ImagerySource imagerySource = ImagerySource::Google_Satellite;
-    CrsSource crsSource = CrsSource::Auto_UTM;
+    CrsSource crsSource = CrsSource::EPSG_4326; // GeoTerrain default — proven in Unigine
     int heightmapResolution = 1024;
     int albedoResolution = 1024;
     int imageryZoomLevel = 0;       // 0 = auto

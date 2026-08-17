@@ -372,11 +372,33 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     }
     Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
 
+    // OGRE's image codecs don't include TIFF. Convert GeoTIFF albedo through
+    // QImage when the TIFF image plugin is available, so exported
+    // albedo_merged.tif still displays instead of falling back to flat green.
+    QString albedoLoadPath = albedoPath;
     if (!albedoPath.isEmpty() && QFile::exists(albedoPath) &&
-        !albedoPath.endsWith(".tif", Qt::CaseInsensitive) &&
-        !albedoPath.endsWith(".tiff", Qt::CaseInsensitive)) {
-        QString albDir = QFileInfo(albedoPath).absolutePath();
-        QString albName = QFileInfo(albedoPath).fileName();
+        (albedoPath.endsWith(".tif", Qt::CaseInsensitive) ||
+         albedoPath.endsWith(".tiff", Qt::CaseInsensitive))) {
+        QImage tifImg(albedoPath);
+        if (!tifImg.isNull()) {
+            const QString tmpPath = QDir::temp().filePath(
+                "ogs_albedo_" + QString::number(qHash(albedoPath)) + ".png");
+            if (tifImg.save(tmpPath, "PNG")) {
+                albedoLoadPath = tmpPath;
+                appLog().info("Converted TIFF albedo to PNG for display:", albedoPath);
+            } else {
+                albedoLoadPath.clear();
+            }
+        } else {
+            appLog().warn("TIFF albedo cannot be decoded (no TIFF image plugin):",
+                          albedoPath, "— use albedo_merged.png instead");
+            albedoLoadPath.clear();
+        }
+    }
+
+    if (!albedoLoadPath.isEmpty() && QFile::exists(albedoLoadPath)) {
+        QString albDir = QFileInfo(albedoLoadPath).absolutePath();
+        QString albName = QFileInfo(albedoLoadPath).fileName();
         Ogre::String ogreAlbDir = albDir.toStdString();
         Ogre::String ogreAlbName = albName.toStdString();
 
@@ -396,7 +418,7 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
         datablock->setTexture(0, albedoTex);
-        appLog().info("Albedo texture loaded:", albedoPath);
+        appLog().info("Albedo texture loaded:", albedoLoadPath);
     } else {
         datablock->setColour(Ogre::ColourValue(0.3f, 0.5f, 0.3f, 1.0f));
     }
@@ -1066,6 +1088,7 @@ void OgreWidget::setTransformMode(TransformMode mode)
 {
     m_transformMode = mode;
     updateGizmo();
+    emit transformModeChanged(static_cast<int>(mode));
 }
 
 // ============================================================
@@ -1639,6 +1662,8 @@ void OgreWidget::keyPressEvent(QKeyEvent* event)
     }
 
     // Transform mode shortcuts
+    if (event->key() == Qt::Key_Q && !m_flyMode)
+        setTransformMode(TransformMode::None);
     if (event->key() == Qt::Key_W && !m_flyMode)
         setTransformMode(TransformMode::Move);
     if (event->key() == Qt::Key_E && !m_flyMode)

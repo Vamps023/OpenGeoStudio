@@ -235,7 +235,8 @@ void ExportPanel::setupUi() {
     formLayout->addRow("GLAD Interval:", m_gladArdContainer);
     m_gladArdContainer->setVisible(false);
 
-    // CRS
+    // CRS — combo order differs from the enum (Auto is first in the UI but
+    // last in CrsSource), so map through an explicit table instead of a cast.
     m_crsCombo = new QComboBox();
     m_crsCombo->addItems({
         "Auto (UTM from bounds centroid)",
@@ -247,9 +248,23 @@ void ExportPanel::setupUi() {
         "EPSG:25832 — ETRS89 UTM Zone 32N",
         "EPSG:25833 — ETRS89 UTM Zone 33N"
     });
-    connect(m_crsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        m_store->setCrsSource(static_cast<terrain::CrsSource>(idx));
+    const terrain::CrsSource crsByIndex[] = {
+        terrain::CrsSource::Auto_UTM,
+        terrain::CrsSource::EPSG_4326,
+        terrain::CrsSource::EPSG_3857,
+        terrain::CrsSource::EPSG_32633,
+        terrain::CrsSource::EPSG_32634,
+        terrain::CrsSource::EPSG_32635,
+        terrain::CrsSource::EPSG_25832,
+        terrain::CrsSource::EPSG_25833
+    };
+    connect(m_crsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, crsByIndex](int idx) {
+        m_store->setCrsSource(crsByIndex[idx]);
     });
+    // Default to EPSG:4326 — matches GeoTerrain's export default (the
+    // known-good files for Unigine). "Auto UTM" stays one click away.
+    m_crsCombo->setCurrentIndex(1);
     formLayout->addRow("CRS:", m_crsCombo);
 
     // Heightmap resolution
