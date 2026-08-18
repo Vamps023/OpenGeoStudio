@@ -439,6 +439,9 @@ if(EXISTS "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib")
         # Rail material used by Train Studio XML export and 3D rail assets
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:OpenGeoStudio>/assets"
+        # Compositor scripts (PSSM shadow node used by the 3D Studio workspace)
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/compositor" "$<TARGET_FILE_DIR:OpenGeoStudio>/compositor"
     )
 else()
     message(WARNING "OGRE-Next not found at ${OGRE_NEXT_BUILD}, building without 3D viewport")

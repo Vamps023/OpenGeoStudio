@@ -27,6 +27,7 @@
 #include "OgreConfigFile.h"
 #include "OgreHlmsManager.h"
 #include "OgreHlmsPbs.h"
+#include "OgreHlmsPbsDatablock.h"
 #include "OgreHlmsUnlit.h"
 #include "OgreHlmsUnlitDatablock.h"
 #include "OgreArchiveManager.h"
@@ -200,10 +201,32 @@ void OgreWidget::initOgre()
         appLog().warn("[OGRE] No compositor manager!");
         return;
     }
+    // Parse compositor scripts so the PSSM shadow node exists before the
+    // workspace references it. Without a shadow node the render_scene pass
+    // renders no shadow maps and Light::setCastShadows has no visible effect.
+    Ogre::IdString shadowNodeName;
+    {
+        const QString compositorDir = appDir + "/compositor";
+        Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+        if (QDir(compositorDir).exists() && !rgm.resourceGroupExists("OgsCompositor")) {
+            rgm.createResourceGroup("OgsCompositor");
+            rgm.addResourceLocation(compositorDir.toStdString(), "FileSystem",
+                                    "OgsCompositor");
+            rgm.initialiseResourceGroup("OgsCompositor", true);
+        }
+        if (compositorManager->hasShadowNodeDefinition("OgsShadowNode")) {
+            shadowNodeName = Ogre::IdString("OgsShadowNode");
+            appLog().info("[OGRE] PSSM shadow node loaded: OgsShadowNode");
+        } else {
+            appLog().warn("[OGRE] OgsShadowNode not found in", compositorDir,
+                          "— rendering without shadows");
+        }
+    }
+
     Ogre::ColourValue bgColor(0.2f, 0.4f, 0.6f, 1.0f);
     if (!compositorManager->hasWorkspaceDefinition("MainWorkspace")) {
         compositorManager->createBasicWorkspaceDef("MainWorkspace", bgColor,
-            Ogre::IdString());
+            shadowNodeName);
     }
     compositorManager->addWorkspace(m_sceneManager,
         m_renderWindow->getTexture(), m_camera, "MainWorkspace", true);
@@ -258,6 +281,10 @@ void OgreWidget::initOgre()
     }
     logStep("Hlms setup complete");
 
+    // Real scene lighting — must exist before any PBS material renders,
+    // otherwise PBS surfaces are lit only by ambient and look flat/black.
+    setupLighting();
+
     // Create grid and gizmo
     createGrid();
     showGrid(m_gridVisible);
@@ -269,6 +296,105 @@ void OgreWidget::initOgre()
 void OgreWidget::setupScene()
 {
     appLog().info("[OGRE] setupScene: ready");
+}
+
+// ============================================================
+// Lighting
+// ============================================================
+// Creates a real directional sun light plus hemisphere ambient. Previously
+// addSunLight()/addSkyLight() only appended entries to the world model, so
+// the scene had no Ogre::Light at all and every surface had to be unlit.
+
+void OgreWidget::setupLighting()
+{
+    if (!m_sceneManager) return;
+
+    if (!m_sunLight) {
+        m_sunLight = m_sceneManager->createLight();
+        m_sunNode = m_sceneManager->getRootSceneNode()->createChildSceneNode();
+        m_sunNode->attachObject(m_sunLight);
+        m_sunLight->setType(Ogre::Light::LT_DIRECTIONAL);
+        m_sunLight->setCastShadows(true);
+    }
+
+    setSunDirection(m_sunYaw, m_sunPitch);
+    setSunIntensity(m_sunIntensity);
+    setSkyIntensity(m_skyIntensity);
+
+    appLog().info("[OGRE] Lighting created: directional sun + hemisphere ambient");
+}
+
+void OgreWidget::setSunDirection(float yaw, float pitch)
+{
+    m_sunYaw = yaw;
+    m_sunPitch = pitch;
+    if (!m_sunLight) return;
+
+    // Spherical to cartesian. pitch is the elevation above the horizon, so a
+    // pitch of 90 points straight down; the light direction points *from* the
+    // sun toward the scene, hence the negated Y.
+    const float yawRad = Ogre::Degree(yaw).valueRadians();
+    const float pitchRad = Ogre::Degree(pitch).valueRadians();
+    Ogre::Vector3 dir(
+        std::cos(pitchRad) * std::sin(yawRad),
+        -std::sin(pitchRad),
+        std::cos(pitchRad) * std::cos(yawRad));
+    dir.normalise();
+    m_sunLight->setDirection(dir);
+}
+
+void OgreWidget::setSunIntensity(float intensity)
+{
+    m_sunIntensity = intensity;
+    if (!m_sunLight) return;
+
+    // Slightly warm sunlight; power scale carries the intensity so the colour
+    // stays a hue rather than doubling as a brightness control.
+    m_sunLight->setDiffuseColour(1.0f, 0.97f, 0.92f);
+    m_sunLight->setSpecularColour(1.0f, 0.98f, 0.95f);
+    m_sunLight->setPowerScale(Ogre::Math::Clamp(intensity, 0.0f, 100.0f) *
+                              Ogre::Math::PI);
+}
+
+void OgreWidget::setSkyIntensity(float intensity)
+{
+    m_skyIntensity = intensity;
+    if (!m_sceneManager) return;
+
+    // Hemisphere ambient: sky colour from above, bounced ground colour from
+    // below. This is what stops shadowed faces from going pure black.
+    const float k = Ogre::Math::Clamp(intensity, 0.0f, 100.0f);
+    const Ogre::ColourValue skyColour(0.35f, 0.50f, 0.75f);
+    const Ogre::ColourValue groundColour(0.28f, 0.26f, 0.22f);
+    m_sceneManager->setAmbientLight(skyColour * k, groundColour * k,
+                                    Ogre::Vector3::UNIT_Y);
+}
+
+void OgreWidget::applyLightingFromWorld()
+{
+    // Pull sun/sky settings out of any light actors the world model holds so
+    // that a reloaded world restores its lighting instead of resetting.
+    for (const auto& actor : m_world.actors) {
+        if (actor.type == world::ActorType::SunLight) {
+            setSunDirection(actor.transform.rotY, actor.transform.rotX);
+            setSunIntensity(actor.colorA > 0.0f ? actor.colorA * 3.0f : m_sunIntensity);
+        } else if (actor.type == world::ActorType::SkyLight) {
+            setSkyIntensity(actor.colorA > 0.0f ? actor.colorA : m_skyIntensity);
+        }
+    }
+}
+
+void OgreWidget::destroyLighting()
+{
+    if (m_sunNode && m_sceneManager) {
+        if (m_sunLight) m_sunNode->detachObject(m_sunLight);
+        m_sceneManager->destroySceneNode(m_sunNode);
+        m_sunNode = nullptr;
+    }
+    if (m_sunLight && m_sceneManager) {
+        m_sceneManager->destroyLight(m_sunLight);
+        m_sunLight = nullptr;
+    }
 }
 
 // ============================================================
@@ -360,17 +486,22 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
     manual->setName("TerrainMesh");
 
+    // Terrain uses PBS so it responds to the sun/ambient instead of rendering
+    // as a flat unlit texture with no relief.
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
-    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
 
     Ogre::String datablockName = "TerrainDatablock";
-    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(datablockName));
+    Ogre::HlmsDatablock* dbBase = hlmsPbs->getDatablock(Ogre::IdString(datablockName));
     if (!dbBase) {
-        dbBase = hlmsUnlit->createDatablock(
+        dbBase = hlmsPbs->createDatablock(
             Ogre::IdString(datablockName), datablockName,
             Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
     }
-    Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
+    Ogre::HlmsPbsDatablock* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
+    // Ground is a rough dielectric — no metalness, high roughness
+    datablock->setRoughness(0.85f);
+    datablock->setMetalness(0.0f);
 
     // OGRE's image codecs don't include TIFF. Convert GeoTIFF albedo through
     // QImage when the TIFF image plugin is available, so exported
@@ -417,10 +548,10 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
             Ogre::TextureTypes::Type2D,
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-        datablock->setTexture(0, albedoTex);
+        datablock->setTexture(Ogre::PBSM_DIFFUSE, albedoTex);
         appLog().info("Albedo texture loaded:", albedoLoadPath);
     } else {
-        datablock->setColour(Ogre::ColourValue(0.3f, 0.5f, 0.3f, 1.0f));
+        datablock->setDiffuse(Ogre::Vector3(0.3f, 0.5f, 0.3f));
     }
 
     manual->begin(datablockName, Ogre::OT_TRIANGLE_LIST);
@@ -429,23 +560,51 @@ void OgreWidget::loadTerrain(const QString& heightmapPath, const QString& albedo
     float xStep = terrainSize / (gridW - 1);
     float zStep = terrainSize / (gridH - 1);
 
+    // Sample the grid height once so normals can be derived from neighbours.
+    // Hardcoding the normal to +Y made every slope receive identical light,
+    // which is why lit terrain still looked flat.
+    std::vector<float> gridY(static_cast<size_t>(gridW) * gridH, 0.0f);
     for (int gz = 0; gz < gridH; gz++) {
         for (int gx = 0; gx < gridW; gx++) {
-            int hx = (gx * (hmW - 1)) / (gridW - 1);
-            int hy = (gz * (hmH - 1)) / (gridH - 1);
-            uchar* pixel = heightImg.scanLine(hy);
-            float h = pixel[hx] / 255.0f;
-            float y = h * heightScale;
+            const int hx = (gx * (hmW - 1)) / (gridW - 1);
+            const int hy = (gz * (hmH - 1)) / (gridH - 1);
+            const uchar* pixel = heightImg.scanLine(hy);
+            gridY[static_cast<size_t>(gz) * gridW + gx] =
+                (pixel[hx] / 255.0f) * heightScale;
+        }
+    }
+    auto heightAt = [&](int gx, int gz) -> float {
+        gx = std::clamp(gx, 0, gridW - 1);
+        gz = std::clamp(gz, 0, gridH - 1);
+        return gridY[static_cast<size_t>(gz) * gridW + gx];
+    };
 
-            float x = -halfSize + gx * xStep;
-            float z = -halfSize + gz * zStep;
+    for (int gz = 0; gz < gridH; gz++) {
+        for (int gx = 0; gx < gridW; gx++) {
+            const float y = heightAt(gx, gz);
+            const float x = -halfSize + gx * xStep;
+            const float z = -halfSize + gz * zStep;
 
-            float u = (float)gx / (gridW - 1);
-            float v = (float)gz / (gridH - 1);
+            const float u = (float)gx / (gridW - 1);
+            const float v = (float)gz / (gridH - 1);
+
+            // Central-difference normal from the height field
+            const float hL = heightAt(gx - 1, gz);
+            const float hR = heightAt(gx + 1, gz);
+            const float hD = heightAt(gx, gz - 1);
+            const float hU = heightAt(gx, gz + 1);
+            Ogre::Vector3 normal(hL - hR, 2.0f * xStep, hD - hU);
+            if (std::abs(zStep - xStep) > 1e-6f) {
+                // Non-square cells: scale the Z gradient by its own spacing
+                normal = Ogre::Vector3((hL - hR) * zStep,
+                                       2.0f * xStep * zStep,
+                                       (hD - hU) * xStep);
+            }
+            normal.normalise();
 
             manual->position(x, y, z);
             manual->textureCoord(u, v);
-            manual->normal(0.0f, 1.0f, 0.0f);
+            manual->normal(normal);
         }
     }
 
@@ -816,18 +975,42 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
     // Create a simple box mesh for the actor
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
 
-    // Create or get datablock for this actor's color
+    // PBS datablock so actors are lit by the sun/ambient instead of rendering
+    // as flat unlit colour. Roughness/metalness vary per actor type.
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
-    Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
+    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
     Ogre::String dblockName = "ActorDatablock_" + actor.id.toStdString();
-    Ogre::HlmsDatablock* dbBase = hlmsUnlit->getDatablock(Ogre::IdString(dblockName));
+    Ogre::HlmsDatablock* dbBase = hlmsPbs->getDatablock(Ogre::IdString(dblockName));
     if (!dbBase) {
-        dbBase = hlmsUnlit->createDatablock(
+        dbBase = hlmsPbs->createDatablock(
             Ogre::IdString(dblockName), dblockName,
             Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
     }
-    Ogre::HlmsUnlitDatablock* datablock = static_cast<Ogre::HlmsUnlitDatablock*>(dbBase);
-    datablock->setColour(Ogre::ColourValue(actor.colorR, actor.colorG, actor.colorB, actor.colorA));
+    Ogre::HlmsPbsDatablock* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
+    datablock->setDiffuse(Ogre::Vector3(actor.colorR, actor.colorG, actor.colorB));
+
+    float roughness = 0.6f;
+    float metalness = 0.0f;
+    switch (actor.type) {
+    case world::ActorType::Building:
+        roughness = 0.55f; break;              // concrete / rendered facade
+    case world::ActorType::Tree:
+    case world::ActorType::Vegetation:
+    case world::ActorType::Grass:
+        roughness = 0.85f; break;              // foliage scatters light
+    case world::ActorType::Rock:
+        roughness = 0.90f; break;              // dry stone
+    case world::ActorType::Water:
+    case world::ActorType::River:
+    case world::ActorType::Lake:
+        roughness = 0.08f; break;              // near-mirror surface
+    case world::ActorType::Prop:
+        roughness = 0.45f; metalness = 0.25f; break;
+    default:
+        break;
+    }
+    datablock->setRoughness(roughness);
+    datablock->setMetalness(metalness);
 
     // Build a unit cube centered at origin
     manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
@@ -865,7 +1048,12 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
 
     manual->end();
 
+    // Drop any mesh left over from a previous rebuild of this actor —
+    // convertToMesh() throws on a duplicate name, which would abort the rebuild.
     Ogre::String meshName = "ActorMesh_" + actor.id.toStdString();
+    Ogre::MeshManager& meshMgr = Ogre::MeshManager::getSingleton();
+    if (meshMgr.getByName(meshName)) meshMgr.remove(meshName);
+
     Ogre::MeshPtr mesh = manual->convertToMesh(
         meshName,
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
@@ -873,6 +1061,9 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
     Ogre::Item* item = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
     Ogre::SceneNode* node = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     node->attachObject(item);
+
+    // Actors both cast and receive shadows once a shadow node is active
+    item->setCastShadows(true);
 
     // Apply transform
     node->setPosition(Ogre::Vector3(actor.transform.posX, actor.transform.posY, actor.transform.posZ));
@@ -974,7 +1165,12 @@ void OgreWidget::addSunLight(float yaw, float pitch, float intensity)
     }
     m_builder.addSunLight(yaw, pitch, intensity);
     syncBuilderToWorld();
-    appLog().info("[OgreWidget] Added sun light");
+
+    // Drive the real directional light, not just the world-model entry
+    setSunDirection(yaw, pitch);
+    setSunIntensity(intensity);
+    appLog().info("[OgreWidget] Added sun light: yaw", yaw, "pitch", pitch,
+                  "intensity", intensity);
 }
 
 void OgreWidget::addSkyLight(float intensity)
@@ -984,7 +1180,10 @@ void OgreWidget::addSkyLight(float intensity)
     }
     m_builder.addSkyLight(intensity);
     syncBuilderToWorld();
-    appLog().info("[OgreWidget] Added sky light");
+
+    // Drive the real hemisphere ambient, not just the world-model entry
+    setSkyIntensity(intensity);
+    appLog().info("[OgreWidget] Added sky light: intensity", intensity);
 }
 
 void OgreWidget::buildRoadSpline(const QString& name,
@@ -1766,6 +1965,7 @@ void OgreWidget::shutdownOgre()
     clearActorRenderables();
     clearRoads();
     clearTerrain();
+    destroyLighting();
     destroyGizmo();
     destroyGrid();
     if (m_root) {

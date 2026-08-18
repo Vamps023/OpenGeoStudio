@@ -25,6 +25,7 @@ namespace Ogre {
     class HlmsPbs;
     class HlmsUnlit;
     class ManualObject;
+    class Light;
 }
 
 // Transform mode for the gizmo
@@ -136,6 +137,14 @@ public:
                  float sizeX, float sizeZ, float level);
     void addSunLight(float yaw = 45.0f, float pitch = 60.0f, float intensity = 3.0f);
     void addSkyLight(float intensity = 1.0f);
+
+    // ─── Lighting (real Ogre::Light objects, driven by the world model) ───
+    // Rebuilds the scene's sun/ambient from world.settings so that lighting
+    // survives save/reload instead of only existing as data.
+    void applyLightingFromWorld();
+    void setSunDirection(float yaw, float pitch);
+    void setSunIntensity(float intensity);
+    void setSkyIntensity(float intensity);
     void buildRoadSpline(const QString& name,
                          const QList<QPair<float, float>>& points,
                          float width = 8.0f, int laneCount = 2);
@@ -166,6 +175,8 @@ private:
     void initOgre();
     void shutdownOgre();
     void setupScene();
+    void setupLighting();
+    void destroyLighting();
     void render();
     void rebuildActor(const world::Actor& actor);
     void updateCameraFromKeys(float dt);
@@ -207,6 +218,14 @@ private:
     Ogre::Item* m_roadItem = nullptr;
     Ogre::SceneNode* m_roadNode = nullptr;
     QString m_xodrPath;
+
+    // Lighting — real scene lights, not just world-model entries
+    Ogre::Light* m_sunLight = nullptr;
+    Ogre::SceneNode* m_sunNode = nullptr;
+    float m_sunYaw = 45.0f;
+    float m_sunPitch = 60.0f;
+    float m_sunIntensity = 3.0f;
+    float m_skyIntensity = 1.0f;
 
     // Actor render entries — each actor has its own Item + SceneNode
     struct ActorRenderEntry {
