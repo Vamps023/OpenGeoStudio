@@ -392,9 +392,12 @@ public:
 
             for (uint32_t ty = 0; ty < height; ty += tileHeight) {
                 for (uint32_t tx = 0; tx < width; tx += tileWidth) {
-                    uint32_t tileRow = ty / tileHeight;
-                    uint32_t tileCol = tx / tileWidth;
-                    tmsize_t bytesRead = TIFFReadTile(tif, tileBuf.data(), tileCol, tileRow, 0, 0);
+                    // TIFFReadTile takes the PIXEL coordinates of the tile's
+                    // upper-left corner, not the tile row/column indices.
+                    // Passing indices makes libtiff resolve every request to
+                    // the image's first tile, so the whole raster decodes as
+                    // copies of the top-left tile.
+                    tmsize_t bytesRead = TIFFReadTile(tif, tileBuf.data(), tx, ty, 0, 0);
                     if (bytesRead < 0) {
                         // Read failed — fill this tile's area with nodata
                         uint32_t rowsInTile = std::min(tileHeight, height - ty);
