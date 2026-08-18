@@ -46,6 +46,9 @@
 #include "OgreVector3.h"
 #include "OgreQuaternion.h"
 #include "OgreMath.h"
+#include "OgreRay.h"
+#include "Math/Simple/OgreAabb.h"
+#include "OgrePlane.h"
 
 // libOpenDRIVE for road loading
 #include "OpenDriveMap.h"
@@ -1390,91 +1393,85 @@ void OgreWidget::createGizmo()
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
     Ogre::Hlms* hlmsUnlit = hlmsManager->getHlms(Ogre::HLMS_UNLIT);
 
-    // Move gizmo — 3 axis lines (with indices)
-    m_gizmoMove = m_sceneManager->createManualObject();
-    {
-        Ogre::String dbName = "GizmoMoveDatablock";
-        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
+    // Helper lambda to create or fetch a coloured unlit datablock.
+    auto makeDb = [](Ogre::Hlms* hlms, const char* name,
+                     const Ogre::ColourValue& c) -> Ogre::String {
+        Ogre::HlmsDatablock* db = hlms->getDatablock(Ogre::IdString(name));
         if (!db) {
-            db = hlmsUnlit->createDatablock(
-                Ogre::IdString(dbName), dbName,
+            db = hlms->createDatablock(
+                Ogre::IdString(name), name,
                 Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
         }
-        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
-        dblock->setColour(Ogre::ColourValue(1, 1, 1, 1));
+        static_cast<Ogre::HlmsUnlitDatablock*>(db)->setColour(c);
+        return name;
+    };
 
-        m_gizmoMove->begin(dbName, Ogre::OT_LINE_LIST);
-        // X axis (red)
-        m_gizmoMove->position(0, 0, 0);
-        m_gizmoMove->position(50, 0, 0);
-        m_gizmoMove->index(0); m_gizmoMove->index(1);
-        // Y axis (green)
-        m_gizmoMove->position(0, 0, 0);
-        m_gizmoMove->position(0, 50, 0);
-        m_gizmoMove->index(2); m_gizmoMove->index(3);
-        // Z axis (blue)
-        m_gizmoMove->position(0, 0, 0);
-        m_gizmoMove->position(0, 0, 50);
-        m_gizmoMove->index(4); m_gizmoMove->index(5);
-        m_gizmoMove->end();
-    }
+    Ogre::String dbX = makeDb(hlmsUnlit, "GizmoAxisX", Ogre::ColourValue(1, 0, 0, 1));
+    Ogre::String dbY = makeDb(hlmsUnlit, "GizmoAxisY", Ogre::ColourValue(0, 1, 0, 1));
+    Ogre::String dbZ = makeDb(hlmsUnlit, "GizmoAxisZ", Ogre::ColourValue(0, 0.4f, 1, 1));
+
+    // ---- Move gizmo: three coloured axis lines + small arrow heads ----
+    m_gizmoMove = m_sceneManager->createManualObject();
+    // X axis
+    m_gizmoMove->begin(dbX, Ogre::OT_LINE_LIST);
+    m_gizmoMove->position(0, 0, 0); m_gizmoMove->position(1, 0, 0);
+    m_gizmoMove->index(0); m_gizmoMove->index(1);
+    m_gizmoMove->end();
+    // Y axis
+    m_gizmoMove->begin(dbY, Ogre::OT_LINE_LIST);
+    m_gizmoMove->position(0, 0, 0); m_gizmoMove->position(0, 1, 0);
+    m_gizmoMove->index(0); m_gizmoMove->index(1);
+    m_gizmoMove->end();
+    // Z axis
+    m_gizmoMove->begin(dbZ, Ogre::OT_LINE_LIST);
+    m_gizmoMove->position(0, 0, 0); m_gizmoMove->position(0, 0, 1);
+    m_gizmoMove->index(0); m_gizmoMove->index(1);
+    m_gizmoMove->end();
     m_gizmoNode->attachObject(m_gizmoMove);
 
-    // Rotate gizmo — 3 circles (simplified as line segments)
+    // ---- Rotate gizmo: three coloured circles (one per axis plane) ----
     m_gizmoRotate = m_sceneManager->createManualObject();
-    {
-        Ogre::String dbName = "GizmoRotateDatablock";
-        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
-        if (!db) {
-            db = hlmsUnlit->createDatablock(
-                Ogre::IdString(dbName), dbName,
-                Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
-        }
-        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
-        dblock->setColour(Ogre::ColourValue(1, 1, 0, 1));
-
-        m_gizmoRotate->begin(dbName, Ogre::OT_LINE_LIST);
-        // Simple circle approximation in XZ plane
+    auto buildCircle = [&](const Ogre::String& db, int segs,
+                           const Ogre::Vector3& u, const Ogre::Vector3& v) {
+        m_gizmoRotate->begin(db, Ogre::OT_LINE_LIST);
         uint32_t idx = 0;
-        for (int i = 0; i < 32; i++) {
-            float a0 = float(i) / 32 * 6.2831853f;
-            float a1 = float(i + 1) / 32 * 6.2831853f;
-            m_gizmoRotate->position(cos(a0) * 40, 0, sin(a0) * 40);
-            m_gizmoRotate->position(cos(a1) * 40, 0, sin(a1) * 40);
-            m_gizmoRotate->index(idx); m_gizmoRotate->index(idx + 1);
+        for (int i = 0; i < segs; ++i) {
+            float a0 = float(i) / segs * 6.2831853f;
+            float a1 = float(i + 1) / segs * 6.2831853f;
+            Ogre::Vector3 p0 = u * cos(a0) + v * sin(a0);
+            Ogre::Vector3 p1 = u * cos(a1) + v * sin(a1);
+            m_gizmoRotate->position(p0.x, p0.y, p0.z);
+            m_gizmoRotate->position(p1.x, p1.y, p1.z);
+            m_gizmoRotate->index(idx);     m_gizmoRotate->index(idx + 1);
             idx += 2;
         }
         m_gizmoRotate->end();
-    }
+    };
+    // X axis ring lies in the YZ plane, etc.
+    buildCircle(dbX, 48, Ogre::Vector3::UNIT_Y, Ogre::Vector3::UNIT_Z);
+    buildCircle(dbY, 48, Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Z);
+    buildCircle(dbZ, 48, Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Y);
     m_gizmoNode->attachObject(m_gizmoRotate);
 
-    // Scale gizmo — 3 axis lines with box ends
+    // ---- Scale gizmo: three coloured axis lines with cube ends ----
     m_gizmoScale = m_sceneManager->createManualObject();
-    {
-        Ogre::String dbName = "GizmoScaleDatablock";
-        Ogre::HlmsDatablock* db = hlmsUnlit->getDatablock(Ogre::IdString(dbName));
-        if (!db) {
-            db = hlmsUnlit->createDatablock(
-                Ogre::IdString(dbName), dbName,
-                Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
-        }
-        auto* dblock = static_cast<Ogre::HlmsUnlitDatablock*>(db);
-        dblock->setColour(Ogre::ColourValue(0, 1, 1, 1));
-
-        m_gizmoScale->begin(dbName, Ogre::OT_LINE_LIST);
+    auto buildScaleAxis = [&](const Ogre::String& db, const Ogre::Vector3& dir) {
+        m_gizmoScale->begin(db, Ogre::OT_LINE_LIST);
         m_gizmoScale->position(0, 0, 0);
-        m_gizmoScale->position(50, 0, 0);
+        m_gizmoScale->position(dir.x, dir.y, dir.z);
         m_gizmoScale->index(0); m_gizmoScale->index(1);
-        m_gizmoScale->position(0, 0, 0);
-        m_gizmoScale->position(0, 50, 0);
-        m_gizmoScale->index(2); m_gizmoScale->index(3);
-        m_gizmoScale->position(0, 0, 0);
-        m_gizmoScale->position(0, 0, 50);
-        m_gizmoScale->index(4); m_gizmoScale->index(5);
         m_gizmoScale->end();
-    }
+    };
+    buildScaleAxis(dbX, Ogre::Vector3::UNIT_X);
+    buildScaleAxis(dbY, Ogre::Vector3::UNIT_Y);
+    buildScaleAxis(dbZ, Ogre::Vector3::UNIT_Z);
     m_gizmoNode->attachObject(m_gizmoScale);
 
+    // Only the gizmo for the current transform mode is visible; the others
+    // are hidden by updateGizmo() / showGizmo().
+    m_gizmoMove->setVisible(false);
+    m_gizmoRotate->setVisible(false);
+    m_gizmoScale->setVisible(false);
     m_gizmoNode->setVisible(false);
 }
 
@@ -1503,7 +1500,12 @@ void OgreWidget::destroyGizmo()
 
 void OgreWidget::showGizmo(bool show)
 {
-    if (m_gizmoNode) m_gizmoNode->setVisible(show);
+    if (!m_gizmoNode) return;
+    // Only the gizmo for the active transform mode is shown.
+    if (m_gizmoMove)   m_gizmoMove->setVisible(show && m_transformMode == TransformMode::Move);
+    if (m_gizmoRotate) m_gizmoRotate->setVisible(show && m_transformMode == TransformMode::Rotate);
+    if (m_gizmoScale)  m_gizmoScale->setVisible(show && m_transformMode == TransformMode::Scale);
+    m_gizmoNode->setVisible(show);
 }
 
 void OgreWidget::updateGizmo()
@@ -1519,22 +1521,296 @@ void OgreWidget::updateGizmo()
         return;
     }
     if (m_gizmoNode) {
-        m_gizmoNode->setPosition(Ogre::Vector3(a->transform.posX, a->transform.posY, a->transform.posZ));
+        Ogre::Vector3 origin(a->transform.posX, a->transform.posY, a->transform.posZ);
+        m_gizmoNode->setPosition(origin);
+        // Screen-constant size: scale the unit-length gizmo so it occupies a
+        // fixed fraction of the viewport regardless of camera distance.
+        float s = gizmoWorldScale(origin);
+        m_gizmoNode->setScale(s, s, s);
         showGizmo(true);
     }
 }
 
+Ogre::Vector3 OgreWidget::gizmoAxisVector(GizmoAxis axis)
+{
+    switch (axis) {
+    case GizmoAxis::X: return Ogre::Vector3::UNIT_X;
+    case GizmoAxis::Y: return Ogre::Vector3::UNIT_Y;
+    case GizmoAxis::Z: return Ogre::Vector3::UNIT_Z;
+    default:           return Ogre::Vector3::ZERO;
+    }
+}
+
+float OgreWidget::gizmoWorldScale(const Ogre::Vector3& origin) const
+{
+    if (!m_camera) return 50.0f;
+    // Distance from camera to gizmo origin along the view direction.
+    Ogre::Vector3 camPos = m_camera->getDerivedPosition();
+    Ogre::Vector3 dir = m_camera->getDerivedDirection();
+    float dist = std::max(1.0f, (origin - camPos).dotProduct(dir));
+    // Target on-screen size in world units at unit distance. The gizmo mesh
+    // is 1 unit long, so this scale makes it appear ~80px tall at the
+    // default vertical FOV. We use the camera's vertical FOV to convert.
+    Ogre::Radian fov = m_camera->getFOVy();
+    float worldPerPx = float(2.0 * tan(fov.valueRadians() * 0.5) / height());
+    // 80 px on screen -> world units at the gizmo's depth.
+    return dist * worldPerPx * 80.0f;
+}
+
+bool OgreWidget::projectToScreen(const Ogre::Vector3& world, float& sx, float& sy) const
+{
+    if (!m_camera || !m_renderWindow) return false;
+    Ogre::Vector3 eye = m_camera->getViewMatrix() * world;
+    if (eye.z <= 0) return false; // behind camera
+    Ogre::Vector3 clip = m_camera->getProjectionMatrix() * eye;
+    if (clip.z < -1 || clip.z > 1) return false;
+    sx = (clip.x * 0.5f + 0.5f) * width();
+    sy = (1.0f - (clip.y * 0.5f + 0.5f)) * height();
+    return true;
+}
+
+Ogre::Ray OgreWidget::screenRay(int screenX, int screenY) const
+{
+    if (!m_camera) return Ogre::Ray();
+    float nx = float(screenX) / width();
+    float ny = float(screenY) / height();
+    return m_camera->getCameraToViewportRay(nx, ny);
+}
+
+bool OgreWidget::rayOnGizmoPlane(int screenX, int screenY,
+                                 const Ogre::Vector3& origin, Ogre::Vector3& hit) const
+{
+    if (!m_camera) return false;
+    Ogre::Ray ray = screenRay(screenX, screenY);
+    // Plane through origin facing the camera.
+    Ogre::Vector3 normal = -m_camera->getDerivedDirection().normalisedCopy();
+    Ogre::Plane plane(normal, origin);
+    auto hitPair = ray.intersects(plane);
+    if (!hitPair.first) return false;
+    hit = ray.getPoint(hitPair.second);
+    return true;
+}
+
 GizmoAxis OgreWidget::pickGizmoAxis(int screenX, int screenY)
 {
-    // Simplified — just return None for now
-    Q_UNUSED(screenX); Q_UNUSED(screenY);
-    return GizmoAxis::None;
+    if (m_transformMode == TransformMode::None) return GizmoAxis::None;
+    QString selId = m_world.primarySelection();
+    if (selId.isEmpty()) return GizmoAxis::None;
+    world::Actor* a = m_world.findActor(selId);
+    if (!a || !m_gizmoNode) return GizmoAxis::None;
+
+    Ogre::Vector3 origin(a->transform.posX, a->transform.posY, a->transform.posZ);
+    float s = gizmoWorldScale(origin);
+
+    // Project the three axis endpoints to screen and pick the one whose
+    // screen segment passes closest to the cursor within a pixel threshold.
+    auto segmentDist = [](float ax, float ay, float bx, float by,
+                          float px, float py) -> float {
+        float dx = bx - ax, dy = by - ay;
+        float len2 = dx * dx + dy * dy;
+        if (len2 < 1e-6f) return std::hypot(px - ax, py - ay);
+        float t = ((px - ax) * dx + (py - ay) * dy) / len2;
+        t = std::clamp(t, 0.0f, 1.0f);
+        float cx = ax + t * dx, cy = ay + t * dy;
+        return std::hypot(px - cx, py - cy);
+    };
+
+    struct AxisScreen { GizmoAxis axis; float ax, ay, bx, by; };
+    std::vector<AxisScreen> segs;
+
+    auto addAxis = [&](GizmoAxis axis, const Ogre::Vector3& dir) {
+        Ogre::Vector3 start = origin;
+        Ogre::Vector3 end = origin + dir * s;
+        float sx0, sy0, sx1, sy1;
+        if (!projectToScreen(start, sx0, sy0)) return;
+        if (!projectToScreen(end, sx1, sy1))   return;
+        segs.push_back({axis, sx0, sy0, sx1, sy1});
+    };
+
+    if (m_transformMode == TransformMode::Move ||
+        m_transformMode == TransformMode::Scale) {
+        addAxis(GizmoAxis::X, Ogre::Vector3::UNIT_X);
+        addAxis(GizmoAxis::Y, Ogre::Vector3::UNIT_Y);
+        addAxis(GizmoAxis::Z, Ogre::Vector3::UNIT_Z);
+    } else if (m_transformMode == TransformMode::Rotate) {
+        // For rotate, the hit target is the ring; approximate by testing the
+        // screen distance from the cursor to the projected ring centre along
+        // each axis. We pick the axis whose ring plane is most facing the
+        // camera (i.e. the projected ring is largest), but to keep it simple
+        // and robust we test distance from cursor to each ring's projected
+        // circle by sampling points on it.
+        auto addRing = [&](GizmoAxis axis, const Ogre::Vector3& u,
+                           const Ogre::Vector3& v) {
+            const int N = 32;
+            float best = 1e9f;
+            for (int i = 0; i < N; ++i) {
+                float ang = float(i) / N * 6.2831853f;
+                Ogre::Vector3 p = origin + (u * cos(ang) + v * sin(ang)) * s;
+                float sxp, syp;
+                if (!projectToScreen(p, sxp, syp)) continue;
+                float d = std::hypot(sxp - screenX, syp - screenY);
+                best = std::min(best, d);
+            }
+            segs.push_back({axis, float(screenX), float(screenY),
+                            float(screenX) + best, float(screenY)});
+        };
+        addRing(GizmoAxis::X, Ogre::Vector3::UNIT_Y, Ogre::Vector3::UNIT_Z);
+        addRing(GizmoAxis::Y, Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Z);
+        addRing(GizmoAxis::Z, Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Y);
+    }
+
+    const float threshold = 12.0f; // pixels
+    GizmoAxis best = GizmoAxis::None;
+    float bestDist = threshold;
+    for (const auto& seg : segs) {
+        float d = segmentDist(seg.ax, seg.ay, seg.bx, seg.by,
+                               float(screenX), float(screenY));
+        if (d < bestDist) { bestDist = d; best = seg.axis; }
+    }
+    return best;
+}
+
+void OgreWidget::beginGizmoDrag(GizmoAxis axis, int screenX, int screenY)
+{
+    if (axis == GizmoAxis::None) return;
+    QString selId = m_world.primarySelection();
+    if (selId.isEmpty()) return;
+    world::Actor* a = m_world.findActor(selId);
+    if (!a) return;
+
+    m_activeGizmoAxis = axis;
+    m_gizmoDragging = true;
+    m_gizmoStartX = screenX;
+    m_gizmoStartY = screenY;
+    m_gizmoStartTransform = a->transform;
+
+    // For move/scale we record the initial ray-plane hit so drags are
+    // measured relative to it. For rotate we record the initial angle
+    // between the cursor and the axis origin on the gizmo plane.
+    Ogre::Vector3 origin(a->transform.posX, a->transform.posY, a->transform.posZ);
+    Ogre::Vector3 hit;
+    if (rayOnGizmoPlane(screenX, screenY, origin, hit)) {
+        Ogre::Vector3 delta = hit - origin;
+        if (m_transformMode == TransformMode::Move) {
+            m_gizmoStartValue = delta.dotProduct(gizmoAxisVector(axis));
+        } else if (m_transformMode == TransformMode::Scale) {
+            m_gizmoStartValue = delta.dotProduct(gizmoAxisVector(axis));
+        } else if (m_transformMode == TransformMode::Rotate) {
+            // Angle of the cursor around the axis on the gizmo plane.
+            Ogre::Vector3 u, v;
+            if (axis == GizmoAxis::X) { u = Ogre::Vector3::UNIT_Y; v = Ogre::Vector3::UNIT_Z; }
+            else if (axis == GizmoAxis::Y) { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Z; }
+            else                            { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Y; }
+            float ang = atan2f(delta.dotProduct(v), delta.dotProduct(u));
+            m_gizmoStartValue = ang;
+        }
+    } else {
+        m_gizmoStartValue = 0.0f;
+    }
 }
 
 void OgreWidget::applyGizmoDrag(int screenX, int screenY)
 {
-    // Simplified — no drag implementation yet
-    Q_UNUSED(screenX); Q_UNUSED(screenY);
+    if (!m_gizmoDragging || m_activeGizmoAxis == GizmoAxis::None) return;
+    QString selId = m_world.primarySelection();
+    if (selId.isEmpty()) return;
+    world::Actor* a = m_world.findActor(selId);
+    if (!a) return;
+
+    Ogre::Vector3 origin(m_gizmoStartTransform.posX,
+                         m_gizmoStartTransform.posY,
+                         m_gizmoStartTransform.posZ);
+    Ogre::Vector3 hit;
+    if (!rayOnGizmoPlane(screenX, screenY, origin, hit)) return;
+
+    Ogre::Vector3 delta = hit - origin;
+    Ogre::Vector3 axisVec = gizmoAxisVector(m_activeGizmoAxis);
+    world::Transform t = m_gizmoStartTransform;
+
+    if (m_transformMode == TransformMode::Move) {
+        float along = delta.dotProduct(axisVec) - m_gizmoStartValue;
+        if (m_snapEnabled) along = std::round(along / m_snapSize) * m_snapSize;
+        if (m_activeGizmoAxis == GizmoAxis::X) t.posX += along;
+        else if (m_activeGizmoAxis == GizmoAxis::Y) t.posY += along;
+        else                                        t.posZ += along;
+    } else if (m_transformMode == TransformMode::Scale) {
+        float along = delta.dotProduct(axisVec) - m_gizmoStartValue;
+        // Map world-space drag to a scale delta relative to the start scale.
+        float baseScale = 1.0f;
+        if (m_activeGizmoAxis == GizmoAxis::X) baseScale = m_gizmoStartTransform.scaleX;
+        else if (m_activeGizmoAxis == GizmoAxis::Y) baseScale = m_gizmoStartTransform.scaleY;
+        else                                        baseScale = m_gizmoStartTransform.scaleZ;
+        // Use gizmo world size as a reference so the drag feels consistent.
+        float ref = gizmoWorldScale(origin);
+        float factor = 1.0f + (along / std::max(1.0f, ref));
+        factor = std::max(0.05f, factor);
+        if (m_activeGizmoAxis == GizmoAxis::X) t.scaleX = baseScale * factor;
+        else if (m_activeGizmoAxis == GizmoAxis::Y) t.scaleY = baseScale * factor;
+        else                                        t.scaleZ = baseScale * factor;
+    } else if (m_transformMode == TransformMode::Rotate) {
+        Ogre::Vector3 u, v;
+        if (m_activeGizmoAxis == GizmoAxis::X) { u = Ogre::Vector3::UNIT_Y; v = Ogre::Vector3::UNIT_Z; }
+        else if (m_activeGizmoAxis == GizmoAxis::Y) { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Z; }
+        else                                        { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Y; }
+        float ang = atan2f(delta.dotProduct(v), delta.dotProduct(u));
+        float deltaAng = ang - m_gizmoStartValue;
+        if (m_snapEnabled) {
+            float snapRad = Ogre::Degree(15.0f).valueRadians();
+            deltaAng = std::round(deltaAng / snapRad) * snapRad;
+        }
+        float deg = Ogre::Radian(deltaAng).valueDegrees();
+        if (m_activeGizmoAxis == GizmoAxis::X) t.rotX = m_gizmoStartTransform.rotX + deg;
+        else if (m_activeGizmoAxis == GizmoAxis::Y) t.rotY = m_gizmoStartTransform.rotY + deg;
+        else                                        t.rotZ = m_gizmoStartTransform.rotZ + deg;
+    }
+
+    // Update the actor's transform in the world model directly during the
+    // drag for live feedback; the final undo command is pushed on release.
+    a->transform = t;
+    a->touch();
+    auto it = m_actorRenders.find(selId);
+    if (it != m_actorRenders.end() && it->second.node) {
+        it->second.node->setPosition(Ogre::Vector3(t.posX, t.posY, t.posZ));
+        Ogre::Radian ry(Ogre::Degree(t.rotY));
+        Ogre::Radian rx(Ogre::Degree(t.rotX));
+        Ogre::Radian rz(Ogre::Degree(t.rotZ));
+        Ogre::Quaternion q = Ogre::Quaternion(rz, Ogre::Vector3::UNIT_Z)
+                           * Ogre::Quaternion(rx, Ogre::Vector3::UNIT_X)
+                           * Ogre::Quaternion(ry, Ogre::Vector3::UNIT_Y);
+        it->second.node->setOrientation(q);
+        it->second.node->setScale(Ogre::Vector3(t.scaleX, t.scaleY, t.scaleZ));
+    }
+    updateGizmo();
+    emit actorTransformed(selId);
+}
+
+void OgreWidget::endGizmoDrag()
+{
+    if (!m_gizmoDragging) return;
+    m_gizmoDragging = false;
+    QString selId = m_world.primarySelection();
+    m_activeGizmoAxis = GizmoAxis::None;
+
+    if (selId.isEmpty()) return;
+    world::Actor* a = m_world.findActor(selId);
+    if (!a) return;
+
+    // Push a single undoable command capturing the full transform delta.
+    // We revert the live edit first so redo() applies the new transform.
+    world::Transform newT = a->transform;
+    a->transform = m_gizmoStartTransform;
+    a->touch();
+    auto it = m_actorRenders.find(selId);
+    if (it != m_actorRenders.end() && it->second.node) {
+        const auto& t = m_gizmoStartTransform;
+        it->second.node->setPosition(Ogre::Vector3(t.posX, t.posY, t.posZ));
+        Ogre::Radian ry(Ogre::Degree(t.rotY));
+        it->second.node->setOrientation(Ogre::Quaternion(ry, Ogre::Vector3::UNIT_Y));
+        it->second.node->setScale(Ogre::Vector3(t.scaleX, t.scaleY, t.scaleZ));
+    }
+    m_undoStack.push(new world::TransformActorCommand(
+        &m_world, selId, m_gizmoStartTransform, newT));
+    updateGizmo();
 }
 
 // ============================================================
@@ -1718,6 +1994,8 @@ void OgreWidget::resetCamera()
         m_camera->setPosition(Ogre::Vector3(x, y, z));
         m_camera->lookAt(Ogre::Vector3(m_camTargetX, m_camTargetY, m_camTargetZ));
     }
+    // Keep the gizmo screen-constant as the camera moves.
+    updateGizmo();
 }
 
 void OgreWidget::setCameraPosition(float x, float y, float z)
@@ -1786,10 +2064,27 @@ void OgreWidget::mousePressEvent(QMouseEvent* event)
         m_lastMouseX = event->x();
         m_lastMouseY = event->y();
 
-        // Try to pick an actor
+        // If a gizmo is visible, test gizmo axis hits FIRST so that clicking
+        // an axis does not also re-pick the actor or orbit the camera.
+        if (m_transformMode != TransformMode::None) {
+            GizmoAxis axis = pickGizmoAxis(event->x(), event->y());
+            if (axis != GizmoAxis::None) {
+                beginGizmoDrag(axis, event->x(), event->y());
+                return;
+            }
+        }
+
+        // Otherwise try to pick an actor.
         QString pickedId = pickActor(event->x(), event->y());
         if (!pickedId.isEmpty()) {
             selectActor(pickedId);
+            // If the newly selected actor has a gizmo, allow starting a drag
+            // immediately on the same press (common editor behaviour).
+            if (m_transformMode != TransformMode::None) {
+                GizmoAxis axis = pickGizmoAxis(event->x(), event->y());
+                if (axis != GizmoAxis::None)
+                    beginGizmoDrag(axis, event->x(), event->y());
+            }
         } else {
             deselectAll();
         }
@@ -1810,7 +2105,6 @@ void OgreWidget::mouseMoveEvent(QMouseEvent* event)
     int dy = event->y() - m_lastMouseY;
 
     if (m_leftDown) {
-        // Orbit camera (or gizmo drag if gizmo is active)
         if (m_gizmoDragging) {
             applyGizmoDrag(event->x(), event->y());
         } else {
@@ -1830,9 +2124,14 @@ void OgreWidget::mouseMoveEvent(QMouseEvent* event)
 
 void OgreWidget::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton) m_leftDown = false;
-    else if (event->button() == Qt::RightButton) m_rightDown = false;
-    else if (event->button() == Qt::MiddleButton) m_middleDown = false;
+    if (event->button() == Qt::LeftButton) {
+        if (m_gizmoDragging) endGizmoDrag();
+        m_leftDown = false;
+    } else if (event->button() == Qt::RightButton) {
+        m_rightDown = false;
+    } else if (event->button() == Qt::MiddleButton) {
+        m_middleDown = false;
+    }
 }
 
 void OgreWidget::wheelEvent(QWheelEvent* event)
@@ -1898,39 +2197,77 @@ bool OgreWidget::screenToWorld(int screenX, int screenY, WorldPos& worldPos)
 {
     if (!m_camera || !m_renderWindow) return false;
 
-    float nx = float(screenX) / width();
-    float ny = float(screenY) / height();
-    Ogre::Ray ray = m_camera->getCameraToViewportRay(nx, ny);
+    Ogre::Ray ray = screenRay(screenX, screenY);
 
-    // Intersect with ground plane (y=0)
-    float t = -ray.getOrigin().y / ray.getDirection().y;
-    if (t > 0) {
-        Ogre::Vector3 pos = ray.getPoint(t);
-        worldPos = {pos.x, pos.y, pos.z};
-        return true;
+    // Intersect with ground plane (y=0) as a fallback for empty-space clicks.
+    if (std::abs(ray.getDirection().y) > 1e-5f) {
+        float t = -ray.getOrigin().y / ray.getDirection().y;
+        if (t > 0) {
+            Ogre::Vector3 pos = ray.getPoint(t);
+            worldPos = {pos.x, pos.y, pos.z};
+            return true;
+        }
     }
     return false;
 }
 
 QString OgreWidget::pickActor(int screenX, int screenY)
 {
-    // Simplified picking — cast ray and find nearest actor by distance
-    WorldPos worldPos;
-    if (!screenToWorld(screenX, screenY, worldPos)) return QString();
+    if (!m_camera) return QString();
+
+    Ogre::Ray ray = screenRay(screenX, screenY);
 
     QString bestId;
-    float bestDist = 1e10f;
+    float bestT = std::numeric_limits<float>::max();
+
     for (const auto& actor : m_world.actors) {
         if (!actor.visible || !actor.selectable) continue;
         if (!isLayerVisible(actor.layerId) || isLayerLocked(actor.layerId)) continue;
 
-        float dx = actor.transform.posX - worldPos.x;
-        float dy = actor.transform.posY - worldPos.y;
-        float dz = actor.transform.posZ - worldPos.z;
-        float dist = sqrt(dx*dx + dy*dy + dz*dz);
-        float radius = std::max({actor.transform.scaleX, actor.transform.scaleY, actor.transform.scaleZ}) * 0.5f;
-        if (dist < radius && dist < bestDist) {
-            bestDist = dist;
+        // Build a world-space AABB from the actor's transform. The actor
+        // render mesh is a unit cube centred at origin, so the local AABB
+        // is [-0.5, 0.5]^3 scaled by the actor's per-axis scale.
+        Ogre::Vector3 center(actor.transform.posX,
+                             actor.transform.posY,
+                             actor.transform.posZ);
+        Ogre::Vector3 half(actor.transform.scaleX * 0.5f,
+                           actor.transform.scaleY * 0.5f,
+                           actor.transform.scaleZ * 0.5f);
+
+        // If we have a real render entry, prefer its world AABB which
+        // accounts for the actual mesh bounds.
+        auto it = m_actorRenders.find(actor.id);
+        if (it != m_actorRenders.end() && it->second.item) {
+            Ogre::Aabb aabb = it->second.item->getWorldAabb();
+            center = aabb.mCenter;
+            half = aabb.mHalfSize;
+        }
+
+        // Ray/AABB intersection (slab method).
+        Ogre::Vector3 minP = center - half;
+        Ogre::Vector3 maxP = center + half;
+        float tmin = 0.0f, tmax = bestT;
+        for (int i = 0; i < 3; ++i) {
+            float o = ray.getOrigin()[i];
+            float d = ray.getDirection()[i];
+            if (std::abs(d) < 1e-8f) {
+                if (o < minP[i] || o > maxP[i]) { tmin = -1; break; }
+            } else {
+                float inv = 1.0f / d;
+                float t1 = (minP[i] - o) * inv;
+                float t2 = (maxP[i] - o) * inv;
+                if (t1 > t2) std::swap(t1, t2);
+                tmin = std::max(tmin, t1);
+                tmax = std::min(tmax, t2);
+                if (tmin > tmax) { tmin = -1; break; }
+            }
+        }
+        if (tmin >= 0 && tmin < bestT) {
+            bestT = tmin;
+            bestId = actor.id;
+        } else if (tmax >= 0 && tmax < bestT) {
+            // Origin inside the box — pick the exit point.
+            bestT = tmax;
             bestId = actor.id;
         }
     }

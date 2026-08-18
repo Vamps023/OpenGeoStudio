@@ -26,6 +26,8 @@ namespace Ogre {
     class HlmsUnlit;
     class ManualObject;
     class Light;
+    class Ray;
+    class Vector3;
 }
 
 // Transform mode for the gizmo
@@ -186,6 +188,18 @@ private:
     void showGizmo(bool show);
     GizmoAxis pickGizmoAxis(int screenX, int screenY);
     void applyGizmoDrag(int screenX, int screenY);
+    void beginGizmoDrag(GizmoAxis axis, int screenX, int screenY);
+    void endGizmoDrag();
+
+    // Viewport maths shared by picking and the gizmo
+    bool projectToScreen(const Ogre::Vector3& world, float& sx, float& sy) const;
+    Ogre::Ray screenRay(int screenX, int screenY) const;
+    // Intersects the mouse ray with the plane through 'origin' facing the
+    // camera — the standard way to convert 2D drags into 3D offsets.
+    bool rayOnGizmoPlane(int screenX, int screenY,
+                         const Ogre::Vector3& origin, Ogre::Vector3& hit) const;
+    static Ogre::Vector3 gizmoAxisVector(GizmoAxis axis);
+    float gizmoWorldScale(const Ogre::Vector3& origin) const;
     void createGrid();
     void destroyGrid();
     void showGrid(bool show);
