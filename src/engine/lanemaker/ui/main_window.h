@@ -48,9 +48,16 @@ public:
     // Match Terrain Studio's Esri imagery center and slippy-map zoom.
     void useSharedSatelliteView(double lat, double lon, double zoom);
 
+    // Access the internal MainWidget (for GL initialization triggers)
+    MainWidget* getMainWidget() const { return mainWidget.get(); }
+
+    // Force the OpenGL widget to render — call when Road Studio becomes visible
+    // so that initializeGL() runs and road drawing is possible.
+    void triggerGLInitialization();
+
 protected:
     void resizeEvent(QResizeEvent*) override;
-
+    void showEvent(QShowEvent*) override;
     void closeEvent(QCloseEvent* event) override;
 
 #ifdef __linux__
@@ -80,6 +87,7 @@ private:
     bool recordResize = true;
 
     std::string loadedFileName;
+    QString m_pendingLoadPath;  // deferred until GL is initialized
 
 public slots:
     void ReplaySingleStep();

@@ -281,6 +281,12 @@ namespace LM
         {
             auto connectingRoadID = id2Connection.second.connecting_road;
             auto roadPtr = IDGenerator::ForType(IDType::Road)->GetByID<LM::Road>(connectingRoadID);
+            if (!roadPtr)
+            {
+                spdlog::warn("Junction {}: connecting road {} not found, skipping connection",
+                    generated.id, connectingRoadID);
+                continue;
+            }
             connectingRoads.push_back(roadPtr->shared_from_this());
         }
     }
@@ -596,9 +602,20 @@ namespace LM
     DirectJunction::DirectJunction(const odr::Junction& serialized) : AbstractJunction(serialized)
     {
         generated.type = odr::JunctionType::Direct;
+        if (serialized.id_to_connection.empty())
+        {
+            spdlog::warn("DirectJunction {}: no connections in serialized data", serialized.id);
+            return;
+        }
         auto interfaceProviderID = serialized.id_to_connection.cbegin()->second.incoming_road;
-        
+
         auto interfaceProvider = IDGenerator::ForType(IDType::Road)->GetByID<LM::Road>(interfaceProviderID);
+        if (!interfaceProvider)
+        {
+            spdlog::warn("DirectJunction {}: interface provider road {} not found",
+                serialized.id, interfaceProviderID);
+            return;
+        }
         odr::RoadLink::ContactPoint interfaceContact;
         if (interfaceProvider->generated.predecessor.type == odr::RoadLink::Type_Junction &&
             interfaceProvider->generated.predecessor.id == ID())

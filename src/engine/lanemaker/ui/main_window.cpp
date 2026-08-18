@@ -6,6 +6,7 @@
 #include <QStatusBar>
 #include <QApplication>
 #include <QScreen>
+#include <QTimer>
 #include <filesystem>
 #include <fstream>
 #include "../../../core/PathHelper.hpp"
@@ -24,6 +25,14 @@
 #include "spdlog/spdlog.h"
 
 #include "map_view_gl.h"
+
+namespace {
+    void diag(const std::string& msg) {
+        std::ofstream f("D:/git/OpenGeoStudio-Qt/build/deploy/crash_diag.txt", std::ios::app);
+        f << msg << "\n";
+        f.flush();
+    }
+}
 
 MainWindow* g_mainWindow;
 
@@ -117,6 +126,18 @@ void MainWindow::resizeEvent(QResizeEvent* e)
     QWidget::resizeEvent(e);
     if (recordResize)
         LM::ActionManager::Instance()->Record(e->oldSize(), e->size());
+}
+
+void MainWindow::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    // Update global pointers so LaneMaker's road engine uses THIS instance.
+    // Both RoadStudioWidget and TrainStudioWidget create a MainWindow, and
+    // the globals would otherwise point to whichever was constructed last.
+    g_mainWindow = this;
+    if (mainWidget && mainWidget->mapViewGL) {
+        LM::g_mapViewGL = mainWidget->mapViewGL;
+    }
 }
 
 void MainWindow::newMap()
@@ -228,20 +249,54 @@ void MainWindow::loadFromFile()
 void MainWindow::loadFromPath(const QString& path)
 {
     QString s = path;
+    diag("loadFromPath: starting for: " + s.toStdString());
     if (s.isEmpty()) return;
     if (!QFile::exists(s)) {
-        spdlog::warn("loadFromPath: file does not exist: {}", s.toStdString());
+        diag("loadFromPath: file does not exist: " + s.toStdString());
         return;
     }
 
     // Check file is not empty
     QFileInfo fi(s);
     if (fi.size() == 0) {
-        spdlog::warn("loadFromPath: file is empty, skipping: {}", s.toStdString());
+        diag("loadFromPath: file is empty, skipping: " + s.toStdString());
         return;
     }
 
-    reset();
+    // Defer loading if the OpenGL context hasn't been initialized yet.
+    // PostLoadActions creates SectionGraphics which require valid VAO/VBO,
+    // and those are only created in MapViewGL::initializeGL().
+    if (!LM::g_mapViewGL || !LM::g_mapViewGL->isGLInitialized()) {
+        diag("loadFromPath: GL not initialized, deferring load");
+        m_pendingLoadPath = s;
+        // Schedule a retry — initializeGL() will be called when the widget
+        // gets its first paint event from the Qt event loop.
+        QTimer::singleShot(1000, this, [this, s]() {
+            if (!m_pendingLoadPath.isEmpty() && m_pendingLoadPath == s) {
+                loadFromPath(s);
+            }
+        });
+        return;
+    }
+    m_pendingLoadPath.clear();
+    diag("loadFromPath: GL initialized, proceeding. File size: " + std::to_string(fi.size()) + " bytes");
+
+    try
+    {
+        diag("loadFromPath: calling reset()...");
+        reset();
+        diag("loadFromPath: reset() done");
+    }
+    catch (const std::exception& e)
+    {
+        spdlog::error("loadFromPath: reset() threw: {}", e.what());
+        return;
+    }
+    catch (...)
+    {
+        spdlog::error("loadFromPath: reset() threw unknown exception");
+        return;
+    }
 
     // std::ifstream can't handle Unicode paths on Windows.
     // Always copy to a temp file in an ASCII-safe location first,
@@ -255,7 +310,21 @@ void MainWindow::loadFromPath(const QString& path)
     }
 
     auto tempLoc = tempFile.toStdString();
-    bool loaded = LM::ChangeTracker::Instance()->Load(tempLoc);
+    bool loaded = false;
+    try
+    {
+        diag("loadFromPath: calling ChangeTracker::Load()...");
+        loaded = LM::ChangeTracker::Instance()->Load(tempLoc);
+        diag("loadFromPath: ChangeTracker::Load returned: " + std::string(loaded ? "true" : "false"));
+    }
+    catch (const std::exception& e)
+    {
+        diag(std::string("loadFromPath: ChangeTracker::Load threw: ") + e.what());
+    }
+    catch (...)
+    {
+        diag("loadFromPath: ChangeTracker::Load threw unknown exception");
+    }
     QFile::remove(tempFile);
 
     if (!loaded) {
@@ -570,4 +639,16 @@ void MainWindow::useSharedSatelliteView(double lat, double lon, double zoom)
 {
     if (mainWidget)
         mainWidget->UseSharedSatelliteView(lat, lon, zoom);
+}
+
+void MainWindow::triggerGLInitialization()
+{
+    if (mainWidget && mainWidget->mapViewGL)
+    {
+        // Schedule a paint — this triggers initializeGL() if it hasn't
+        // been called yet (e.g. when the widget was hidden inside a
+        // QStackedWidget page). Use update() (deferred) not repaint()
+        // (immediate) to avoid reentrancy issues.
+        mainWidget->mapViewGL->update();
+    }
 }

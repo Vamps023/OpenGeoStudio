@@ -296,6 +296,8 @@ set(APP_SOURCES
     src/ui/studio3d/Studio3DWidget.cpp
     src/ui/studio3d/OgreWidget.cpp
     src/ui/studio3d/EditorPanels.cpp
+    src/ui/studio3d/PropertiesEditor.cpp
+    src/ui/studio3d/NPanel.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -310,11 +312,17 @@ qt_add_resources(APP_ICON_QRC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/app_icons.qrc
 )
 
+# Road Studio SVG line icons (OpenGeoStudio-native, replacing LaneMaker PNGs)
+qt_add_resources(ROAD_STUDIO_QRC_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/road_studio/road_studio.qrc
+)
+
 add_executable(OpenGeoStudio
     ${APP_SOURCES}
     ${LANEMAKER_QRC_SOURCES}
     ${LANEMAKER_SHADER_QRC_SOURCES}
     ${APP_ICON_QRC_SOURCES}
+    ${ROAD_STUDIO_QRC_SOURCES}
 )
 
 # Embed the icon in the Windows executable (.exe) metadata

@@ -32,9 +32,16 @@ public:
     LM::LanePlan activeLeftSetting;
     LM::LanePlan activeRightSetting;
 
+    // Lane selection: 0 = none, +N = Nth lane on right side, -N = Nth lane on left side
+    int selectedLane = 0;
+
+    // Hit-test: returns lane index at x position, or 0 if none
+    int LaneAtPos(int x) const;
+
 signals:
     void OptionChangedByUser(LM::LanePlan left, LM::LanePlan right);
     void RailProfileChanged(int trackCount, double gauge, double trackSpacing);
+    void LaneSelected(int laneIndex);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -111,6 +118,8 @@ private slots:
 private:
     CrossSectionVisual* visual;
     QToolButton* leftMinus, * leftPlus, * rightMinus, * rightPlus;
+    QToolButton* swapDirectionButton;  // Swap left/right lane direction
+    QToolButton* flipLaneButton;       // Flip selected lane direction
     QDoubleSpinBox* laneWidthSpinner;
 
     const QPixmap incLogo, decLogo;

@@ -67,6 +67,7 @@ namespace LM
 		void UpdateRayHit(QPoint screen, bool fromReplay=false);
 		int VBufferUseage_pct() const;
 		float Zoom() const;
+        bool isGLInitialized() const { return m_glInitialized; }
 
 		// Zoom controls (for toolbar buttons)
 		void ZoomIn();
@@ -75,6 +76,7 @@ namespace LM
 	signals:
 		void MousePerformedAction(LM::MouseAction); // excluding view adjustment / Scene button event
         void KeyPerformedAction(LM::KeyPressAction);// excluding view adjustment, including Scene button event
+        void GLInitialized();
 
 	protected:
 		void initializeGL() override;
@@ -197,6 +199,7 @@ namespace LM
         QOpenGLBuffer m_bgQuadVbo;
         QOpenGLVertexArrayObject m_bgQuadVao;
         bool m_texturedShaderInit = false;
+        bool m_glInitialized = false;
 
         // Sky gradient shader for 3D mode background
         QOpenGLShaderProgram m_skyShader;

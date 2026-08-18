@@ -182,6 +182,10 @@ void ReplayWindow::FillHistoryTable()
 				desc += " modify";
 				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
 				break;
+			case LM::Mode_FlipLane:
+				desc += " flip lane";
+				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
+				break;
 			case LM::Mode_Destroy:
 				desc += " destroy";
 				icon = QIcon(QPixmap(":/icons/destroy_mode.png"));

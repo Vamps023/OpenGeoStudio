@@ -3,6 +3,7 @@
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QIcon>
 #include <qevent.h>
 #include <qpainter.h>
 
@@ -68,6 +69,33 @@ void CrossSectionVisual::resizeEvent(QResizeEvent* event)
     QWidget::resizeEvent(event);
 }
 
+int CrossSectionVisual::LaneAtPos(int x) const
+{
+    // Check right side lanes (positive direction, forward traffic)
+    if (activeRightSetting.laneCount > 0)
+    {
+        for (int i = 0; i < activeRightSetting.laneCount; ++i)
+        {
+            int logoCenter = rInnerResult + (i * 2 + 1) * TickInterval;
+            int halfLane = TickInterval;
+            if (x >= logoCenter - halfLane && x <= logoCenter + halfLane)
+                return i + 1; // 1-indexed right lane
+        }
+    }
+    // Check left side lanes (negative direction, backward traffic)
+    if (activeLeftSetting.laneCount > 0)
+    {
+        for (int i = 0; i < activeLeftSetting.laneCount; ++i)
+        {
+            int logoCenter = lInnerResult - (i * 2 + 1) * TickInterval;
+            int halfLane = TickInterval;
+            if (x >= logoCenter - halfLane && x <= logoCenter + halfLane)
+                return -(i + 1); // 1-indexed left lane (negative)
+        }
+    }
+    return 0; // no lane hit
+}
+
 void CrossSectionVisual::paintEvent(QPaintEvent* evt)
 {
     QWidget::paintEvent(evt);
@@ -93,18 +121,20 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
     XLeft = rect.x() + rect.width() / 20;
     XRight = rect.x() + rect.width() / 20 * 19;
     XCenter = rect.x() + rect.width() / 2;
-    // Draw background
-    painter.setBrush(QColor(210, 210, 210));
+    // Draw background — dark theme
+    painter.setBrush(QColor(13, 17, 23));  // #0d1117
     painter.setPen(Qt::NoPen);
-    painter.drawRect(0, 0, rect.width() / 2, rect.height());
-    // Draw ruler
+    painter.drawRect(0, 0, rect.width(), rect.height());
+    // Draw ruler — subtle gray
     TickInterval = static_cast<float>(XRight - XLeft) / (2 * SingleSideLaneLimit);
-    QPen colorPen;
+    QPen colorPen(QColor(48, 54, 61));  // #30363d
     painter.setPen(colorPen);
     painter.drawLine(XCenter - SingleSideLaneLimit * TickInterval, YCenter,
                      XCenter + SingleSideLaneLimit * TickInterval, YCenter);
-    // Draw ticks
+    // Draw ticks — subtle
     const int TickHeight = rect.height() / 2;
+    colorPen.setColor(QColor(33, 38, 45));  // #21262d
+    painter.setPen(colorPen);
     for (int tick = -SingleSideLaneLimit; tick <= SingleSideLaneLimit; ++tick)
     {
         int TickX = XCenter + TickInterval * tick;
@@ -128,11 +158,11 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
         changedExternally = false;
     }
 
-    // Draw result
+    // Draw result — left lanes in red, right lanes in green (brighter for dark theme)
     colorPen.setWidth(3);
     if (activeLeftSetting.laneCount != 0)
     {
-        colorPen.setColor(Qt::red);
+        colorPen.setColor(QColor(248, 81, 73));  // bright red
         painter.setPen(colorPen);
         painter.drawLine(lOuterResult, YCenter, lInnerResult, YCenter);
         for (int i = 0; i != activeLeftSetting.laneCount; ++i)
@@ -140,12 +170,22 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
             int logoCenter = lInnerResult - (i * 2 + 1) * TickInterval;
             QRectF rect(logoCenter - TickHeight / 2, YCenter - TickHeight, TickHeight, TickHeight);
             painter.drawImage(rect, leftLogo);
+            // Highlight selected left lane
+            if (selectedLane == -(i + 1))
+            {
+                painter.setBrush(QColor(31, 111, 235, 80)); // semi-transparent blue
+                painter.setPen(QPen(QColor(31, 111, 235), 2));
+                QRectF hlRect(logoCenter - TickInterval, YCenter - TickHeight, TickInterval * 2, TickHeight * 2);
+                painter.drawRoundedRect(hlRect, 4, 4);
+                painter.setPen(colorPen);
+                painter.setBrush(Qt::NoBrush);
+            }
         }
     }
 
     if (activeRightSetting.laneCount != 0)
     {
-        colorPen.setColor(Qt::green);
+        colorPen.setColor(QColor(63, 185, 80));  // bright green
         painter.setPen(colorPen);
         painter.drawLine(rOuterResult, YCenter, rInnerResult, YCenter);
         for (int i = 0; i != activeRightSetting.laneCount; ++i)
@@ -153,12 +193,22 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
             int logoCenter = rInnerResult + (i * 2 + 1) * TickInterval;
             QRectF rect(logoCenter - TickHeight / 2, YCenter - TickHeight, TickHeight, TickHeight);
             painter.drawImage(rect, rightLogo);
+            // Highlight selected right lane
+            if (selectedLane == (i + 1))
+            {
+                painter.setBrush(QColor(31, 111, 235, 80)); // semi-transparent blue
+                painter.setPen(QPen(QColor(31, 111, 235), 2));
+                QRectF hlRect(logoCenter - TickInterval, YCenter - TickHeight, TickInterval * 2, TickHeight * 2);
+                painter.drawRoundedRect(hlRect, 4, 4);
+                painter.setPen(colorPen);
+                painter.setBrush(Qt::NoBrush);
+            }
         }
     }
 
-    // Draw Handles
+    // Draw Handles — dark theme: light gray handles, blue when dragging
     colorPen.setWidth(5);
-    colorPen.setColor(Qt::black);
+    colorPen.setColor(QColor(139, 148, 158));  // #8b949e
     painter.setPen(colorPen);
 
     for (int i = 0; i != handleX.size(); ++i)
@@ -169,7 +219,7 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
         auto handle = handleX[i];
         colorPen.setColor(dragIndex.empty() ||
             std::find(dragIndex.begin(), dragIndex.end(), i) == dragIndex.end() ?
-            Qt::gray : Qt::blue);
+            QColor(139, 148, 158) : QColor(31, 111, 235));  // gray : blue
         painter.setPen(colorPen);
         painter.drawLine(handle, YCenter - TickHeight / 2, handle, YCenter + TickHeight / 2);
     }
@@ -188,18 +238,23 @@ void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
     const double ppm = static_cast<double>(XRight - XLeft) / totalWidthM;
     TickInterval = static_cast<float>(ppm);
 
-    // Draw ballast background (brown/gravel)
+    // Draw dark background
+    painter.setBrush(QColor(13, 17, 23));  // #0d1117
+    painter.setPen(Qt::NoPen);
+    painter.drawRect(0, 0, rect.width(), rect.height());
+
+    // Draw ballast background (dark brown/gravel for dark theme)
     double ballastWidthM = railTrackCount * railTrackSpacing + 1.0;
     int ballastLeft = XCenter - static_cast<int>(ballastWidthM * ppm / 2);
     int ballastRight = XCenter + static_cast<int>(ballastWidthM * ppm / 2);
     int ballastHeight = rect.height() * 2 / 3;
-    painter.setBrush(QColor(120, 100, 80));  // brown ballast
+    painter.setBrush(QColor(60, 50, 40));  // dark brown ballast
     painter.setPen(Qt::NoPen);
     painter.drawRect(ballastLeft, YCenter - ballastHeight / 2,
                      ballastRight - ballastLeft, ballastHeight);
 
-    // Draw ruler line
-    QPen colorPen;
+    // Draw ruler line — subtle gray
+    QPen colorPen(QColor(48, 54, 61));  // #30363d
     painter.setPen(colorPen);
     painter.drawLine(XLeft, YCenter + ballastHeight / 2 + 2,
                      XRight, YCenter + ballastHeight / 2 + 2);
@@ -255,8 +310,8 @@ void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
                         railRight + 1, YCenter - railHeight / 2);
     }
 
-    // Draw gauge label
-    colorPen.setColor(QColor(200, 200, 200));
+    // Draw gauge label — light text for dark theme
+    colorPen.setColor(QColor(230, 237, 243));  // #e6edf3
     colorPen.setWidth(1);
     painter.setPen(colorPen);
     QFont font = painter.font();
@@ -288,6 +343,17 @@ void CrossSectionVisual::mousePressEvent(QMouseEvent* evt)
 {
     if (evt->button() == Qt::MouseButton::LeftButton)
     {
+        // First, try lane selection (clicking on a car icon)
+        int lane = LaneAtPos(evt->x());
+        if (lane != 0)
+        {
+            selectedLane = (selectedLane == lane) ? 0 : lane; // toggle selection
+            update();
+            emit LaneSelected(selectedLane);
+            return;
+        }
+
+        // Otherwise, handle drag handles (existing behavior)
         if (lOuterResult < evt->x() && evt->x() < lInnerResult)
         {
             std::sort(handleX.begin(), handleX.end());
@@ -368,22 +434,56 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     visual(new CrossSectionVisual),
     leftMinus(new QToolButton), leftPlus(new QToolButton),
     rightMinus(new QToolButton), rightPlus(new QToolButton),
+    swapDirectionButton(new QToolButton),
+    flipLaneButton(new QToolButton),
     laneWidthSpinner(new QDoubleSpinBox),
     incLogo(":/icons/add.png"), decLogo(":/icons/minus.png")
 {
     setMinimumWidth(550);
+
+    // Dark theme for the entire LaneConfigWidget
+    setStyleSheet(
+        "LaneConfigWidget { background-color: #0d1117; border: 1px solid #21262d; border-radius: 8px; }"
+        "QLabel { color: #7d8590; font-size: 11px; }"
+        "QToolButton { background: #161b22; border: 1px solid #30363d; border-radius: 6px; "
+        "  padding: 4px; margin: 1px; }"
+        "QToolButton:hover { background: #21262d; border-color: #1f6feb; }"
+        "QToolButton:pressed { background: #0d1117; }"
+        "QToolButton:disabled { color: #484f58; border-color: #21262d; background: #0d1117; }"
+        "QDoubleSpinBox { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
+        "  padding: 4px; color: #e6edf3; font-size: 12px; }"
+        "QDoubleSpinBox:hover { border-color: #1f6feb; }"
+        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+        "  background: #21262d; border: none; border-radius: 3px; width: 16px; }"
+        "QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {"
+        "  background: #30363d; }");
 
     int size = style()->pixelMetric(QStyle::PM_ToolBarIconSize);
     if (verticalLayout) size *= 2;
     QSize iconSize(size, size);
     leftMinus->setIcon(decLogo);
     leftMinus->setIconSize(iconSize);
+    leftMinus->setToolTip("Remove left lane");
     leftPlus->setIcon(incLogo);
     leftPlus->setIconSize(iconSize);
+    leftPlus->setToolTip("Add left lane");
     rightMinus->setIcon(decLogo);
     rightMinus->setIconSize(iconSize);
+    rightMinus->setToolTip("Remove right lane");
     rightPlus->setIcon(incLogo);
     rightPlus->setIconSize(iconSize);
+    rightPlus->setToolTip("Add right lane");
+
+    // Swap Direction button — swaps left/right lane plans to reverse traffic direction
+    swapDirectionButton->setIcon(QIcon(":/rs/svg/swap_direction.svg"));
+    swapDirectionButton->setIconSize(iconSize);
+    swapDirectionButton->setToolTip("Swap all lane directions (reverse traffic flow)");
+
+    // Flip Lane button — flips the direction of the selected individual lane
+    flipLaneButton->setIcon(QIcon(":/rs/svg/flip_lane.svg"));
+    flipLaneButton->setIconSize(iconSize);
+    flipLaneButton->setToolTip("Flip selected lane direction (move lane to opposite side)");
+    flipLaneButton->setEnabled(false); // disabled until a lane is selected
 
     // Lane width spinner — configurable (1.5-5.0m, step 0.25m)
     laneWidthSpinner->setRange(1.5, 5.0);
@@ -399,12 +499,20 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     if (verticalLayout)
     {
         layout = new QVBoxLayout(this);
+        layout->setContentsMargins(8, 8, 8, 8);
+        layout->setSpacing(6);
         layout->addWidget(visual, 1, Qt::AlignHCenter);
         QHBoxLayout* bottomLayout = new QHBoxLayout;
+        bottomLayout->setSpacing(4);
         bottomLayout->addWidget(leftMinus);
         bottomLayout->addWidget(leftPlus);
         bottomLayout->addStretch(1);
-        bottomLayout->addWidget(new QLabel("Lane W:"));
+        bottomLayout->addWidget(flipLaneButton);
+        bottomLayout->addWidget(swapDirectionButton);
+        bottomLayout->addStretch(1);
+        auto* wLabel = new QLabel("Lane W:");
+        wLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        bottomLayout->addWidget(wLabel);
         bottomLayout->addWidget(laneWidthSpinner);
         bottomLayout->addStretch(1);
         bottomLayout->addWidget(rightMinus);
@@ -415,10 +523,16 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     else
     {
         layout = new QHBoxLayout(this);
+        layout->setContentsMargins(4, 4, 4, 4);
+        layout->setSpacing(4);
         layout->addWidget(leftMinus);
         layout->addWidget(leftPlus);
         layout->addWidget(visual);
-        layout->addWidget(new QLabel("W:"));
+        layout->addWidget(flipLaneButton);
+        layout->addWidget(swapDirectionButton);
+        auto* wLabel = new QLabel("W:");
+        wLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        layout->addWidget(wLabel);
         layout->addWidget(laneWidthSpinner);
         layout->addWidget(rightMinus);
         layout->addWidget(rightPlus);
@@ -476,6 +590,66 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
                 rPlan.laneCount++;
                 SetOption(LeftResult(), rPlan);
             }
+        });
+
+    // Swap Direction — reverses traffic flow by swapping left/right lane plans
+    connect(swapDirectionButton, &QAbstractButton::clicked, [this]()
+        {
+            auto lPlan = LeftResult();
+            auto rPlan = RightResult();
+            // Swap: left becomes right and vice versa
+            // Negate offsetx2 because the side reference flips
+            LM::LanePlan newLeft, newRight;
+            newLeft.laneCount = rPlan.laneCount;
+            newLeft.offsetx2 = -rPlan.offsetx2;
+            newRight.laneCount = lPlan.laneCount;
+            newRight.offsetx2 = -lPlan.offsetx2;
+            SetOption(newLeft, newRight);
+            visual->selectedLane = 0;
+            flipLaneButton->setEnabled(false);
+        });
+
+    // Enable/disable flip button based on lane selection
+    connect(visual, &CrossSectionVisual::LaneSelected, this,
+        [this](int laneIndex) {
+            flipLaneButton->setEnabled(laneIndex != 0);
+        });
+
+    // Flip selected lane — moves one lane from one side to the other
+    connect(flipLaneButton, &QAbstractButton::clicked, [this]()
+        {
+            int sel = visual->selectedLane;
+            if (sel == 0) return;
+
+            auto lPlan = LeftResult();
+            auto rPlan = RightResult();
+
+            if (sel > 0)
+            {
+                // Right lane selected → move to left side
+                if (rPlan.laneCount <= 0) return;
+                rPlan.laneCount--;
+                if (rPlan.laneCount == 0)
+                    lPlan.offsetx2 = rPlan.offsetx2;
+                if (lPlan.laneCount == 0)
+                    lPlan.offsetx2 = -rPlan.offsetx2;
+                lPlan.laneCount++;
+            }
+            else
+            {
+                // Left lane selected → move to right side
+                if (lPlan.laneCount <= 0) return;
+                lPlan.laneCount--;
+                if (lPlan.laneCount == 0)
+                    rPlan.offsetx2 = lPlan.offsetx2;
+                if (rPlan.laneCount == 0)
+                    rPlan.offsetx2 = -lPlan.offsetx2;
+                rPlan.laneCount++;
+            }
+
+            SetOption(lPlan, rPlan);
+            visual->selectedLane = 0;
+            flipLaneButton->setEnabled(false);
         });
 }
 

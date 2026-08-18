@@ -695,6 +695,7 @@ namespace LM
 
     void MapViewGL::initializeGL()
     {
+        if (m_glInitialized) return; // already initialized
         m_painting = false;
         initializeOpenGLFunctions();
 
@@ -708,6 +709,9 @@ namespace LM
         {
             buff.Initialize();
         }
+
+        m_glInitialized = true;
+        emit GLInitialized();
     }
 
     void MapViewGL::resizeGL(int width, int height)
@@ -874,6 +878,9 @@ namespace LM
 
     void MapViewGL::paintGL()
     {
+        // If initializeGL() hasn't completed yet, skip painting
+        if (!m_glInitialized) return;
+
         // Prevent recursive paintGL calls (Qt 6 may trigger reinitialization)
         if (m_painting) return;
         m_painting = true;

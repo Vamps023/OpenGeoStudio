@@ -96,65 +96,78 @@ MainWidget::MainWidget(QWidget* parent)
     QSize iconSize(size, size);
     QSize largeIconSize = iconSize * 1.75;
 
-    // === Left sidebar — vertical tool buttons (mode selectors) ===
+    // Helper: load SVG icon from our road_studio resource prefix
+    auto loadSvgIcon = [](const QString& name) -> QIcon {
+        return QIcon(QString(":/rs/svg/%1.svg").arg(name));
+    };
+
+    // ============================================================
+    // Left sidebar — vertical tool buttons (mode selectors)
+    // OpenGeoStudio-native design: dark, compact, icon-only
+    // ============================================================
     auto* sidebar = new QWidget(this);
     sidebar->setObjectName("roadSidebar");
-    sidebar->setFixedWidth(52);
+    sidebar->setFixedWidth(48);
     sidebar->setStyleSheet(
-        "QWidget#roadSidebar { background-color: #161b22; border-right: 1px solid #30363d; }"
-        "QToolButton { background: transparent; border: none; border-radius: 6px; "
-        "  padding: 6px; margin: 2px; }"
-        "QToolButton:hover { background-color: #30363d; }"
-        "QToolButton:checked { background-color: #0d1117; border: 2px solid #06b6d4; "
-        "  border-radius: 6px; }");
+        "QWidget#roadSidebar { background-color: #0d1117; border-right: 1px solid #21262d; }"
+        "QToolButton { background: transparent; border: none; border-radius: 8px; "
+        "  padding: 8px; margin: 3px; }"
+        "QToolButton:hover { background-color: #21262d; }"
+        "QToolButton:checked { background-color: #1f6feb33; border: 1px solid #1f6feb; "
+        "  border-radius: 8px; }");
     auto* sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(4, 6, 4, 6);
-    sidebarLayout->setSpacing(4);
+    sidebarLayout->setContentsMargins(4, 8, 4, 8);
+    sidebarLayout->setSpacing(2);
     sidebarLayout->setAlignment(Qt::AlignTop);
 
     createModeButton = new QToolButton;
     createModeButton->setToolTip(tr("Road Mode — Draw new roads"));
-    createModeButton->setIcon(QPixmap(":/icons/road_mode.png"));
+    createModeButton->setIcon(loadSvgIcon("road_mode"));
     createModeButton->setIconSize(largeIconSize);
     createModeButton->setCheckable(true);
     createModeButton->setChecked(false);
 
+    straightLineButton = new QToolButton;
+    straightLineButton->setToolTip(tr("Straight Line — Click two points for a straight road"));
+    straightLineButton->setIcon(loadSvgIcon("straight_line"));
+    straightLineButton->setIconSize(largeIconSize);
+    straightLineButton->setCheckable(true);
+    straightLineButton->setChecked(false);
+
     createLaneModeButton = new QToolButton;
     createLaneModeButton->setToolTip(tr("Lane Mode — Add/modify lanes"));
-    createLaneModeButton->setIcon(QPixmap(":/icons/lane_mode.png"));
+    createLaneModeButton->setIcon(loadSvgIcon("lane_mode"));
     createLaneModeButton->setIconSize(largeIconSize);
     createLaneModeButton->setCheckable(true);
     createLaneModeButton->setChecked(false);
 
     modifyModeButton = new QToolButton;
     modifyModeButton->setToolTip(tr("Modify Mode — Edit road geometry"));
-    modifyModeButton->setIcon(QPixmap(":/icons/modify_mode.PNG"));
+    modifyModeButton->setIcon(loadSvgIcon("modify_mode"));
     modifyModeButton->setIconSize(largeIconSize);
     modifyModeButton->setCheckable(true);
     modifyModeButton->setChecked(false);
 
     destroyModeButton = new QToolButton;
     destroyModeButton->setToolTip(tr("Destroy Mode — Delete roads"));
-    destroyModeButton->setIcon(QPixmap(":/icons/destroy_mode.png"));
+    destroyModeButton->setIcon(loadSvgIcon("destroy_mode"));
     destroyModeButton->setIconSize(largeIconSize);
     destroyModeButton->setCheckable(true);
     destroyModeButton->setChecked(false);
 
+    flipLaneButton = new QToolButton;
+    flipLaneButton->setToolTip(tr("Flip Lane — Click a lane on a drawn road to reverse its direction"));
+    flipLaneButton->setIcon(loadSvgIcon("flip_lane_road"));
+    flipLaneButton->setIconSize(largeIconSize);
+    flipLaneButton->setCheckable(true);
+    flipLaneButton->setChecked(false);
+
     dragModeButton = new QToolButton;
     dragModeButton->setToolTip(tr("View Mode — Pan and zoom"));
-    dragModeButton->setIcon(QPixmap(":/icons/view_mode.png"));
+    dragModeButton->setIcon(loadSvgIcon("view_mode"));
     dragModeButton->setIconSize(largeIconSize);
     dragModeButton->setCheckable(true);
     dragModeButton->setChecked(false);
-
-    straightLineButton = new QToolButton;
-    straightLineButton->setToolTip(tr("Straight Line — Click two points for a straight road"));
-    straightLineButton->setText("─");
-    straightLineButton->setStyleSheet(
-        "QToolButton { font-size: 20px; font-weight: bold; }");
-    straightLineButton->setIconSize(largeIconSize);
-    straightLineButton->setCheckable(true);
-    straightLineButton->setChecked(false);
 
     pointerModeGroup = new QButtonGroup(this);
     pointerModeGroup->setExclusive(true);
@@ -163,6 +176,7 @@ MainWidget::MainWidget(QWidget* parent)
     pointerModeGroup->addButton(createLaneModeButton);
     pointerModeGroup->addButton(modifyModeButton);
     pointerModeGroup->addButton(destroyModeButton);
+    pointerModeGroup->addButton(flipLaneButton);
     pointerModeGroup->addButton(dragModeButton);
 
     sidebarLayout->addWidget(createModeButton);
@@ -170,6 +184,7 @@ MainWidget::MainWidget(QWidget* parent)
     sidebarLayout->addWidget(createLaneModeButton);
     sidebarLayout->addWidget(modifyModeButton);
     sidebarLayout->addWidget(destroyModeButton);
+    sidebarLayout->addWidget(flipLaneButton);
     sidebarLayout->addWidget(dragModeButton);
     sidebarLayout->addStretch();
 
@@ -181,55 +196,59 @@ MainWidget::MainWidget(QWidget* parent)
     g_laneConfig = laneConfig;
     sidebarLayout->addWidget(laneConfig);
 
-    // === Top toolbar — file ops, undo/redo, draw options, view mode, map ===
+    // ============================================================
+    // Top toolbar — file ops, undo/redo, draw options, view mode
+    // OpenGeoStudio-native: clean flat buttons with SVG icons
+    // ============================================================
     auto* topBar = new QWidget(this);
     topBar->setObjectName("roadTopBar");
-    topBar->setFixedHeight(44);
+    topBar->setFixedHeight(40);
     topBar->setStyleSheet(
-        "QWidget#roadTopBar { background-color: #161b22; border-bottom: 1px solid #30363d; }"
-        "QToolButton { background: transparent; border: none; border-radius: 4px; "
-        "  padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
-        "QToolButton:hover { background-color: #30363d; }"
-        "QToolButton:checked { background-color: #0d1117; border: 1px solid #06b6d4; }"
+        "QWidget#roadTopBar { background-color: #0d1117; border-bottom: 1px solid #21262d; }"
+        "QToolButton { background: transparent; border: none; border-radius: 6px; "
+        "  padding: 6px; margin: 2px; }"
+        "QToolButton:hover { background-color: #21262d; }"
+        "QToolButton:checked { background-color: #1f6feb33; border: 1px solid #1f6feb; "
+        "  border-radius: 6px; }"
         "QLabel { color: #7d8590; font-size: 11px; padding: 0 4px; }");
     auto* topBarLayout = new QHBoxLayout(topBar);
     topBarLayout->setContentsMargins(8, 4, 8, 4);
-    topBarLayout->setSpacing(4);
+    topBarLayout->setSpacing(2);
 
-    auto makeToolbarBtn = [&](const QString& icon, const QString& tip) {
+    auto makeToolbarBtn = [&](const QString& iconName, const QString& tip) {
         auto* btn = new QToolButton;
-        btn->setIcon(QPixmap(icon));
+        btn->setIcon(loadSvgIcon(iconName));
         btn->setIconSize(iconSize);
         btn->setToolTip(tip);
         return btn;
     };
 
-    auto* loadButton = makeToolbarBtn(":/icons/open.png", tr("Open file"));
-    auto* saveButton = makeToolbarBtn(":/icons/save.png", tr("Save file"));
+    auto* loadButton = makeToolbarBtn("open", tr("Open file"));
+    auto* saveButton = makeToolbarBtn("save", tr("Save file"));
     topBarLayout->addWidget(loadButton);
     topBarLayout->addWidget(saveButton);
 
     auto* sep1 = new QFrame;
     sep1->setFrameShape(QFrame::VLine);
-    sep1->setStyleSheet("color: #30363d;");
+    sep1->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep1);
 
-    auto* undoButton = makeToolbarBtn(":/icons/undo.png", tr("Undo"));
-    auto* redoButton = makeToolbarBtn(":/icons/redo.png", tr("Redo"));
+    auto* undoButton = makeToolbarBtn("undo", tr("Undo"));
+    auto* redoButton = makeToolbarBtn("redo", tr("Redo"));
     topBarLayout->addWidget(undoButton);
     topBarLayout->addWidget(redoButton);
 
     auto* sep2 = new QFrame;
     sep2->setFrameShape(QFrame::VLine);
-    sep2->setStyleSheet("color: #30363d;");
+    sep2->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep2);
 
-    auto* drawOptionButton = makeToolbarBtn(":/icons/draw_option.png", tr("Draw options"));
+    auto* drawOptionButton = makeToolbarBtn("draw_option", tr("Draw options"));
     topBarLayout->addWidget(drawOptionButton);
 
     auto* sep3 = new QFrame;
     sep3->setFrameShape(QFrame::VLine);
-    sep3->setStyleSheet("color: #30363d;");
+    sep3->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep3);
 
     // SCANeR-style road profile selector
@@ -238,11 +257,11 @@ MainWidget::MainWidget(QWidget* parent)
     profileCombo = new QComboBox(this);
     profileCombo->setMinimumWidth(220);
     profileCombo->setStyleSheet(
-        "QComboBox { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;"
+        "QComboBox { background: #161b22; border: 1px solid #21262d; border-radius: 6px;"
         "padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
         "QComboBox:hover { border-color: #1f6feb; }"
         "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #0d1117; border: 1px solid #30363d;"
+        "QComboBox QAbstractItemView { background: #161b22; border: 1px solid #21262d;"
         "selection-background-color: #1f6feb; color: #e6edf3; }");
     // Populate with all profiles from the catalog
     {
@@ -257,62 +276,61 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep3b = new QFrame;
     sep3b->setFrameShape(QFrame::VLine);
-    sep3b->setStyleSheet("color: #30363d;");
+    sep3b->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep3b);
 
-    // Zoom buttons
-    zoomInButton = new QToolButton(this);
-    zoomInButton->setText("➕");
-    zoomInButton->setToolTip(tr("Zoom in"));
+    // Zoom buttons — SVG icons
+    zoomInButton = makeToolbarBtn("zoom_in", tr("Zoom in"));
     zoomInButton->setShortcut(QKeySequence::ZoomIn);
     topBarLayout->addWidget(zoomInButton);
 
-    zoomOutButton = new QToolButton(this);
-    zoomOutButton->setText("➖");
-    zoomOutButton->setToolTip(tr("Zoom out"));
+    zoomOutButton = makeToolbarBtn("zoom_out", tr("Zoom out"));
     zoomOutButton->setShortcut(QKeySequence::ZoomOut);
     topBarLayout->addWidget(zoomOutButton);
 
-    fitButton = new QToolButton(this);
-    fitButton->setText("Fit");
-    fitButton->setToolTip(tr("Reset camera to default view"));
+    fitButton = makeToolbarBtn("fit", tr("Reset camera to default view"));
     topBarLayout->addWidget(fitButton);
 
     auto* sep4 = new QFrame;
     sep4->setFrameShape(QFrame::VLine);
-    sep4->setStyleSheet("color: #30363d;");
+    sep4->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep4);
 
     // Search bar — geocode via Nominatim, fly to location
     searchEdit = new QLineEdit(this);
-    searchEdit->setPlaceholderText("🔍  Search location...");
-    searchEdit->setMinimumWidth(200);
-    searchEdit->setMaximumWidth(300);
+    searchEdit->setPlaceholderText("Search location...");
+    searchEdit->setMinimumWidth(180);
+    searchEdit->setMaximumWidth(280);
     searchEdit->setStyleSheet(
-        "QLineEdit { background: #0d1117; border: 1px solid #30363d; border-radius: 6px;"
-        "padding: 6px 10px; color: #e6edf3; font-size: 12px; }"
+        "QLineEdit { background: #161b22; border: 1px solid #21262d; border-radius: 6px;"
+        "padding: 6px 10px 6px 32px; color: #e6edf3; font-size: 12px; }"
         "QLineEdit:focus { border-color: #1f6feb; }"
         "QLineEdit::placeholder { color: #484f58; }");
+    // Add search icon as a leading indicator via action
+    auto* searchAction = new QAction(loadSvgIcon("search"), tr("Search"), searchEdit);
+    searchEdit->addAction(searchAction, QLineEdit::LeadingPosition);
     searchEdit->setClearButtonEnabled(true);
     topBarLayout->addWidget(searchEdit);
 
     topBarLayout->addStretch();
 
-    // 2D/3D view mode toggle
+    // 2D/3D view mode toggle — SVG icon + text
     viewModeButton = new QToolButton(this);
+    viewModeButton->setIcon(loadSvgIcon("view_3d"));
     viewModeButton->setText("3D");
+    viewModeButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     viewModeButton->setToolTip(tr("Toggle 2D/3D view"));
     viewModeButton->setCheckable(true);
     viewModeButton->setChecked(false);
-    viewModeButton->setMinimumWidth(50);
     topBarLayout->addWidget(viewModeButton);
 
-    // Map toggle button
+    // Map toggle button — SVG icon + text
     loadMapButton = new QToolButton(this);
+    loadMapButton->setIcon(loadSvgIcon("satellite"));
     loadMapButton->setText("Satellite");
+    loadMapButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     loadMapButton->setToolTip(tr("Toggle satellite map background"));
     loadMapButton->setCheckable(true);
-    loadMapButton->setMinimumWidth(70);
     topBarLayout->addWidget(loadMapButton);
 
     // === Viewport container — OpenGL widget ===
@@ -354,6 +372,7 @@ MainWidget::MainWidget(QWidget* parent)
     connect(createLaneModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateLaneMode);
     connect(destroyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDestroyMode);
     connect(modifyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoModifyMode);
+    connect(flipLaneButton, &QAbstractButton::toggled, this, &MainWidget::gotoFlipLaneMode);
     connect(dragModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDragMode);
     connect(mapViewGL, &LM::MapViewGL::MousePerformedAction, this, &MainWidget::OnMouseAction);
     connect(mapViewGL, &LM::MapViewGL::KeyPerformedAction, this, &MainWidget::OnKeyPress);
@@ -445,6 +464,17 @@ void MainWidget::resizeEvent(QResizeEvent* event)
         m_mapWidget->setGeometry(mapViewGL->geometry());
     }
 #endif
+}
+
+void MainWidget::showEvent(QShowEvent* event)
+{
+    QFrame::showEvent(event);
+    // Update the global pointer to point to THIS widget's MapViewGL.
+    // This is needed because TrainStudioWidget also creates a MainWindow/MapViewGL,
+    // and the global g_mapViewGL would otherwise point to the wrong instance.
+    if (mapViewGL) {
+        LM::g_mapViewGL = mapViewGL;
+    }
 }
 
 void MainWidget::gotoCreateRoadMode(bool checked)
@@ -636,6 +666,14 @@ void MainWidget::gotoModifyMode(bool checked)
     laneConfig->GotoRoadMode();
 }
 
+void MainWidget::gotoFlipLaneMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_FlipLane);
+    LM::ActionManager::Instance()->Record(LM::Mode_FlipLane);
+    laneConfig->hide();
+}
+
 void MainWidget::gotoDragMode(bool checked)
 {
     if (!checked) return;
@@ -760,6 +798,8 @@ void MainWidget::syncMapToCamera()
 
 void MainWidget::OnMouseAction(LM::MouseAction evt)
 {
+    // Don't process drawing actions if GL isn't initialized — would crash
+    if (!mapViewGL || !mapViewGL->isGLInitialized()) return;
 #ifndef _DEBUG
     try
     {
@@ -892,6 +932,9 @@ void MainWidget::SetModeFromReplay(int mode)
     case LM::Mode_Modify:
         modifyModeButton->setChecked(true);
         break;
+    case LM::Mode_FlipLane:
+        flipLaneButton->setChecked(true);
+        break;
     case LM::Mode_Destroy:
         destroyModeButton->setChecked(true);
         break;
@@ -916,6 +959,11 @@ void MainWidget::GoToSimulationMode(bool enabled)
 
 void MainWidget::SetEditMode(LM::EditMode aMode)
 {
+    // Don't enter drawing modes if GL isn't initialized — would crash
+    if (!mapViewGL || !mapViewGL->isGLInitialized()) {
+        editMode = LM::Mode_None;
+        return;
+    }
     editMode = aMode;
 
     if (drawingSession != nullptr)
@@ -944,6 +992,9 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
         break;
     case LM::Mode_Modify:
         drawingSession = new RoadModificationSession();
+        break;
+    case LM::Mode_FlipLane:
+        drawingSession = new LaneFlipSession();
         break;
     default:
         break;

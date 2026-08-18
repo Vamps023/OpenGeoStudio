@@ -913,10 +913,12 @@ void ExportEngine::finishDemMosaic() {
 
     std::vector<float> out(static_cast<size_t>(res) * res, -9999.0f);
     for (int py = 0; py < res; ++py) {
-        const double ty = yn + (ys - yn) * ((py + 0.5) / res);
+        // Corner-aligned sampling (GeoTerrain resizeDEM's (src-1)/(dst-1)
+        // mapping) — consistent with the PixelIsPoint GeoTIFF we write
+        const double ty = yn + (ys - yn) * (static_cast<double>(py) / (res - 1));
         const double fy = ty * 256.0 - m.y0 * 256.0;
         for (int px = 0; px < res; ++px) {
-            const double tx = xw + (xe - xw) * ((px + 0.5) / res);
+            const double tx = xw + (xe - xw) * (static_cast<double>(px) / (res - 1));
             const double fx = tx * 256.0 - m.x0 * 256.0;
             out[static_cast<size_t>(py) * res + px] = sampleBilinear(mosaic, mw, mh, fx, fy);
         }
@@ -1100,15 +1102,16 @@ void ExportEngine::finishCopernicusDownload() {
     out.elevations.resize(static_cast<size_t>(res) * res);
 
     for (int py = 0; py < res; ++py) {
+        // Corner-aligned sampling — consistent with PixelIsPoint GeoTIFF
         const double lat = tile.bounds.north -
-            (tile.bounds.north - tile.bounds.south) * ((py + 0.5) / res);
+            (tile.bounds.north - tile.bounds.south) * (static_cast<double>(py) / (res - 1));
         // Pick the cell that actually contains this latitude; clamp to the
         // fetched range so edge rows extend instead of sampling nothing.
         const int cellLat = qBound(m_copFetch.latFrom,
                                    static_cast<int>(std::floor(lat)), m_copFetch.latTo);
         for (int px = 0; px < res; ++px) {
             const double lon = tile.bounds.west +
-                (tile.bounds.east - tile.bounds.west) * ((px + 0.5) / res);
+                (tile.bounds.east - tile.bounds.west) * (static_cast<double>(px) / (res - 1));
             const int cellLon = qBound(m_copFetch.lonFrom,
                                        static_cast<int>(std::floor(lon)), m_copFetch.lonTo);
 

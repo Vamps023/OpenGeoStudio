@@ -16,6 +16,7 @@
 #include "JunctionDetector.hpp"
 #include "RoundaboutGenerator.hpp"
 #include "CoordinateConverter.hpp"
+#include "DemElevationSampler.hpp"
 
 #include "../../engine/road/geometry.hpp"
 #include "../../engine/road/road_v2.hpp"
@@ -45,6 +46,8 @@ public:
         double defaultLaneWidth = 3.5;
         bool includeJunctions = true;
         bool includeSignals = true;
+        // Optional DEM sampler (project heightmap) for real elevation profiles
+        const DemElevationSampler* elevation = nullptr;
     };
 
     static bool exportToOpenDrive(const QString& path,
@@ -72,16 +75,165 @@ public:
             roadIdToIndex[network.roads[r].id] = r;
         }
 
+        // ── Junction topology (GeoTerrain converter pattern) ──
+        // Roads whose END touches the junction are incoming; roads whose
+        // START touches it are outgoing. One connecting road per
+        // incoming→outgoing pair (skipping U-turns on the same OSM way),
+        // with proper predecessor/successor links and lane links.
+        struct ConnLaneLink { int from; int to; };
+        struct JunctionConnectionX {
+            int id = 0;
+            int incomingRoadIdx = -1;
+            int connectingRoadId = -1;
+            std::vector<ConnLaneLink> laneLinks;
+        };
+        struct ConnectingRoad {
+            int id = 0;
+            int junctionIdx = 0;
+            geo::Point2D from, to;
+            double hdg = 0, len = 0;
+            int predRoadIdx = -1, succRoadIdx = -1;
+            double elevStart = 0, elevEnd = 0;
+            bool hasElevation = false;
+            bool hasLeft = false, hasRight = true;
+        };
+        struct JunctionOut {
+            int idx = 0;
+            std::string name;
+            std::vector<JunctionConnectionX> connections;
+        };
+
+        std::vector<ConnectingRoad> connectingRoads;
+        std::vector<JunctionOut> junctionOuts;
+        std::vector<int> roadSuccessorJunction(network.roads.size(), -1);
+        std::vector<int> roadPredecessorJunction(network.roads.size(), -1);
+
+        if (params.includeJunctions) {
+            constexpr int kMaxConnectionsPerJunction = 20; // GeoTerrain limit
+            int junctionIdx = 0;
+            int connectingRoadId = 100000;
+
+            for (const auto& j : junctions) {
+                if (j.type == JunctionType::Overpass) continue;
+                if (j.roadIds.size() < 2) continue;
+
+                struct RoadAt {
+                    int idx;
+                    std::string roadId;
+                    geo::Point2D endpoint;
+                    bool isEnd;  // true → road END here (incoming)
+                };
+                std::vector<RoadAt> entries;
+                for (const auto& rid : j.roadIds) {
+                    auto it = roadIdToIndex.find(rid.toStdString());
+                    if (it == roadIdToIndex.end()) continue;
+                    const auto& road = network.roads[it->second];
+                    const double totalLen = road.totalLength();
+                    if (totalLen <= 0) continue;
+
+                    const geo::Point2D rs = road.geometry().positionAt(0);
+                    const geo::Point2D re = road.geometry().positionAt(totalLen);
+                    const double dS = std::hypot(rs.x - j.center.x, rs.y - j.center.y);
+                    const double dE = std::hypot(re.x - j.center.x, re.y - j.center.y);
+
+                    RoadAt ra;
+                    ra.idx = it->second;
+                    ra.roadId = rid.toStdString();
+                    if (dS <= dE) { ra.endpoint = rs; ra.isEnd = false; }
+                    else          { ra.endpoint = re; ra.isEnd = true;  }
+                    entries.push_back(ra);
+                }
+                if (entries.size() < 2) continue;
+
+                JunctionOut jo;
+                jo.idx = junctionIdx;
+
+                for (const auto& in : entries) {
+                    if (!in.isEnd) continue;
+                    for (const auto& out : entries) {
+                        if (out.isEnd) continue;
+                        if (in.roadId == out.roadId) continue; // U-turn on same way
+                        if (int(jo.connections.size()) >= kMaxConnectionsPerJunction)
+                            break;
+
+                        ConnectingRoad cr;
+                        cr.id = connectingRoadId++;
+                        cr.junctionIdx = junctionIdx;
+                        cr.from = in.endpoint;
+                        cr.to = out.endpoint;
+                        cr.len = std::max(std::hypot(cr.to.x - cr.from.x,
+                                                     cr.to.y - cr.from.y), 1.0);
+                        cr.hdg = std::atan2(cr.to.y - cr.from.y, cr.to.x - cr.from.x);
+                        cr.predRoadIdx = in.idx;
+                        cr.succRoadIdx = out.idx;
+                        if (params.elevation && params.elevation->valid()) {
+                            double lat, lon;
+                            converter.toGeo(cr.from.x, cr.from.y, lat, lon);
+                            cr.elevStart = params.elevation->sampleLonLat(lon, lat);
+                            converter.toGeo(cr.to.x, cr.to.y, lat, lon);
+                            cr.elevEnd = params.elevation->sampleLonLat(lon, lat);
+                            cr.hasElevation = !std::isnan(cr.elevStart) &&
+                                              !std::isnan(cr.elevEnd);
+                        }
+                        // Only link lanes the incoming road actually has
+                        // (engine +id → OpenDRIVE right −id, engine −id → left +id)
+                        if (network.roads[in.idx].numLaneSections() > 0) {
+                            for (const auto& lane :
+                                 network.roads[in.idx].laneSection(0).lanes()) {
+                                if (lane.id > 0) cr.hasRight = true;
+                                else if (lane.id < 0) cr.hasLeft = true;
+                            }
+                        }
+                        connectingRoads.push_back(cr);
+
+                        JunctionConnectionX c;
+                        c.id = int(jo.connections.size()) + 1;
+                        c.incomingRoadIdx = in.idx;
+                        c.connectingRoadId = cr.id;
+                        if (cr.hasRight) c.laneLinks.push_back({-1, -1});
+                        if (cr.hasLeft)  c.laneLinks.push_back({1, 1});
+                        if (c.laneLinks.empty()) c.laneLinks.push_back({-1, -1});
+                        jo.connections.push_back(c);
+                    }
+                }
+
+                if (jo.connections.empty()) continue;
+
+                // Point the participating roads at the junction (required by
+                // LaneMaker's loader to build junction graphics)
+                for (const auto& ra : entries) {
+                    if (ra.isEnd) roadSuccessorJunction[ra.idx] = junctionIdx;
+                    else          roadPredecessorJunction[ra.idx] = junctionIdx;
+                }
+                jo.name = escapeXml(j.typeString().toStdString());
+                junctionOuts.push_back(std::move(jo));
+                junctionIdx++;
+            }
+        }
+
         // Roads
-        int roadIdx = 0;
-        for (const auto& road : network.roads) {
+        for (int r = 0; r < int(network.roads.size()); r++) {
+            const auto& road = network.roads[r];
             double totalLen = road.totalLength();
-            if (totalLen <= 0) { roadIdx++; continue; }
+            if (totalLen <= 0) continue;
 
             xml << "  <road name=\"" << escapeXml(road.name)
                 << "\" length=\"" << totalLen
-                << "\" id=\"" << roadIdx
+                << "\" id=\"" << r
                 << "\" junction=\"-1\">\n";
+
+            // Junction links (successor: road END at junction; predecessor: START)
+            if (r < int(roadPredecessorJunction.size()) &&
+                (roadPredecessorJunction[r] >= 0 || roadSuccessorJunction[r] >= 0)) {
+                xml << "    <link>\n";
+                if (roadPredecessorJunction[r] >= 0)
+                    xml << "      <predecessor elementType=\"junction\" id=\""
+                        << roadPredecessorJunction[r] << "\"/>\n";
+                if (roadSuccessorJunction[r] >= 0)
+                    xml << "      <successor elementType=\"junction\" id=\""
+                        << roadSuccessorJunction[r] << "\"/>\n";
+                xml << "    </link>\n";
+            }
 
             // Plan view (geometry) — must be wrapped in <planView> per OpenDRIVE spec
             xml << "    <planView>\n";
@@ -104,9 +256,19 @@ public:
             }
             xml << "    </planView>\n";
 
-            // Elevation profile (flat for now)
+            // Elevation profile — sampled from the project DEM when available
+            // (GeoTerrain sampleElevationProfile pattern: ≤10 m spacing,
+            // absolute meters), else flat.
             xml << "    <elevationProfile>\n";
-            xml << "      <elevation s=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+            auto profile = buildElevationProfile(road, converter, params.elevation);
+            if (profile.size() >= 2) {
+                for (const auto& [sOff, elev] : profile) {
+                    xml << "      <elevation s=\"" << sOff
+                        << "\" a=\"" << elev << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                }
+            } else {
+                xml << "      <elevation s=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+            }
             xml << "    </elevationProfile>\n";
 
             // Lateral profile (flat)
@@ -206,141 +368,101 @@ public:
             xml << "    </roadRunnerProfile>\n";
 
             xml << "  </road>\n";
-            roadIdx++;
         }
 
-        // Junctions — create connecting roads and proper connections
-        if (params.includeJunctions) {
-            // Connecting road IDs start high to avoid collision with real roads
-            const int connectingRoadIdBase = 100000;
-            int connectingRoadId = connectingRoadIdBase;
-            int juncIdx = 0;
-
-            struct JunctionConnection {
-                int connectionId;
-                int incomingRoadIdx;
-                int connectingRoadIdx;
-                std::string contactPoint; // "start" or "end"
-            };
-
-            for (const auto& j : junctions) {
-                if (j.type == JunctionType::Overpass) { juncIdx++; continue; }
-                if (j.roadIds.size() < 2) { juncIdx++; continue; }
-
-                // Collect valid incoming roads and their endpoints at the junction
-                struct IncomingRoadInfo {
-                    int roadIdx;
-                    geo::Point2D endpointAtJunction;  // road endpoint closest to junction
-                    std::string contactPoint;         // which end of road meets junction
-                };
-
-                std::vector<IncomingRoadInfo> incoming;
-                for (const auto& rid : j.roadIds) {
-                    auto it = roadIdToIndex.find(rid.toStdString());
-                    if (it == roadIdToIndex.end()) continue;
-
-                    const auto& road = network.roads[it->second];
-                    double totalLen = road.totalLength();
-                    if (totalLen <= 0) continue;
-
-                    geo::Point2D roadStart = road.geometry().positionAt(0);
-                    geo::Point2D roadEnd = road.geometry().positionAt(totalLen);
-                    double distStart = std::hypot(roadStart.x - j.center.x,
-                                                  roadStart.y - j.center.y);
-                    double distEnd = std::hypot(roadEnd.x - j.center.x,
-                                                roadEnd.y - j.center.y);
-
-                    IncomingRoadInfo info;
-                    info.roadIdx = it->second;
-                    if (distStart <= distEnd) {
-                        info.endpointAtJunction = roadStart;
-                        info.contactPoint = "start";
-                    } else {
-                        info.endpointAtJunction = roadEnd;
-                        info.contactPoint = "end";
-                    }
-                    incoming.push_back(info);
-                }
-
-                if (incoming.size() < 2) { juncIdx++; continue; }
-
-                // Create connecting roads: one per incoming road,
-                // going from the road endpoint to the junction center
-                std::vector<int> connectingRoadIds;
-                std::vector<std::string> connectingContactPoints;
-                for (const auto& inc : incoming) {
-                    double connLen = std::hypot(
-                        inc.endpointAtJunction.x - j.center.x,
-                        inc.endpointAtJunction.y - j.center.y);
-                    if (connLen < 0.1) connLen = 0.1; // minimum length
-
-                    double hdg = std::atan2(
-                        j.center.y - inc.endpointAtJunction.y,
-                        j.center.x - inc.endpointAtJunction.x);
-
-                    xml << "  <road name=\"junction_" << juncIdx
-                        << "_conn_" << connectingRoadId
-                        << "\" length=\"" << connLen
-                        << "\" id=\"" << connectingRoadId
-                        << "\" junction=\"" << juncIdx << "\">\n";
-                    // Plan view (required by OpenDRIVE spec)
-                    xml << "    <planView>\n";
-                    xml << "      <geometry s=\"0\""
-                        << " x=\"" << inc.endpointAtJunction.x
-                        << "\" y=\"" << inc.endpointAtJunction.y
-                        << "\" hdg=\"" << hdg
-                        << "\" length=\"" << connLen << "\">\n";
-                    xml << "        <line/>\n";
-                    xml << "      </geometry>\n";
-                    xml << "    </planView>\n";
-                    xml << "    <lanes>\n";
-                    xml << "      <laneSection s=\"0\">\n";
-                    xml << "        <center>\n";
-                    xml << "          <lane id=\"0\" type=\"border\" level=\"0\">\n";
-                    xml << "            <width sOffset=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
-                    xml << "          </lane>\n";
-                    xml << "        </center>\n";
-                    xml << "        <right>\n";
-                    xml << "          <lane id=\"-1\" type=\"driving\" level=\"0\">\n";
-                    xml << "            <width sOffset=\"0\" a=\""
-                        << params.defaultLaneWidth
-                        << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
-                    xml << "          </lane>\n";
-                    xml << "        </right>\n";
-                    xml << "      </laneSection>\n";
-                    xml << "    </lanes>\n";
-                    // LaneMaker custom profile (required by libOpenDRIVE)
-                    xml << "    <roadRunnerProfile>\n";
-                    xml << "      <right>\n";
-                    xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
-                    xml << "      </right>\n";
-                    xml << "    </roadRunnerProfile>\n";
-                    xml << "  </road>\n";
-
-                    connectingRoadIds.push_back(connectingRoadId);
-                    // The connecting road starts at the incoming road's endpoint,
-                    // so the incoming road connects at the START of the connecting road
-                    connectingContactPoints.push_back("start");
-                    connectingRoadId++;
-                }
-
-                // Write junction element with connections
-                xml << "  <junction name=\"" << escapeXml(j.typeString().toStdString())
-                    << "\" id=\"" << juncIdx << "\">\n";
-
-                for (size_t i = 0; i < incoming.size(); i++) {
-                    xml << "    <connection id=\"" << i
-                        << "\" incomingRoad=\"" << incoming[i].roadIdx
-                        << "\" connectingRoad=\"" << connectingRoadIds[i]
-                        << "\" contactPoint=\"" << connectingContactPoints[i]
-                        << "\">\n";
-                    xml << "      <laneLink from=\"-1\" to=\"1\"/>\n";
-                    xml << "    </connection>\n";
-                }
-
-                xml << "  </junction>\n";
-                juncIdx++;
+        // Connecting roads (incoming → outgoing through each junction)
+        for (const auto& cr : connectingRoads) {
+            xml << "  <road name=\"junction_" << cr.junctionIdx
+                << "_conn_" << cr.id
+                << "\" length=\"" << cr.len
+                << "\" id=\"" << cr.id
+                << "\" junction=\"" << cr.junctionIdx << "\">\n";
+            xml << "    <link>\n";
+            xml << "      <predecessor elementType=\"road\" id=\""
+                << cr.predRoadIdx << "\" contactPoint=\"end\"/>\n";
+            xml << "      <successor elementType=\"road\" id=\""
+                << cr.succRoadIdx << "\" contactPoint=\"start\"/>\n";
+            xml << "    </link>\n";
+            xml << "    <planView>\n";
+            xml << "      <geometry s=\"0\" x=\"" << cr.from.x
+                << "\" y=\"" << cr.from.y
+                << "\" hdg=\"" << cr.hdg
+                << "\" length=\"" << cr.len << "\">\n";
+            xml << "        <line/>\n";
+            xml << "      </geometry>\n";
+            xml << "    </planView>\n";
+            xml << "    <elevationProfile>\n";
+            if (cr.hasElevation) {
+                xml << "      <elevation s=\"0\" a=\"" << cr.elevStart
+                    << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                xml << "      <elevation s=\"" << cr.len << "\" a=\"" << cr.elevEnd
+                    << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+            } else {
+                xml << "      <elevation s=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
             }
+            xml << "    </elevationProfile>\n";
+            xml << "    <lanes>\n";
+            xml << "      <laneSection s=\"0\">\n";
+            xml << "        <center>\n";
+            xml << "          <lane id=\"0\" type=\"border\" level=\"0\">\n";
+            xml << "            <width sOffset=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+            xml << "          </lane>\n";
+            xml << "        </center>\n";
+            xml << "        <right>\n";
+            xml << "          <lane id=\"-1\" type=\"driving\" level=\"0\">\n";
+            xml << "            <link>\n";
+            xml << "              <predecessor id=\"-1\"/>\n";
+            xml << "              <successor id=\"-1\"/>\n";
+            xml << "            </link>\n";
+            xml << "            <width sOffset=\"0\" a=\"" << params.defaultLaneWidth
+                << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+            xml << "          </lane>\n";
+            xml << "        </right>\n";
+            if (cr.hasLeft) {
+                xml << "        <left>\n";
+                xml << "          <lane id=\"1\" type=\"driving\" level=\"0\">\n";
+                xml << "            <link>\n";
+                xml << "              <predecessor id=\"1\"/>\n";
+                xml << "              <successor id=\"1\"/>\n";
+                xml << "            </link>\n";
+                xml << "            <width sOffset=\"0\" a=\"" << params.defaultLaneWidth
+                    << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                xml << "          </lane>\n";
+                xml << "        </left>\n";
+            }
+            xml << "      </laneSection>\n";
+            xml << "    </lanes>\n";
+            xml << "    <roadRunnerProfile>\n";
+            if (cr.hasLeft) {
+                xml << "      <left>\n";
+                xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
+                xml << "      </left>\n";
+            }
+            xml << "      <right>\n";
+            xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
+            xml << "      </right>\n";
+            xml << "    </roadRunnerProfile>\n";
+            xml << "  </road>\n";
+        }
+
+        // Junction elements
+        for (const auto& jo : junctionOuts) {
+            xml << "  <junction name=\"" << jo.name
+                << "\" id=\"" << jo.idx << "\">\n";
+            for (const auto& c : jo.connections) {
+                // contactPoint is on the connecting road: it starts at the
+                // incoming road's endpoint
+                xml << "    <connection id=\"" << c.id
+                    << "\" incomingRoad=\"" << c.incomingRoadIdx
+                    << "\" connectingRoad=\"" << c.connectingRoadId
+                    << "\" contactPoint=\"start\">\n";
+                for (const auto& ll : c.laneLinks) {
+                    xml << "      <laneLink from=\"" << ll.from
+                        << "\" to=\"" << ll.to << "\"/>\n";
+                }
+                xml << "    </connection>\n";
+            }
+            xml << "  </junction>\n";
         }
 
         xml << "</OpenDRIVE>\n";
@@ -355,7 +477,10 @@ public:
         stream << QString::fromStdString(xml.str());
         file.close();
 
-        appLog().info("[OsmExporter] Exported OpenDRIVE to", path, "—", network.roads.size(), "roads");
+        appLog().info("[OsmExporter] Exported OpenDRIVE to", path, "—",
+                      network.roads.size(), "roads,",
+                      connectingRoads.size(), "connecting roads,",
+                      junctionOuts.size(), "junctions");
         return true;
     }
 
@@ -364,6 +489,8 @@ public:
         int coordinatePrecision = 7;  // decimal places for lat/lon
         bool includeProperties = true;
         bool includeJunctions = true;
+        // Optional DEM sampler — appends elevation as a 3rd coordinate
+        const DemElevationSampler* elevation = nullptr;
     };
 
     static bool exportToGeoJson(const QString& path,
@@ -401,6 +528,11 @@ public:
                 QJsonArray coord;
                 coord.append(QString::number(lon, 'f', params.coordinatePrecision).toDouble());
                 coord.append(QString::number(lat, 'f', params.coordinatePrecision).toDouble());
+                if (params.elevation && params.elevation->valid()) {
+                    const double e = params.elevation->sampleLonLat(lon, lat);
+                    if (!std::isnan(e))
+                        coord.append(QString::number(e, 'f', 2).toDouble());
+                }
                 coordinates.append(coord);
             }
             geometry["coordinates"] = coordinates;
@@ -522,6 +654,34 @@ public:
     }
 
 private:
+    // GeoTerrain sampleElevationProfile port: samples the DEM along the road
+    // centerline at ≤10 m spacing. Absolute meters (not normalized) so the
+    // roads match the project terrain in tools like Unigine/LaneMaker.
+    // Returns (s, elevation) pairs; empty when no sampler/out of bounds.
+    template <typename RoadT>
+    static std::vector<std::pair<double, double>> buildElevationProfile(
+        const RoadT& road, const CoordinateConverter& converter,
+        const DemElevationSampler* elev)
+    {
+        std::vector<std::pair<double, double>> pts;
+        if (!elev || !elev->valid()) return pts;
+        const double total = road.totalLength();
+        if (total <= 0) return pts;
+
+        constexpr double kSampleInterval = 10.0;  // meters (GeoTerrain)
+        const int steps = std::max(2, int(std::ceil(total / kSampleInterval)) + 1);
+        for (int i = 0; i < steps; ++i) {
+            const double s = total * double(i) / double(steps - 1);
+            const geo::Point2D p = road.geometry().positionAt(s);
+            double lat, lon;
+            converter.toGeo(p.x, p.y, lat, lon);
+            const double e = elev->sampleLonLat(lon, lat);
+            if (std::isnan(e)) continue;  // outside the DEM — skip sample
+            pts.emplace_back(s, e);
+        }
+        return pts;
+    }
+
     static std::string escapeXml(const std::string& s) {
         std::string result;
         for (char c : s) {

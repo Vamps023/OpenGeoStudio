@@ -114,7 +114,7 @@ enum class CrsSource {
 struct ExportSettings {
     HeightmapFormat heightmapFormat = HeightmapFormat::GeoTIFF_Float32;
     AlbedoFormat albedoFormat = AlbedoFormat::PNG;
-    DemSource demSource = DemSource::GPXZ_LiDAR;
+    DemSource demSource = DemSource::AWS_Terrarium; // GeoTerrain default — smooth SRTM-based tiles
     ImagerySource imagerySource = ImagerySource::Google_Satellite;
     CrsSource crsSource = CrsSource::EPSG_4326; // GeoTerrain default — proven in Unigine
     int heightmapResolution = 1024;

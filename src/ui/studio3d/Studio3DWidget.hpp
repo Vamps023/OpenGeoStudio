@@ -1,19 +1,22 @@
 #pragma once
 
 // ============================================================
-// Studio3DWidget — Unreal-style 3D Studio workspace
+// Studio3DWidget — Blender-style 3D Studio workspace
+//
+// Layout uses QMainWindow with dockable panels:
+//   - Top:     Menu bar (File/Edit/View/Add/Help)
+//   - Left:    Icon toolbar (T-panel, toggle with T)
+//   - Left:    World Outliner + Layers (dockable)
+//   - Center:  OGRE-Next viewport with N-panel overlay (toggle with N)
+//   - Right:   Properties editor with context tabs (Object/Material/World/Scene/Render)
+//   - Bottom:  Content Browser + Output Log (dockable)
+//   - Bottom:  Status bar
+//
+// All side panels are QDockWidgets and can be dragged, floated,
+// redocked, or hidden independently.
 // ============================================================
-//
-// Layout follows the UE editor:
-//   - Toolbar: save/load, transform tools (Q/W/E/R), snap + grid
-//   - Left:    World Outliner + Layers
-//   - Center:  OGRE-Next viewport
-//   - Right:   Inspector (Details) + Place Actors / World tabs
-//   - Bottom:  Content Browser (asset library) + Output Log tabs
-//   - Status bar with live hints
-//
 
-#include <QWidget>
+#include <QMainWindow>
 #include <QString>
 #include <QLabel>
 #include <QPushButton>
@@ -25,6 +28,7 @@
 #include <QCheckBox>
 #include <QSlider>
 #include <QToolButton>
+#include <QToolBar>
 #include <QJsonObject>
 #include <QDir>
 
@@ -36,15 +40,22 @@ class WorldOutliner;
 class Inspector;
 class LayerPanel;
 class ContentBrowser;
+class PropertiesEditor;
+class NPanel;
 class QTabWidget;
 class QButtonGroup;
+class QDockWidget;
+class QMenu;
 
-class Studio3DWidget : public QWidget {
+class Studio3DWidget : public QMainWindow {
     Q_OBJECT
 
 public:
     explicit Studio3DWidget(ApplicationContext* ctx, QWidget* parent = nullptr);
     ~Studio3DWidget() override;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
     void onLoadTerrain();
@@ -77,6 +88,13 @@ private slots:
     // Asset library placement (ContentBrowser::assetRequested)
     void onPlaceAsset(const QString& pathOrType, const QString& type);
 
+    // Panel toggles
+    void onToggleToolbar();
+    void onToggleNPanel();
+    void onToggleOutliner();
+    void onToggleProperties();
+    void onToggleBottom();
+
 public:
     // Called by main window when project is opened/closed
     void onProjectOpened();
@@ -84,10 +102,12 @@ public:
 
 private:
     void setupUI();
-    QWidget* setupToolbar();
-    QWidget* setupLeftPanel();
-    QWidget* setupRightPanel();
-    QWidget* setupStatusBar();
+    void setupMenuBar();
+    void setupToolBar();
+    void setupDockPanels();
+    void setupStatusBar();
+    void applyBlenderStyle();
+
     void appendLog(const QString& msg);
     void setStatus(const QString& text);
     void refreshStats();
@@ -113,12 +133,19 @@ private:
 
     // Editor panels
     WorldOutliner* m_outliner = nullptr;
-    Inspector* m_inspector = nullptr;
     LayerPanel* m_layerPanel = nullptr;
     ContentBrowser* m_contentBrowser = nullptr;
+    PropertiesEditor* m_propertiesEditor = nullptr;
+    NPanel* m_nPanel = nullptr;
     QTabWidget* m_bottomTabs = nullptr;
 
-    // Toolbar
+    // Dock widgets
+    QDockWidget* m_outlinerDock = nullptr;
+    QDockWidget* m_propertiesDock = nullptr;
+    QDockWidget* m_bottomDock = nullptr;
+
+    // Toolbar (T-panel)
+    QToolBar* m_toolBar = nullptr;
     QToolButton* m_selectToolBtn = nullptr;
     QToolButton* m_moveToolBtn = nullptr;
     QToolButton* m_rotateToolBtn = nullptr;
@@ -128,7 +155,7 @@ private:
     QToolButton* m_gridBtn = nullptr;
     QComboBox* m_snapSizeCombo = nullptr;
 
-    // Terrain controls (World tab)
+    // Terrain controls (World tab in PropertiesEditor)
     QSlider* m_heightScaleSlider = nullptr;
     QLabel* m_heightScaleLabel = nullptr;
 

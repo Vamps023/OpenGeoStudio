@@ -11,6 +11,17 @@
 
 #include <spdlog/spdlog.h>
 #include <exception>
+#include <fstream>
+
+namespace {
+    // Crash diagnostic helper — writes to crash_diag.txt with immediate flush
+    // so we can see the last line before a hard crash.
+    void diag(const std::string& msg) {
+        std::ofstream f("crash_diag.txt", std::ios::app);
+        f << msg << "\n";
+        f.flush();
+    }
+}
 
 extern UserPreference g_preference;
 
@@ -29,13 +40,33 @@ namespace LM
 
     void ChangeTracker::PostLoadActions()
     {
+        diag("PostLoadActions: " + std::to_string(odrMap.id_to_road.size()) +
+             " roads, " + std::to_string(odrMap.id_to_junction.size()) + " junctions");
         // Temporarily hold shared_ptr to Connecting road until they get owned by junction
         std::vector<std::shared_ptr<LM::Road>> connectingRoadHolder;
-        std::cout << "Generating road graphics ";
+        diag("PostLoadActions: generating road graphics...");
+        int roadIdx = 0;
         for (const auto& id2Road : TQDM(odrMap.id_to_road))
         {
+            roadIdx++;
+            diag("PostLoadActions: road " + std::to_string(roadIdx) +
+                 " / " + std::to_string(odrMap.id_to_road.size()) +
+                 " (id=" + id2Road.first + ", junction=" + id2Road.second.junction + ")");
             auto rrRoad = std::make_shared<LM::Road>(id2Road.second);
-            rrRoad->GenerateAllSectionGraphics();
+            try
+            {
+                rrRoad->GenerateAllSectionGraphics();
+            }
+            catch (const std::exception& e)
+            {
+                spdlog::warn("Road {} graphics generation failed, skipping: {}",
+                    id2Road.first, e.what());
+            }
+            catch (...)
+            {
+                spdlog::warn("Road {} graphics generation failed (unknown), skipping",
+                    id2Road.first);
+            }
             if (id2Road.second.junction == "-1")
             {
                 World::Instance()->allRoads.insert(rrRoad);
@@ -53,44 +84,72 @@ namespace LM
         for (const auto& id2Junction : odrMap.id_to_junction)
         {
             std::shared_ptr<LM::AbstractJunction> rrJunc;
-            if (id2Junction.second.type == odr::JunctionType::Common)
+            try
             {
-                rrJunc = std::make_shared<LM::Junction>(id2Junction.second);
+                if (id2Junction.second.type == odr::JunctionType::Common)
+                {
+                    rrJunc = std::make_shared<LM::Junction>(id2Junction.second);
+                }
+                else
+                {
+                    rrJunc = std::make_shared<LM::DirectJunction>(id2Junction.second);
+                }
             }
-            else
+            catch (const std::exception& e)
             {
-                rrJunc = std::make_shared<LM::DirectJunction>(id2Junction.second);
+                spdlog::warn("Junction {} creation failed, skipping: {}",
+                    id2Junction.first, e.what());
+                continue;
+            }
+            catch (...)
+            {
+                spdlog::warn("Junction {} creation failed (unknown), skipping",
+                    id2Junction.first);
+                continue;
             }
             id2RRJunction.emplace(id2Junction.first, rrJunc);
         }
         // Link connected road <-> pred/succ junction
         for (auto& road : World::Instance()->allRoads)
         {
-            if (road->generated.successor.type == odr::RoadLink::Type_Junction)
+            try
             {
-                auto rrJunctionIt = id2RRJunction.find(road->generated.successor.id);
-                if (rrJunctionIt == id2RRJunction.end())
+                if (road->generated.successor.type == odr::RoadLink::Type_Junction)
                 {
-                    spdlog::warn("Road {} successor references undefined junction {}, skipping link",
-                        road->ID(), road->generated.successor.id);
+                    auto rrJunctionIt = id2RRJunction.find(road->generated.successor.id);
+                    if (rrJunctionIt == id2RRJunction.end())
+                    {
+                        spdlog::warn("Road {} successor references undefined junction {}, skipping link",
+                            road->ID(), road->generated.successor.id);
+                    }
+                    else
+                    {
+                        rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo{ road, odr::RoadLink::ContactPoint_End });
+                    }
                 }
-                else
+                if (road->generated.predecessor.type == odr::RoadLink::Type_Junction)
                 {
-                    rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo{ road, odr::RoadLink::ContactPoint_End });
+                    auto rrJunctionIt = id2RRJunction.find(road->generated.predecessor.id);
+                    if (rrJunctionIt == id2RRJunction.end())
+                    {
+                        spdlog::warn("Road {} predecessor references undefined junction {}, skipping link",
+                            road->ID(), road->generated.predecessor.id);
+                    }
+                    else
+                    {
+                        rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo(road, odr::RoadLink::ContactPoint_Start));
+                    }
                 }
             }
-            if (road->generated.predecessor.type == odr::RoadLink::Type_Junction)
+            catch (const std::exception& e)
             {
-                auto rrJunctionIt = id2RRJunction.find(road->generated.predecessor.id);
-                if (rrJunctionIt == id2RRJunction.end())
-                {
-                    spdlog::warn("Road {} predecessor references undefined junction {}, skipping link",
-                        road->ID(), road->generated.predecessor.id);
-                }
-                else
-                {
-                    rrJunctionIt->second->AttachNoRegenerate(LM::ConnectionInfo(road, odr::RoadLink::ContactPoint_Start));
-                }
+                spdlog::warn("Road {} junction link failed, skipping: {}",
+                    road->ID(), e.what());
+            }
+            catch (...)
+            {
+                spdlog::warn("Road {} junction link failed (unknown), skipping",
+                    road->ID());
             }
         }
 
@@ -229,17 +288,44 @@ namespace LM
 
     bool ChangeTracker::Load(std::string path)
     {
-        if (!odrMap.Load(path))
+        diag("ChangeTracker::Load: " + path);
+        try
         {
+            diag("ChangeTracker::Load: calling odrMap.Load()...");
+            if (!odrMap.Load(path))
+            {
+                diag("ChangeTracker::Load: odrMap.Load returned false");
+                return false;
+            }
+            diag("ChangeTracker::Load: odrMap.Load succeeded");
+        }
+        catch (const std::exception& e)
+        {
+            diag(std::string("ChangeTracker::Load: parse error: ") + e.what());
+            Clear();
+            return false;
+        }
+        catch (...)
+        {
+            diag("ChangeTracker::Load: unknown parse error");
+            Clear();
             return false;
         }
         try
         {
+            diag("ChangeTracker::Load: calling PostLoadActions()...");
             PostLoadActions();
+            diag("ChangeTracker::Load: PostLoadActions done");
         }
         catch (const std::exception& e)
         {
             spdlog::error("Failed to build map from {}: {}", path, e.what());
+            Clear();
+            return false;
+        }
+        catch (...)
+        {
+            spdlog::error("Unknown error building map from: {}", path);
             Clear();
             return false;
         }
@@ -248,8 +334,23 @@ namespace LM
 
     bool ChangeTracker::LoadStr(std::string content)
     {
-        if (!odrMap.LoadString(content))
+        try
         {
+            if (!odrMap.LoadString(content))
+            {
+                return false;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            spdlog::error("Failed to parse XODR content: {}", e.what());
+            Clear();
+            return false;
+        }
+        catch (...)
+        {
+            spdlog::error("Unknown error parsing XODR content");
+            Clear();
             return false;
         }
         try
@@ -259,6 +360,12 @@ namespace LM
         catch (const std::exception& e)
         {
             spdlog::error("Failed to build map from content: {}", e.what());
+            Clear();
+            return false;
+        }
+        catch (...)
+        {
+            spdlog::error("Unknown error building map from content");
             Clear();
             return false;
         }

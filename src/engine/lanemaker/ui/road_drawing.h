@@ -233,3 +233,26 @@ public:
 
     virtual bool Complete() override;
 };
+
+// Lane Flip Session — click on a lane on a drawn road to flip its direction.
+// Right side lane (forward) → moved to left side (backward), and vice versa.
+class LaneFlipSession : public RoadDrawingSession
+{
+public:
+    LaneFlipSession();
+
+    virtual bool Update(const LM::MouseAction&) override;
+    virtual bool Complete() override;
+    virtual bool Cancel() override;
+
+private:
+    std::weak_ptr<LM::Road> targetRoad;
+    int targetLane = 0;         // g_PointerLane at click time
+    bool staged = false;        // true after user clicks a lane
+
+    // Staged new profile for the entire road
+    LM::LanePlan newLeftPlan, newRightPlan;
+
+    void UpdateHint();
+    void ApplyPreview();
+};

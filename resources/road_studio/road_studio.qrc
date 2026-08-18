@@ -1,0 +1,29 @@
+<RCC>
+    <qresource prefix="/rs">
+        <file>svg/road_mode.svg</file>
+        <file>svg/lane_mode.svg</file>
+        <file>svg/modify_mode.svg</file>
+        <file>svg/destroy_mode.svg</file>
+        <file>svg/view_mode.svg</file>
+        <file>svg/straight_line.svg</file>
+        <file>svg/open.svg</file>
+        <file>svg/save.svg</file>
+        <file>svg/undo.svg</file>
+        <file>svg/redo.svg</file>
+        <file>svg/draw_option.svg</file>
+        <file>svg/zoom_in.svg</file>
+        <file>svg/zoom_out.svg</file>
+        <file>svg/fit.svg</file>
+        <file>svg/search.svg</file>
+        <file>svg/view_3d.svg</file>
+        <file>svg/satellite.svg</file>
+        <file>svg/add.svg</file>
+        <file>svg/minus.svg</file>
+        <file>svg/confirm.svg</file>
+        <file>svg/cancel.svg</file>
+        <file>svg/eyedropper.svg</file>
+        <file>svg/swap_direction.svg</file>
+        <file>svg/flip_lane.svg</file>
+        <file>svg/flip_lane_road.svg</file>
+    </qresource>
+</RCC>

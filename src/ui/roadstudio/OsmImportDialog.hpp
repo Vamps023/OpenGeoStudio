@@ -18,6 +18,8 @@
 #include "../../core/osm/TrafficSignGenerator.hpp"
 #include "../../core/osm/OsmProjectSerializer.hpp"
 #include "../../core/osm/OsmExporter.hpp"
+#include "../../core/osm/DemElevationSampler.hpp"
+#include "../../core/ApplicationContext.hpp"
 
 #include <QDialog>
 #include <QVBoxLayout>
@@ -45,14 +47,14 @@ class OsmImportDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit OsmImportDialog(QWidget* parent = nullptr)
-        : QDialog(parent)
+    explicit OsmImportDialog(QWidget* parent = nullptr,
+                             ::ApplicationContext* ctx = nullptr)
+        : QDialog(parent), m_ctx(ctx)
     {
         setWindowTitle("Import OSM Data");
         setMinimumSize(600, 500);
         setupUi();
     }
-
     // Get the import result after a successful import
     const ImportResult& result() const { return m_result; }
 
@@ -64,6 +66,12 @@ public:
 
     // Get generated signs
     const std::vector<TrafficSign>& signs() const { return m_signs; }
+
+    // Last exported .xodr path (valid after a successful OpenDRIVE export)
+    QString lastExportedXodr() const { return m_lastExportedXodr; }
+
+    // True when the exported network should be loaded into the editor
+    bool openInEditorRequested() const { return m_openInEditor && !m_lastExportedXodr.isEmpty(); }
 
 private slots:
     void onSelectFile() {
@@ -128,6 +136,25 @@ private slots:
         m_signs = TrafficSignGenerator::generateAll(
             m_result.osmData, m_result.network, m_result.junctions, signParams);
 
+        // Load the project's exported DEM for elevation profiles
+        if (m_elevationCheck->isChecked()) {
+            const bool loaded = m_ctx && m_ctx->projects().hasProject() &&
+                m_elevation.loadFromProject(m_ctx->projects().current().basePath);
+            if (loaded) {
+                m_elevationLabel->setText(QString("Elevation source: %1")
+                    .arg(QFileInfo(m_elevation.sourcePath()).fileName()));
+                m_elevationLabel->setStyleSheet("QLabel { color: #7ee787; font-size: 10px; }");
+            } else {
+                m_elevationLabel->setText(
+                    "No project heightmap found — export terrain in Terrain Studio first "
+                    "(roads will be flat)");
+                m_elevationLabel->setStyleSheet("QLabel { color: #f85149; font-size: 10px; }");
+            }
+        } else {
+            m_elevationLabel->setText("Elevation sampling disabled — roads will be flat");
+            m_elevationLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+        }
+
         // Display results
         displayResults();
     }
@@ -164,6 +191,7 @@ private slots:
         if (OsmExporter::exportToOpenDrive(path, m_result.network,
                                             m_result.junctions,
                                             m_result.converter, params, &error)) {
+            m_lastExportedXodr = path;
             QMessageBox::information(this, "Exported",
                 QString("OpenDRIVE exported to %1").arg(path));
         } else {
@@ -232,6 +260,14 @@ private:
         m_repairCheck = new QCheckBox("Auto-repair issues");
         m_repairCheck->setChecked(true);
         formLayout->addRow(m_repairCheck);
+
+        // Elevation sampling from project DEM
+        m_elevationCheck = new QCheckBox("Sample elevation from project terrain");
+        m_elevationCheck->setChecked(true);
+        formLayout->addRow(m_elevationCheck);
+        m_elevationLabel = new QLabel("Elevation: not loaded yet");
+        m_elevationLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+        formLayout->addRow(m_elevationLabel);
 
         mainLayout->addWidget(settingsGroup);
 
@@ -407,6 +443,16 @@ private:
     QPushButton* m_saveButton = nullptr;
     QPushButton* m_exportOdrButton = nullptr;
     QPushButton* m_exportGeoButton = nullptr;
+
+    // Elevation sampling
+    QCheckBox* m_elevationCheck = nullptr;
+    QLabel* m_elevationLabel = nullptr;
+    DemElevationSampler m_elevation;
+
+    // Context + export state
+    ::ApplicationContext* m_ctx = nullptr;
+    QString m_lastExportedXodr;
+    bool m_openInEditor = false;
 
     // Results
     ImportResult m_result;

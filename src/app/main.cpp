@@ -534,7 +534,7 @@ private:
 #endif
 
         // Page 2: Road Studio (LaneMaker's MainWindow ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full road editor)
-        m_roadStudioWidget = new RoadStudioWidget();
+        m_roadStudioWidget = new RoadStudioWidget(m_ctx);
         m_centerStack->addWidget(m_roadStudioWidget);
 
         // Page 3: Train Studio (LaneMaker's MainWindow - full rail editor)
@@ -607,24 +607,32 @@ private slots:
             m_rightDock->setVisible(false);
             showRoadStudioMenus(false);
         } else if (ws.id == "road-studio") {
+            appLog().info("Activating Road Studio: setCurrentIndex...");
             m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
+            appLog().info("Activating Road Studio: hiding docks...");
             // LaneMaker's MainWindow has its own toolbar, lane config, etc.
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);
+            appLog().info("Activating Road Studio: setupRoadStudioMenus...");
             // Add Road Studio menus to the main app menu bar
             setupRoadStudioMenus();
+            appLog().info("Activating Road Studio: showRoadStudioMenus...");
             showRoadStudioMenus(true);
+            appLog().info("Activating Road Studio: checking pending road file...");
             // Load pending road file if one was queued by project open
             if (!m_pendingRoadFile.isEmpty() &&
                 m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
+                appLog().info("Activating Road Studio: pending file:", m_pendingRoadFile);
                 // Defer to next event loop iteration so the OpenGL context is ready
                 QString path = m_pendingRoadFile;
                 m_pendingRoadFile.clear();
-                QTimer::singleShot(100, this, [this, path]() {
+                QTimer::singleShot(2000, this, [this, path]() {
+                    appLog().info("Road Studio: timer fired, loading:", path);
                     if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow())
                         m_roadStudioWidget->laneMakerWindow()->loadFromPath(path);
                 });
             }
+            appLog().info("Activating Road Studio: done");
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
             // Train Studio: no docks (matching reference)

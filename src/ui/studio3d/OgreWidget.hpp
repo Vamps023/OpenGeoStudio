@@ -152,6 +152,10 @@ public:
     void setSunDirection(float yaw, float pitch);
     void setSunIntensity(float intensity);
     void setSkyIntensity(float intensity);
+    float getSunYaw() const { return m_sunYaw; }
+    float getSunPitch() const { return m_sunPitch; }
+    float getSunIntensity() const { return m_sunIntensity; }
+    float getSkyIntensity() const { return m_skyIntensity; }
     void buildRoadSpline(const QString& name,
                          const QList<QPair<float, float>>& points,
                          float width = 8.0f, int laneCount = 2);

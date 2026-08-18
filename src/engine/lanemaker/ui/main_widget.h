@@ -93,6 +93,7 @@ private slots:
     void gotoModifyMode(bool);
     void gotoDragMode(bool c=true);
     void gotoStraightLineMode(bool);
+    void gotoFlipLaneMode(bool);
     void toggleViewMode(bool checked);
     void onMapMoved();
     void onProfileChanged(int index);
@@ -104,6 +105,7 @@ private:
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
     void confirmEdit();
     void quitEdit();
@@ -119,6 +121,7 @@ protected:
     QButtonGroup* pointerModeGroup;
     QToolButton* createModeButton, * createLaneModeButton, * destroyModeButton, * modifyModeButton, * dragModeButton;
     QToolButton* straightLineButton;  // Straight line tool
+    QToolButton* flipLaneButton;      // Flip lane direction on drawn road
     QToolButton* viewModeButton;   // 2D/3D toggle
     QToolButton* loadMapButton;    // Load satellite map background
     QToolButton* zoomInButton;     // Zoom in

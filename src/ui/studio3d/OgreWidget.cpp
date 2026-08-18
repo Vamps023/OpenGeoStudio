@@ -97,6 +97,10 @@ void OgreWidget::exposeEvent(QExposeEvent* event)
             loadScene(m_pendingScene);
             m_hasPendingScene = false;
         }
+        // Load deferred roads (loadRoads called before OGRE init)
+        if (!m_xodrPath.isEmpty() && QFile::exists(m_xodrPath)) {
+            loadRoads(m_xodrPath);
+        }
     }
 }
 
@@ -693,9 +697,37 @@ void OgreWidget::loadRoads(const QString& xodrPath)
         return;
     }
 
+    // Read the file via QFile (Unicode-safe on Windows) and feed the
+    // content to OpenDriveMap::LoadString. The library's Load() uses
+    // std::ifstream which cannot open Unicode paths on Windows.
+    QFile xodrFile(xodrPath);
+    if (!xodrFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        appLog().warn("Failed to open XODR file:", xodrPath);
+        return;
+    }
+    const QByteArray fileData = xodrFile.readAll();
+    xodrFile.close();
+    const std::string xodrContent(fileData.constData(), static_cast<size_t>(fileData.size()));
+
     clearRoads();
 
-    odr::OpenDriveMap odrMap(xodrPath.toStdString());
+    odr::OpenDriveMap odrMap;
+    bool loaded = false;
+    try {
+        loaded = odrMap.LoadString(xodrContent);
+    } catch (const std::exception& e) {
+        appLog().error("XODR parse error:", e.what());
+        return;
+    } catch (...) {
+        appLog().error("Unknown XODR parse error for:", xodrPath);
+        return;
+    }
+
+    if (!loaded) {
+        appLog().warn("Failed to load XODR file:", xodrPath);
+        return;
+    }
+
     auto roads = odrMap.get_roads();
 
     if (roads.empty()) {
@@ -739,6 +771,7 @@ void OgreWidget::loadRoads(const QString& xodrPath)
         for (double s = 0; s <= roadLength; s += sampleEps) {
             sValues.push_back(s);
         }
+        if (sValues.empty()) continue;
         if (sValues.back() < roadLength) {
             sValues.push_back(roadLength);
         }
@@ -747,24 +780,34 @@ void OgreWidget::loadRoads(const QString& xodrPath)
             double s0 = sValues[i];
             double s1 = sValues[i + 1];
 
-            odr::Vec3D p0 = refLine.get_xyz(s0);
-            odr::Vec3D p1 = refLine.get_xyz(s1);
-            double hdg0 = refLine.get_hdg(s0);
+            odr::Vec3D p0, p1;
+            double hdg0 = 0;
+            try {
+                p0 = refLine.get_xyz(s0);
+                p1 = refLine.get_xyz(s1);
+                hdg0 = refLine.get_hdg(s0);
+            } catch (...) {
+                continue; // skip segments with bad geometry
+            }
 
             float halfWidth = defaultHalfWidth;
             if (!laneSections.empty()) {
-                double lanesection_s0 = road.get_lanesection_s0(s0);
-                auto lsIt = std::find_if(laneSections.begin(), laneSections.end(),
-                    [&](const odr::LaneSection& ls) { return ls.s0 == lanesection_s0; });
-                if (lsIt != laneSections.end()) {
-                    double totalWidth = 0;
-                    for (const auto& lanePair : lsIt->id_to_lane) {
-                        if (lanePair.first != 0) {
-                            totalWidth += lanePair.second.lane_width.get(s0 - lsIt->s0);
+                try {
+                    double lanesection_s0 = road.get_lanesection_s0(s0);
+                    auto lsIt = std::find_if(laneSections.begin(), laneSections.end(),
+                        [&](const odr::LaneSection& ls) { return ls.s0 == lanesection_s0; });
+                    if (lsIt != laneSections.end()) {
+                        double totalWidth = 0;
+                        for (const auto& lanePair : lsIt->id_to_lane) {
+                            if (lanePair.first != 0) {
+                                totalWidth += lanePair.second.lane_width.get(s0 - lsIt->s0);
+                            }
                         }
+                        halfWidth = static_cast<float>(totalWidth * 0.5);
+                        if (halfWidth < 1.0f) halfWidth = defaultHalfWidth;
                     }
-                    halfWidth = static_cast<float>(totalWidth * 0.5);
-                    if (halfWidth < 1.0f) halfWidth = defaultHalfWidth;
+                } catch (...) {
+                    // lane width lookup failed — use default
                 }
             }
 
