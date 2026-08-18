@@ -12,6 +12,7 @@
 
 #include "TerrainStore.hpp"
 #include "RasterWriter.hpp"
+#include "DemDecoder.hpp"
 #include "../../core/logger/Logger.hpp"
 
 #include <QObject>
@@ -62,6 +63,27 @@ private:
     };
     MosaicState m_demMosaic;
     MosaicState m_imgMosaic;
+
+    // ─── Copernicus multi-cell fetch ───
+    // Copernicus GLO-30 comes as 1°x1° COG cells. A tile that straddles a
+    // cell boundary (e.g. lat 17.999..18.006) needs BOTH cells; sampling
+    // only one clamps the other side of the tile to the cell's edge row.
+    struct CopernicusFetch {
+        bool active = false;
+        terrain::Tile tile;
+        QString outputPath;
+        int latFrom = 0, latTo = 0;   // inclusive cell lat indices (SW corner)
+        int lonFrom = 0, lonTo = 0;   // inclusive cell lon indices
+        int pending = 0;
+    };
+    CopernicusFetch m_copFetch;
+    // Decoded cells reused across tiles of one export (each cell is ~52 MB)
+    QMap<QString, terrain::DemTile> m_copCellCache;
+
+    void startCopernicusDownload(const terrain::Tile& tile, const QString& outputPath);
+    void fetchCopernicusCell(int cellLat, int cellLon);
+    void finishCopernicusDownload();
+    static QString copernicusCellName(int cellLat, int cellLon);
 
     void startDemMosaic(const terrain::Tile& tile, const QString& outputPath);
     void startImageryMosaic(const terrain::Tile& tile, const QString& outputPath);

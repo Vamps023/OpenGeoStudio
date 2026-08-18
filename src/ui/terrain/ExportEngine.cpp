@@ -214,7 +214,14 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         return;
     }
 
-    // Area providers (Copernicus S3, OpenTopography, GPXZ, GLAD): one request
+    // Copernicus cells are 1°x1°; a tile may straddle several cells, so all
+    // overlapping cells are fetched and sampled per-pixel.
+    if (src == terrain::DemSource::NASA_EarthData_Copernicus) {
+        startCopernicusDownload(tile, outputPath);
+        return;
+    }
+
+    // Area providers (OpenTopography, GPXZ, GLAD): one request
     // already covers the tile bounds.
     const QString url = demTileUrl(tile, 0, 0, 0);
     if (url.isEmpty()) {
@@ -345,14 +352,7 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
                                "DEM source (e.g. GPXZ LiDAR) for real terrain detail.");
                 }
             }
-            if (demSrc == terrain::DemSource::NASA_EarthData_Copernicus) {
-                const double lat0 = std::floor(tile.bounds.south);
-                const double lon0 = std::floor(tile.bounds.west);
-                m_log.info("Cropping Copernicus cell (SW", lat0, lon0, ") to tile",
-                           tile.id(), "bounds", demTile.width, "x", demTile.height);
-                demTile = cropDemToTile(demTile, lon0, lat0 + 1.0, lon0 + 1.0, lat0,
-                                        tile.bounds, res);
-            } else if (demTile.width != res || demTile.height != res) {
+            if (demTile.width != res || demTile.height != res) {
                 m_log.info("Resampling DEM for tile", tile.id(), "from", demTile.width, "x", demTile.height, "to", res, "x", res);
                 demTile = terrain::DemDecoder::resample(demTile, res, res);
                 m_log.info("DEM resampled for tile", tile.id());
@@ -993,6 +993,152 @@ void ExportEngine::finishImageryMosaic() {
     m_tileAlbedoData[m.tile.id()] = out;
     m_imageryDownloaded = true;
     if (m_demDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
+// ============================================================
+// Copernicus multi-cell fetch — tiles may straddle 1° cell boundaries
+// ============================================================
+
+QString ExportEngine::copernicusCellName(int cellLat, int cellLon) {
+    const QString latStr = (cellLat >= 0)
+        ? QString("N%1_00").arg(cellLat, 2, 10, QChar('0'))
+        : QString("S%1_00").arg(-cellLat, 2, 10, QChar('0'));
+    const QString lonStr = (cellLon >= 0)
+        ? QString("E%1_00").arg(cellLon, 3, 10, QChar('0'))
+        : QString("W%1_00").arg(-cellLon, 3, 10, QChar('0'));
+    return QString("Copernicus_DSM_COG_10_%1_%2_DEM").arg(latStr, lonStr);
+}
+
+void ExportEngine::startCopernicusDownload(const terrain::Tile& tile, const QString& outputPath) {
+    m_copFetch = CopernicusFetch{};
+    m_copFetch.active = true;
+    m_copFetch.tile = tile;
+    m_copFetch.outputPath = outputPath;
+    m_copFetch.latFrom = static_cast<int>(std::floor(tile.bounds.south));
+    m_copFetch.latTo = static_cast<int>(std::floor(tile.bounds.north));
+    m_copFetch.lonFrom = static_cast<int>(std::floor(tile.bounds.west));
+    m_copFetch.lonTo = static_cast<int>(std::floor(tile.bounds.east));
+
+    int needed = 0;
+    for (int la = m_copFetch.latFrom; la <= m_copFetch.latTo; ++la)
+        for (int lo = m_copFetch.lonFrom; lo <= m_copFetch.lonTo; ++lo)
+            if (!m_copCellCache.contains(copernicusCellName(la, lo)))
+                needed++;
+
+    m_log.info("Copernicus cells for tile", tile.id(), ":",
+               m_copFetch.latTo - m_copFetch.latFrom + 1, "x",
+               m_copFetch.lonTo - m_copFetch.lonFrom + 1,
+               "(", needed, "download(s),", m_copCellCache.size(), "cached )");
+
+    if (needed == 0) {
+        finishCopernicusDownload();
+        return;
+    }
+    m_copFetch.pending = needed;
+    for (int la = m_copFetch.latFrom; la <= m_copFetch.latTo; ++la)
+        for (int lo = m_copFetch.lonFrom; lo <= m_copFetch.lonTo; ++lo)
+            if (!m_copCellCache.contains(copernicusCellName(la, lo)))
+                fetchCopernicusCell(la, lo);
+}
+
+void ExportEngine::fetchCopernicusCell(int cellLat, int cellLon) {
+    const QString name = copernicusCellName(cellLat, cellLon);
+    const QUrl url(QString("https://copernicus-dem-30m.s3.amazonaws.com/%1/%2.tif")
+                       .arg(name, name));
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
+    QNetworkReply* reply = m_network->get(request);
+    // A cell is ~47 MB — give it more headroom than slippy tiles
+    QTimer::singleShot(180000, reply, [reply]() {
+        if (reply->isRunning()) reply->abort();
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, cellLat, cellLon]() {
+        reply->deleteLater();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray data = reply->readAll();
+
+        if (reply->error() != QNetworkReply::NoError || status < 200 || status >= 300) {
+            m_copFetch.active = false;
+            emit finished(false, QString("Copernicus DEM download failed for cell %1 (HTTP %2): %3")
+                              .arg(copernicusCellName(cellLat, cellLon))
+                              .arg(status).arg(reply->errorString()));
+            return;
+        }
+
+        terrain::DemTile cell = terrain::DemDecoder::decodeAuto(data, "dem");
+        if (!cell.valid || cell.width <= 0 || cell.height <= 0) {
+            m_copFetch.active = false;
+            emit finished(false, QString("Failed to decode Copernicus DEM cell %1 (%2 bytes)")
+                              .arg(copernicusCellName(cellLat, cellLon)).arg(data.size()));
+            return;
+        }
+
+        // Keep memory bounded: each decoded cell is ~52 MB
+        if (m_copCellCache.size() >= 4) m_copCellCache.clear();
+        m_copCellCache.insert(copernicusCellName(cellLat, cellLon), std::move(cell));
+
+        m_copFetch.pending--;
+        if (m_copFetch.pending <= 0)
+            finishCopernicusDownload();
+    });
+}
+
+void ExportEngine::finishCopernicusDownload() {
+    const terrain::Tile& tile = m_copFetch.tile;
+    m_copFetch.active = false;
+    const int res = m_store->exportSettings().heightmapResolution;
+
+    terrain::DemTile out;
+    out.width = res;
+    out.height = res;
+    out.nodataValue = -9999.0f;
+    out.valid = true;
+    out.elevations.resize(static_cast<size_t>(res) * res);
+
+    for (int py = 0; py < res; ++py) {
+        const double lat = tile.bounds.north -
+            (tile.bounds.north - tile.bounds.south) * ((py + 0.5) / res);
+        // Pick the cell that actually contains this latitude; clamp to the
+        // fetched range so edge rows extend instead of sampling nothing.
+        const int cellLat = qBound(m_copFetch.latFrom,
+                                   static_cast<int>(std::floor(lat)), m_copFetch.latTo);
+        for (int px = 0; px < res; ++px) {
+            const double lon = tile.bounds.west +
+                (tile.bounds.east - tile.bounds.west) * ((px + 0.5) / res);
+            const int cellLon = qBound(m_copFetch.lonFrom,
+                                       static_cast<int>(std::floor(lon)), m_copFetch.lonTo);
+
+            // QMap::value() would copy the ~52 MB cell — use a reference
+            auto cellIt = m_copCellCache.constFind(copernicusCellName(cellLat, cellLon));
+            if (cellIt == m_copCellCache.constEnd()) {
+                out.elevations[static_cast<size_t>(py) * res + px] = -9999.0f;
+                continue;
+            }
+            const terrain::DemTile& cell = cellIt.value();
+            // Cell covers [cellLat, cellLat+1] x [cellLon, cellLon+1],
+            // row 0 = north edge (cellLat + 1)
+            const double fx = (lon - cellLon) * cell.width;
+            const double fy = (cellLat + 1.0 - lat) * cell.height;
+            out.elevations[static_cast<size_t>(py) * res + px] =
+                sampleBilinear(cell.elevations, cell.width, cell.height, fx, fy,
+                               cell.nodataValue);
+        }
+    }
+
+    if (!writeDemOutput(out.elevations, res, res, tile, m_copFetch.outputPath)) {
+        emit finished(false, QString("Failed to write DEM output for tile %1: %2")
+                          .arg(tile.id()).arg(m_copFetch.outputPath));
+        return;
+    }
+    m_log.info("Copernicus DEM written for tile", tile.id(), "->", m_copFetch.outputPath);
+
+    m_tileDemData[tile.id()] = std::move(out.elevations);
+    m_demDownloaded = true;
+    if (m_imageryDownloaded) {
         m_completedTiles++;
         processNextTile();
     }
