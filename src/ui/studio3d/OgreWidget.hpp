@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <string>
 
 #include "../../core/world/World.hpp"
 #include "../../core/world/UndoRedo.hpp"
@@ -28,6 +29,10 @@ namespace Ogre {
     class Light;
     class Ray;
     class Vector3;
+    class Mesh;
+    template <class T> class SharedPtr;
+    using MeshPtr = SharedPtr<Mesh>;
+    using String = std::string;
 }
 
 // Transform mode for the gizmo
@@ -181,6 +186,20 @@ private:
     void destroyLighting();
     void render();
     void rebuildActor(const world::Actor& actor);
+    // Stage 3: per-type procedural mesh + real .mesh asset loading.
+    Ogre::MeshPtr loadActorMeshAsset(const QString& path);
+    Ogre::MeshPtr buildProceduralActorMesh(const world::Actor& actor);
+    void buildBoxMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
+                      float hx, float hy, float hz);
+    void buildCylinderMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
+                           float radius, float height, int segments);
+    void buildConeMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
+                       float radius, float height, int segments);
+    void buildSphereMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
+                         float radius, int rings, int segments);
+    void buildPlaneMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
+                        float hx, float hz);
+    Ogre::String actorDatablock(const world::Actor& actor);
     void updateCameraFromKeys(float dt);
     void updateGizmo();
     void createGizmo();

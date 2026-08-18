@@ -956,8 +956,362 @@ void OgreWidget::renameActor(const QString& id, const QString& newName)
 }
 
 // ============================================================
-// Actor rendering — creates a simple colored box for each actor
+// Actor rendering — Stage 3: per-type procedural meshes + real .mesh assets
 // ============================================================
+
+Ogre::String OgreWidget::actorDatablock(const world::Actor& actor)
+{
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
+    Ogre::String dblockName = "ActorDatablock_" + actor.id.toStdString();
+    Ogre::HlmsDatablock* dbBase = hlmsPbs->getDatablock(Ogre::IdString(dblockName));
+    if (!dbBase) {
+        dbBase = hlmsPbs->createDatablock(
+            Ogre::IdString(dblockName), dblockName,
+            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    }
+    Ogre::HlmsPbsDatablock* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
+    datablock->setDiffuse(Ogre::Vector3(actor.colorR, actor.colorG, actor.colorB));
+
+    float roughness = 0.6f, metalness = 0.0f;
+    switch (actor.type) {
+    case world::ActorType::Building:
+        roughness = 0.55f; break;
+    case world::ActorType::Tree:
+    case world::ActorType::Vegetation:
+    case world::ActorType::Grass:
+        roughness = 0.85f; break;
+    case world::ActorType::Rock:
+        roughness = 0.90f; break;
+    case world::ActorType::Water:
+    case world::ActorType::River:
+    case world::ActorType::Lake:
+        roughness = 0.08f; break;
+    case world::ActorType::Prop:
+        roughness = 0.45f; metalness = 0.25f; break;
+    default:
+        break;
+    }
+    datablock->setRoughness(roughness);
+    datablock->setMetalness(metalness);
+    return dblockName;
+}
+
+void OgreWidget::buildBoxMesh(Ogre::ManualObject* mo, const Ogre::String& db,
+                              float hx, float hy, float hz)
+{
+    mo->begin(db, Ogre::OT_TRIANGLE_LIST);
+    // 8 vertices
+    mo->position(-hx, -hy,  hz); mo->normal(0, 0, 1);
+    mo->position( hx, -hy,  hz); mo->normal(0, 0, 1);
+    mo->position( hx,  hy,  hz); mo->normal(0, 0, 1);
+    mo->position(-hx,  hy,  hz); mo->normal(0, 0, 1);
+    mo->position(-hx, -hy, -hz); mo->normal(0, 0, -1);
+    mo->position( hx, -hy, -hz); mo->normal(0, 0, -1);
+    mo->position( hx,  hy, -hz); mo->normal(0, 0, -1);
+    mo->position(-hx,  hy, -hz); mo->normal(0, 0, -1);
+    // Front
+    mo->index(0); mo->index(1); mo->index(2); mo->index(0); mo->index(2); mo->index(3);
+    // Back
+    mo->index(5); mo->index(4); mo->index(7); mo->index(5); mo->index(7); mo->index(6);
+    // Left
+    mo->index(4); mo->index(0); mo->index(3); mo->index(4); mo->index(3); mo->index(7);
+    // Right
+    mo->index(1); mo->index(5); mo->index(6); mo->index(1); mo->index(6); mo->index(2);
+    // Top
+    mo->index(3); mo->index(2); mo->index(6); mo->index(3); mo->index(6); mo->index(7);
+    // Bottom
+    mo->index(4); mo->index(5); mo->index(1); mo->index(4); mo->index(1); mo->index(0);
+    mo->end();
+}
+
+void OgreWidget::buildCylinderMesh(Ogre::ManualObject* mo, const Ogre::String& db,
+                                    float radius, float height, int segments)
+{
+    mo->begin(db, Ogre::OT_TRIANGLE_LIST);
+    float hy = height * 0.5f;
+    // Side faces — two vertices per segment, two triangles per quad.
+    for (int i = 0; i < segments; ++i) {
+        float a0 = float(i) / segments * 6.2831853f;
+        float a1 = float(i + 1) / segments * 6.2831853f;
+        float x0 = cos(a0) * radius, z0 = sin(a0) * radius;
+        float x1 = cos(a1) * radius, z1 = sin(a1) * radius;
+        Ogre::Vector3 n0(x0, 0, z0); n0.normalise();
+        Ogre::Vector3 n1(x1, 0, z1); n1.normalise();
+        uint32_t base = uint32_t(mo->getCurrentVertexCount());
+        mo->position(x0, -hy, z0); mo->normal(n0.x, n0.y, n0.z);
+        mo->position(x1, -hy, z1); mo->normal(n1.x, n1.y, n1.z);
+        mo->position(x1,  hy, z1); mo->normal(n1.x, n1.y, n1.z);
+        mo->position(x0,  hy, z0); mo->normal(n0.x, n0.y, n0.z);
+        mo->index(base);     mo->index(base + 1); mo->index(base + 2);
+        mo->index(base);     mo->index(base + 2); mo->index(base + 3);
+    }
+    // Caps — center fans
+    uint32_t topCenter = uint32_t(mo->getCurrentVertexCount());
+    mo->position(0, hy, 0); mo->normal(0, 1, 0);
+    uint32_t topStart = uint32_t(mo->getCurrentVertexCount());
+    for (int i = 0; i < segments; ++i) {
+        float a = float(i) / segments * 6.2831853f;
+        mo->position(cos(a) * radius, hy, sin(a) * radius); mo->normal(0, 1, 0);
+    }
+    for (int i = 0; i < segments; ++i) {
+        mo->index(topCenter);
+        mo->index(topStart + i);
+        mo->index(topStart + (i + 1) % segments);
+    }
+    uint32_t botCenter = uint32_t(mo->getCurrentVertexCount());
+    mo->position(0, -hy, 0); mo->normal(0, -1, 0);
+    uint32_t botStart = uint32_t(mo->getCurrentVertexCount());
+    for (int i = 0; i < segments; ++i) {
+        float a = float(i) / segments * 6.2831853f;
+        mo->position(cos(a) * radius, -hy, sin(a) * radius); mo->normal(0, -1, 0);
+    }
+    for (int i = 0; i < segments; ++i) {
+        mo->index(botCenter);
+        mo->index(botStart + (i + 1) % segments);
+        mo->index(botStart + i);
+    }
+    mo->end();
+}
+
+void OgreWidget::buildConeMesh(Ogre::ManualObject* mo, const Ogre::String& db,
+                                float radius, float height, int segments)
+{
+    mo->begin(db, Ogre::OT_TRIANGLE_LIST);
+    float hy = height * 0.5f;
+    uint32_t apex = uint32_t(mo->getCurrentVertexCount());
+    mo->position(0, hy, 0); mo->normal(0, 1, 0);
+    uint32_t baseStart = uint32_t(mo->getCurrentVertexCount());
+    for (int i = 0; i < segments; ++i) {
+        float a = float(i) / segments * 6.2831853f;
+        Ogre::Vector3 n(cos(a), 0, sin(a)); n.normalise();
+        mo->position(cos(a) * radius, -hy, sin(a) * radius);
+        mo->normal(n.x, n.y, n.z);
+    }
+    for (int i = 0; i < segments; ++i) {
+        uint32_t a = baseStart + i;
+        uint32_t b = baseStart + (i + 1) % segments;
+        mo->index(apex); mo->index(a); mo->index(b);
+    }
+    // Base cap
+    uint32_t botCenter = uint32_t(mo->getCurrentVertexCount());
+    mo->position(0, -hy, 0); mo->normal(0, -1, 0);
+    for (int i = 0; i < segments; ++i) {
+        mo->index(botCenter);
+        mo->index(baseStart + (i + 1) % segments);
+        mo->index(baseStart + i);
+    }
+    mo->end();
+}
+
+void OgreWidget::buildSphereMesh(Ogre::ManualObject* mo, const Ogre::String& db,
+                                  float radius, int rings, int segments)
+{
+    mo->begin(db, Ogre::OT_TRIANGLE_LIST);
+    for (int r = 0; r <= rings; ++r) {
+        float phi = float(r) / rings * 3.1415927f;
+        float y = cos(phi) * radius;
+        float ringR = sin(phi) * radius;
+        for (int s = 0; s <= segments; ++s) {
+            float theta = float(s) / segments * 6.2831853f;
+            float x = cos(theta) * ringR;
+            float z = sin(theta) * ringR;
+            Ogre::Vector3 n(x, y, z); n.normalise();
+            mo->position(x, y, z); mo->normal(n.x, n.y, n.z);
+        }
+    }
+    for (int r = 0; r < rings; ++r) {
+        for (int s = 0; s < segments; ++s) {
+            uint32_t a = uint32_t(r * (segments + 1) + s);
+            uint32_t b = a + 1;
+            uint32_t c = a + (segments + 1);
+            uint32_t d = c + 1;
+            mo->index(a); mo->index(c); mo->index(b);
+            mo->index(b); mo->index(c); mo->index(d);
+        }
+    }
+    mo->end();
+}
+
+void OgreWidget::buildPlaneMesh(Ogre::ManualObject* mo, const Ogre::String& db,
+                                 float hx, float hz)
+{
+    mo->begin(db, Ogre::OT_TRIANGLE_LIST);
+    mo->position(-hx, 0,  hz); mo->normal(0, 1, 0);
+    mo->position( hx, 0,  hz); mo->normal(0, 1, 0);
+    mo->position( hx, 0, -hz); mo->normal(0, 1, 0);
+    mo->position(-hx, 0, -hz); mo->normal(0, 1, 0);
+    mo->index(0); mo->index(1); mo->index(2);
+    mo->index(0); mo->index(2); mo->index(3);
+    mo->end();
+}
+
+Ogre::MeshPtr OgreWidget::loadActorMeshAsset(const QString& path)
+{
+    if (path.isEmpty()) return Ogre::MeshPtr();
+    QFileInfo fi(path);
+    if (!fi.exists()) {
+        appLog().warn("Actor mesh asset not found: {}", path);
+        return Ogre::MeshPtr();
+    }
+    Ogre::String meshName = "AssetMesh_" + path.toStdString();
+    Ogre::MeshManager& meshMgr = Ogre::MeshManager::getSingleton();
+    Ogre::MeshPtr existing = meshMgr.getByName(meshName);
+    if (existing) return existing;
+    // Load via the resource group system. The path's directory must be
+    // registered as a resource location; we add it on demand.
+    Ogre::String dir = fi.absolutePath().toStdString();
+    Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+    try {
+        rgm.addResourceLocation(dir, "FileSystem",
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, false);
+        rgm.loadResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    } catch (const std::exception&) {
+        // Duplicate location or load failure — load() will report a clearer error.
+    }
+    try {
+        return meshMgr.load(fi.fileName().toStdString(),
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    } catch (const std::exception& e) {
+        appLog().warn("Failed to load actor mesh '{}': {}", path, e.what());
+        return Ogre::MeshPtr();
+    }
+}
+
+Ogre::MeshPtr OgreWidget::buildProceduralActorMesh(const world::Actor& actor)
+{
+    Ogre::String dblockName = actorDatablock(actor);
+    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
+
+    switch (actor.type) {
+    case world::ActorType::Building: {
+        // Box body + optional pyramid roof (height stored in scaleY).
+        buildBoxMesh(manual, dblockName, 0.5f, 0.4f, 0.5f);
+        // Roof as a separate section using the same datablock.
+        manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+        // Simple 4-sided cone roof on top of the box.
+        float roofBase = 0.4f;
+        float roofTop = 0.5f;
+        uint32_t apex = 0;
+        manual->position(0, roofTop, 0); manual->normal(0, 1, 0);
+        manual->position(-0.5f, roofBase,  0.5f); manual->normal(-0.5f, 0.5f, 0.5f);
+        manual->position( 0.5f, roofBase,  0.5f); manual->normal( 0.5f, 0.5f, 0.5f);
+        manual->position( 0.5f, roofBase, -0.5f); manual->normal( 0.5f, 0.5f, -0.5f);
+        manual->position(-0.5f, roofBase, -0.5f); manual->normal(-0.5f, 0.5f, -0.5f);
+        manual->index(apex); manual->index(1); manual->index(2);
+        manual->index(apex); manual->index(2); manual->index(3);
+        manual->index(apex); manual->index(3); manual->index(4);
+        manual->index(apex); manual->index(4); manual->index(1);
+        manual->end();
+        break;
+    }
+    case world::ActorType::Tree: {
+        // Trunk cylinder + foliage sphere.
+        buildCylinderMesh(manual, dblockName, 0.08f, 0.4f, 12);
+        // Foliage as a sphere placed above the trunk. We bake it into the
+        // same mesh at a local offset; the actor's scale handles sizing.
+        manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+        const int rings = 8, segs = 16;
+        float r = 0.35f;
+        float yOffset = 0.45f;
+        for (int ring = 0; ring <= rings; ++ring) {
+            float phi = float(ring) / rings * 3.1415927f;
+            float y = cos(phi) * r + yOffset;
+            float ringR = sin(phi) * r;
+            for (int s = 0; s <= segs; ++s) {
+                float theta = float(s) / segs * 6.2831853f;
+                float x = cos(theta) * ringR;
+                float z = sin(theta) * ringR;
+                Ogre::Vector3 n(x, y - yOffset, z); n.normalise();
+                manual->position(x, y, z); manual->normal(n.x, n.y, n.z);
+            }
+        }
+        for (int ring = 0; ring < rings; ++ring) {
+            for (int s = 0; s < segs; ++s) {
+                uint32_t a = uint32_t(ring * (segs + 1) + s);
+                uint32_t b = a + 1;
+                uint32_t c = a + (segs + 1);
+                uint32_t d = c + 1;
+                manual->index(a); manual->index(c); manual->index(b);
+                manual->index(b); manual->index(c); manual->index(d);
+            }
+        }
+        manual->end();
+        break;
+    }
+    case world::ActorType::Vegetation:
+    case world::ActorType::Grass: {
+        // Grass tuft — a small crossed-plane quad cluster.
+        buildPlaneMesh(manual, dblockName, 0.25f, 0.25f);
+        manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+        // Second plane rotated 90° around Y.
+        manual->position(0, 0, -0.25f); manual->normal(0, 1, 0);
+        manual->position(0, 0,  0.25f); manual->normal(0, 1, 0);
+        manual->position(0.25f, 0,  0.25f); manual->normal(0, 1, 0);
+        manual->position(0.25f, 0, -0.25f); manual->normal(0, 1, 0);
+        manual->index(0); manual->index(1); manual->index(2);
+        manual->index(0); manual->index(2); manual->index(3);
+        manual->end();
+        break;
+    }
+    case world::ActorType::Rock: {
+        // Low-poly icosahedron-ish sphere for a chunky rock look.
+        buildSphereMesh(manual, dblockName, 0.5f, 3, 8);
+        break;
+    }
+    case world::ActorType::Prop: {
+        // Generic prop — a small cylinder + box base.
+        buildBoxMesh(manual, dblockName, 0.5f, 0.1f, 0.5f);
+        buildCylinderMesh(manual, dblockName, 0.2f, 0.6f, 12);
+        break;
+    }
+    case world::ActorType::Water:
+    case world::ActorType::River:
+    case world::ActorType::Lake: {
+        // Flat water plane at y=0.
+        buildPlaneMesh(manual, dblockName, 0.5f, 0.5f);
+        break;
+    }
+    case world::ActorType::SunLight:
+    case world::ActorType::SkyLight:
+    case world::ActorType::Light: {
+        // Light marker — a small sphere so the user can see/select it.
+        buildSphereMesh(manual, dblockName, 0.25f, 6, 12);
+        break;
+    }
+    case world::ActorType::Camera: {
+        // Camera marker — a small box + frustum cone.
+        buildBoxMesh(manual, dblockName, 0.2f, 0.2f, 0.3f);
+        buildConeMesh(manual, dblockName, 0.25f, 0.4f, 12);
+        break;
+    }
+    case world::ActorType::SplineControlPoint: {
+        // Small sphere marker.
+        buildSphereMesh(manual, dblockName, 0.15f, 6, 12);
+        break;
+    }
+    case world::ActorType::Empty:
+    case world::ActorType::Group: {
+        // Empty/group actors render as a tiny axis tripod cube so they
+        // remain selectable but visually unobtrusive.
+        buildBoxMesh(manual, dblockName, 0.05f, 0.05f, 0.05f);
+        break;
+    }
+    default: {
+        // Fallback — unit cube (preserves prior behaviour).
+        buildBoxMesh(manual, dblockName, 0.5f, 0.5f, 0.5f);
+        break;
+    }
+    }
+
+    Ogre::String meshName = "ActorMesh_" + actor.id.toStdString();
+    Ogre::MeshManager& meshMgr = Ogre::MeshManager::getSingleton();
+    if (meshMgr.getByName(meshName)) meshMgr.remove(meshName);
+    Ogre::MeshPtr mesh = manual->convertToMesh(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m_sceneManager->destroyManualObject(manual);
+    return mesh;
+}
 
 void OgreWidget::rebuildActor(const world::Actor& actor)
 {
@@ -975,98 +1329,33 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
         m_actorRenders.erase(it);
     }
 
-    // Create a simple box mesh for the actor
-    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
-
-    // PBS datablock so actors are lit by the sun/ambient instead of rendering
-    // as flat unlit colour. Roughness/metalness vary per actor type.
-    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
-    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
-    Ogre::String dblockName = "ActorDatablock_" + actor.id.toStdString();
-    Ogre::HlmsDatablock* dbBase = hlmsPbs->getDatablock(Ogre::IdString(dblockName));
-    if (!dbBase) {
-        dbBase = hlmsPbs->createDatablock(
-            Ogre::IdString(dblockName), dblockName,
-            Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    // Stage 3: prefer a real .mesh asset when assetPath is set, otherwise
+    // build a procedural mesh appropriate to the actor type.
+    Ogre::MeshPtr mesh;
+    if (!actor.assetPath.isEmpty()) {
+        mesh = loadActorMeshAsset(actor.assetPath);
+        if (!mesh) {
+            appLog().warn("Falling back to procedural mesh for actor '{}' (asset '{}')",
+                          actor.name, actor.assetPath);
+        }
     }
-    Ogre::HlmsPbsDatablock* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
-    datablock->setDiffuse(Ogre::Vector3(actor.colorR, actor.colorG, actor.colorB));
-
-    float roughness = 0.6f;
-    float metalness = 0.0f;
-    switch (actor.type) {
-    case world::ActorType::Building:
-        roughness = 0.55f; break;              // concrete / rendered facade
-    case world::ActorType::Tree:
-    case world::ActorType::Vegetation:
-    case world::ActorType::Grass:
-        roughness = 0.85f; break;              // foliage scatters light
-    case world::ActorType::Rock:
-        roughness = 0.90f; break;              // dry stone
-    case world::ActorType::Water:
-    case world::ActorType::River:
-    case world::ActorType::Lake:
-        roughness = 0.08f; break;              // near-mirror surface
-    case world::ActorType::Prop:
-        roughness = 0.45f; metalness = 0.25f; break;
-    default:
-        break;
-    }
-    datablock->setRoughness(roughness);
-    datablock->setMetalness(metalness);
-
-    // Build a unit cube centered at origin
-    manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
-
-    // 8 vertices of a unit cube (-0.5 to 0.5)
-    // Front face
-    manual->position(-0.5f, -0.5f, 0.5f); manual->normal(0, 0, 1);
-    manual->position(0.5f, -0.5f, 0.5f); manual->normal(0, 0, 1);
-    manual->position(0.5f, 0.5f, 0.5f); manual->normal(0, 0, 1);
-    manual->position(-0.5f, 0.5f, 0.5f); manual->normal(0, 0, 1);
-    // Back face
-    manual->position(-0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1);
-    manual->position(0.5f, -0.5f, -0.5f); manual->normal(0, 0, -1);
-    manual->position(0.5f, 0.5f, -0.5f); manual->normal(0, 0, -1);
-    manual->position(-0.5f, 0.5f, -0.5f); manual->normal(0, 0, -1);
-
-    // Front
-    manual->index(0); manual->index(1); manual->index(2);
-    manual->index(0); manual->index(2); manual->index(3);
-    // Back
-    manual->index(5); manual->index(4); manual->index(7);
-    manual->index(5); manual->index(7); manual->index(6);
-    // Left
-    manual->index(4); manual->index(0); manual->index(3);
-    manual->index(4); manual->index(3); manual->index(7);
-    // Right
-    manual->index(1); manual->index(5); manual->index(6);
-    manual->index(1); manual->index(6); manual->index(2);
-    // Top
-    manual->index(3); manual->index(2); manual->index(6);
-    manual->index(3); manual->index(6); manual->index(7);
-    // Bottom
-    manual->index(4); manual->index(5); manual->index(1);
-    manual->index(4); manual->index(1); manual->index(0);
-
-    manual->end();
-
-    // Drop any mesh left over from a previous rebuild of this actor —
-    // convertToMesh() throws on a duplicate name, which would abort the rebuild.
-    Ogre::String meshName = "ActorMesh_" + actor.id.toStdString();
-    Ogre::MeshManager& meshMgr = Ogre::MeshManager::getSingleton();
-    if (meshMgr.getByName(meshName)) meshMgr.remove(meshName);
-
-    Ogre::MeshPtr mesh = manual->convertToMesh(
-        meshName,
-        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!mesh) mesh = buildProceduralActorMesh(actor);
+    if (!mesh) return;
 
     Ogre::Item* item = m_sceneManager->createItem(mesh, Ogre::SCENE_DYNAMIC);
     Ogre::SceneNode* node = m_sceneManager->getRootSceneNode()->createChildSceneNode();
     node->attachObject(item);
 
-    // Actors both cast and receive shadows once a shadow node is active
-    item->setCastShadows(true);
+    // Actors both cast and receive shadows once a shadow node is active.
+    // Light/camera marker actors do not cast shadows.
+    bool isMarker = (actor.type == world::ActorType::Light ||
+                     actor.type == world::ActorType::SunLight ||
+                     actor.type == world::ActorType::SkyLight ||
+                     actor.type == world::ActorType::Camera ||
+                     actor.type == world::ActorType::SplineControlPoint ||
+                     actor.type == world::ActorType::Empty ||
+                     actor.type == world::ActorType::Group);
+    item->setCastShadows(!isMarker);
 
     // Apply transform
     node->setPosition(Ogre::Vector3(actor.transform.posX, actor.transform.posY, actor.transform.posZ));
@@ -1074,8 +1363,6 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
     node->setOrientation(Ogre::Quaternion(rotY, Ogre::Vector3::UNIT_Y));
     node->setScale(Ogre::Vector3(actor.transform.scaleX, actor.transform.scaleY, actor.transform.scaleZ));
     node->setVisible(actor.visible && isLayerVisible(actor.layerId));
-
-    m_sceneManager->destroyManualObject(manual);
 
     ActorRenderEntry entry;
     entry.actorId = actor.id;
