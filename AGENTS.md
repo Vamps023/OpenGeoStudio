@@ -33,7 +33,8 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 | `test_world_model` | World Authoring model tests | 34/34 pass |
 | `test_world_workflow` | World Authoring workflow tests | 22/22 pass |
 | `test_osm_pipeline` | OSM import pipeline tests | 155/155 pass |
-| `test_road_studio` | Road Studio feature tests | 290+ pass (signs, markings, furniture, snapping, measurement, persistence, templates, road model, lanes, cross-section, junctions, roundabouts) |
+| `test_road_studio` | Road Studio feature tests | 334 pass (signs, markings, furniture, snapping, measurement, persistence, templates, road model, lanes, cross-section, junctions, roundabouts) |
+| `test_road_studio_ui` | Road Studio UI smoke test (headless) | Palette, mode switching, shortcuts, panels |
 | `geometry_segment_tests` | Road engine geometry tests | 261 tests |
 
 ## Architecture
@@ -45,6 +46,25 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 - **World model:** `src/core/world/` (World Authoring system)
 - **3D Studio:** `src/ui/studio3d/` (OGRE-Next embedded editor)
 - **Road Studio:** `src/ui/roadstudio/` (LaneMaker-based road editor)
+- **Train Studio:** `src/ui/trainstudio/` (LaneMaker-based rail editor)
+
+## Workspaces (`src/app/main.cpp`)
+
+The main window uses a `QStackedWidget` with 5 pages:
+
+| Index | Workspace | Widget |
+|-------|-----------|--------|
+| 0 | Home | `HomeWidget` |
+| 1 | Terrain Studio | `TerrainStudioWidget` |
+| 2 | Road Studio | `RoadStudioWidget` (embeds LaneMaker `MainWindow`) |
+| 3 | Train Studio | `TrainStudioWidget` (embeds LaneMaker `MainWindow`) |
+| 4 | 3D Studio | `Studio3DWidget` (OGRE-Next) |
+
+**Important:** Both Road Studio and Train Studio embed a LaneMaker `MainWindow`
+at construction time. This means two `MainWidget` instances exist simultaneously.
+LaneMaker uses global pointers (`g_mainWindow`, `g_laneConfig`, `LM::g_mapViewGL`)
+that are rebound on `showEvent()` — only the currently-visible workspace's
+instance should be considered authoritative.
 
 ## OSM Pipeline (`src/core/osm/`)
 
@@ -74,6 +94,97 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 | `OsmImportDialog.cpp` | MOC implementation for OsmImportDialog |
 | `RoadStudioWidget.hpp` | Road Studio with OSM import toolbar button |
 | `RoadStudioWidget.cpp` | Road Studio implementation (includes OSM dialog) |
+| `RoadTypes.hpp` | Road/rail profile catalogs, road data model types |
+
+## Road Studio UI — Simplified Tool Palette
+
+The Road Studio sidebar (`MainWidget`) has been simplified to only two
+active tools:
+
+| Tool | Icon | Shortcut | Purpose |
+|------|------|----------|---------|
+| **Road** | `road_mode` | `R` | Draw new roads (click to place points) |
+| **View** | `view_mode` | `Esc` | Select / pan / zoom (navigation) |
+
+All other tools (roundabout, modify, marking, sign, furniture, snap settings,
+measure, destroy, lane mode, draw options) have been removed from the active
+UI. The underlying mode code still exists in `main_widget.cpp` but is not
+exposed.
+
+Esc always returns to the safe View mode (unless typing in a text field).
+
+## Cross-Section Studio (`LaneConfigWidget`)
+
+The profile selector and lane configuration have been unified into a single
+Cross-Section Studio panel inside `LaneConfigWidget`.
+
+### Constructor
+
+```cpp
+LaneConfigWidget(bool verticalLayout = false, bool showProfileSelector = true);
+```
+
+- `verticalLayout=true` — stacks controls vertically (used in DrawOptionDialog)
+- `showProfileSelector=false` — hides the profile combo, metadata fields,
+  reset/save buttons. Used by `DrawOptionDialog` to prevent the user from
+  changing presets in the popup (which previously caused a crash because the
+  dialog's LaneConfigWidget has no `ProfileChanged` connection).
+
+### Two instances
+
+| Instance | Location | `showProfileSelector` | Purpose |
+|----------|----------|----------------------|---------|
+| Sidebar | `MainWidget` constructor | `true` (default) | Full profile editing |
+| Dialog | `DrawOptionDialog` constructor | `false` | Lane count/width editing only |
+
+### Profile System
+
+**Road profiles** (`roads::RoadProfileCatalog` in `RoadTypes.hpp`):
+- Keys: `city_2x1`, `city_2x2`, `city_2x3`, `city_oneway_1x2`, `city_oneway_1x3`,
+  `country_2x1`, `country_2x2`, `highway_2x2`, `highway_2x3`, `highway_2x4`,
+  `industrial_2x1`, `industrial_2x2`, `expressway_2x3`, `expressway_2x4`
+- Default: `city_2x1`
+- Fallback for unknown key: `custom`
+
+**Rail profiles** (`roads::RailProfileCatalog` in `RoadTypes.hpp`):
+- Keys: `single_standard`, `single_narrow`, `single_broad`, `double_standard`,
+  `triple_standard`, `quad_standard`, `high_speed`, `subway`, `tram`
+- Default: `single_standard`
+- Fallback for unknown key: `custom_rail`
+
+Each `RoadProfile` contains: `laneWidth`, `leftLanes`, `rightLanes`,
+`leftOffsetX2`, `rightOffsetX2`, `speedLimit`, `hasSidewalk`, `hasCurb`,
+`surfaceTexture`, `markingTexture`, `description`.
+
+### Mode Switching
+
+| Method | Shows widget? | Populates profiles? | Used by |
+|--------|--------------|--------------------|---------| 
+| `GotoRoadMode()` | Yes | Yes (if empty or was rail) | User action |
+| `GotoRailMode()` | Yes | Yes (if empty or was road) | User action |
+| `GotoLaneMode()` | Yes | No | User action |
+| `SetRoadModeOnly()` | No | Yes (if `hasProfileSelector`) | `MainWidget::SetRailMode(false)` during construction |
+| `SetRailModeOnly()` | No | Yes (if `hasProfileSelector`) | `MainWidget::SetRailMode(true)` during construction |
+
+The `SetRoadModeOnly`/`SetRailModeOnly` methods exist to avoid calling `show()`
+during construction, which would make the LaneConfigWidget visible before the
+user picks the Road tool.
+
+### Signals
+
+- `ProfileChanged(const QString& key)` — emitted after `LoadProfile()` completes
+- `RoadMetadataChanged(double speed, bool sidewalk, bool curb)` — emitted when
+  speed/sidewalk/curb controls change (suppressed during `applyingProfile`)
+
+### Modified-from-profile tracking
+
+- `applyingProfile` guard prevents `CheckModified()` from firing while a preset
+  is being loaded
+- `modifiedFromProfile` flag tracks whether the user has tweaked away from the
+  loaded preset
+- `modifiedLabel` shows "Modified from \<profile\>" when true
+- `resetButton` reloads the original preset
+- `savePresetButton` saves the current config as a new custom preset
 
 ## Key Conventions
 
@@ -87,6 +198,42 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
   placeholder `road_v2.hpp` used by `road_engine.hpp`
 - Q_OBJECT headers included from .cpp files need a corresponding .cpp entry
   in CMakeLists.txt for AUTOMOC to process them
+- Do NOT add `fprintf(stderr, ...)` debug prints to production source — use
+  `appLog()` instead. Temporary diagnostics must be removed before committing.
+
+## LaneMaker Global State
+
+LaneMaker uses several global pointers that are shared across all embedded
+instances. These are rebound when a widget becomes visible:
+
+| Global | Set in | Purpose |
+|--------|--------|---------|
+| `g_mainWindow` | `MainWindow::showEvent()` | Active LaneMaker main window |
+| `g_laneConfig` | `MainWidget` constructor | Active lane config widget |
+| `LM::g_mapViewGL` | `MainWidget::showEvent()`, `MainWindow::showEvent()` | Active OpenGL map view |
+| `MainWidget::instance` | `MainWidget` constructor | Last-constructed MainWidget |
+
+**Hazard:** Since both Road Studio and Train Studio construct their LaneMaker
+`MainWindow` at app startup, the globals point to whichever was constructed
+last (Train Studio). They are rebound to the correct instance when the user
+switches workspaces (via `showEvent()`). Code that uses these globals before
+any workspace is shown will access the Train Studio instance.
+
+## Clean Build from Scratch
+
+```bash
+# 1. Remove the build directory
+rmdir /S /Q D:\git\OpenGeoStudio-Qt\build
+
+# 2. Configure with vcpkg + Qt + Ninja
+cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"" >nul 2>&1 && cmake -B D:\git\OpenGeoStudio-Qt\build -S D:\git\OpenGeoStudio-Qt -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/dev/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_PREFIX_PATH=C:/Qt/6.8.0/msvc2022_64 -DQt6_DIR=C:/Qt/6.8.0/msvc2022_64/lib/cmake/Qt6 2>&1"
+
+# 3. Build
+cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"" >nul 2>&1 && cmake --build D:\git\OpenGeoStudio-Qt\build --target OpenGeoStudio 2>&1"
+```
+
+vcpkg manifest mode auto-installs 120 packages (boost, cgal, curl, gtest,
+nlohmann-json, spdlog, tiff, libpng, cereal, etc.) on first configure.
 
 ## Road Engine Layout
 

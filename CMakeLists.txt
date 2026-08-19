@@ -715,6 +715,26 @@ if(BUILD_TESTS)
     target_compile_definitions(test_road_studio PRIVATE G_TEST)
 endif()
 
+# ─── Road Studio UI smoke test (headless, drives the real MainWidget) ───
+if(BUILD_TESTING)
+    add_executable(test_road_studio_ui
+        src/engine/lanemaker/test/test_road_studio_ui.cpp
+    )
+    set_target_properties(test_road_studio_ui PROPERTIES AUTOMOC ON)
+    target_include_directories(test_road_studio_ui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker
+    )
+    target_link_libraries(test_road_studio_ui PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        lanemaker::core
+    )
+    if(MSVC)
+        target_compile_options(test_road_studio_ui PRIVATE /EHa /bigobj)
+    endif()
+endif()
+
 # ─── Print Configuration Summary ─────────────────────────────
 message(STATUS "")
 message(STATUS "═══ OpenGeoStudio Build Configuration ═══")

@@ -93,7 +93,7 @@ class LaneConfigWidget :
 {
     Q_OBJECT
 public:
-    LaneConfigWidget(bool verticalLayout=false);
+    LaneConfigWidget(bool verticalLayout=false, bool showProfileSelector=true);
 
     void Reset();
 
@@ -103,6 +103,11 @@ public:
     void GotoRoadMode();
     void GotoLaneMode();
     void GotoRailMode();
+
+    /// Switch to road mode without showing the widget (for initialization)
+    void SetRoadModeOnly();
+    /// Switch to rail mode without showing the widget (for initialization)
+    void SetRailModeOnly();
 
     LM::LanePlan LeftResult() const { return visual->activeLeftSetting; }
     LM::LanePlan RightResult() const { return visual->activeRightSetting; }
@@ -161,6 +166,7 @@ private:
     QString currentProfileKey;         // Key of the currently loaded profile
     bool modifiedFromProfile = false;  // True if user has tweaked away from the preset
     bool applyingProfile = false;      // Guard to suppress modified-flag while loading a preset
+    bool hasProfileSelector = true;    // Whether the profile combo + metadata are shown
 
     // Snapshot of the loaded profile for comparison + reset
     roads::RoadProfile loadedProfile;

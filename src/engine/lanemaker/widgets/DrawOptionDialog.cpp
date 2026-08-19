@@ -32,8 +32,8 @@ DrawOptionDialog::DrawOptionDialog(QWidget* parent):
         "  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0; }");
     mainLayout->addWidget(laneHeader);
 
-    // Lane config widget (vertical layout mode)
-    laneConfig = new LaneConfigWidget(true);
+    // Lane config widget (vertical layout mode, no profile selector)
+    laneConfig = new LaneConfigWidget(true, false);
     mainLayout->addWidget(laneConfig);
 
     // Separator

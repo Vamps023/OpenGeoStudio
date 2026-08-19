@@ -10,12 +10,28 @@ Release/
 # IDE files
 .vs/
 .vscode/
+.trae/
+.qodo/
+.cache/
 *.user
 *.suo
 *.sln
 *.vcxproj*
 CMakeSettings.json
-.cache/
+
+# Temporary / scratch files
+.commit_msg*.txt
+.commit-stage*.txt
+all_tests.txt
+bt_log.txt
+rs_test.txt
+ui_run_out.txt
+ui_test_out.txt
+build_test.bat
+run_all.bat
+run_rs.bat
+run_rs2.ps1
+run_ui_test*.bat
 
 # Qt generated files
 moc_*.cpp

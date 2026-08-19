@@ -876,22 +876,18 @@ void MainWidget::SetRailMode(bool railMode)
 {
     if (railMode)
     {
-        // Switch LaneConfigWidget to rail mode (populates rail profiles internally)
         if (laneConfig)
         {
-            laneConfig->GotoRailMode();
-            laneConfig->PopulateRailProfiles();
-            laneConfig->LoadProfile("single_standard");
+            // Switch to rail mode without showing the widget
+            laneConfig->SetRailModeOnly();
         }
     }
     else
     {
-        // Restore road profiles in LaneConfigWidget
         if (laneConfig)
         {
-            laneConfig->GotoRoadMode();
-            laneConfig->PopulateRoadProfiles();
-            laneConfig->LoadProfile("city_2x1");
+            // Switch to road mode without showing the widget
+            laneConfig->SetRoadModeOnly();
         }
     }
 }

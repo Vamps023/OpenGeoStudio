@@ -432,7 +432,7 @@ void CrossSectionVisual::mouseReleaseEvent(QMouseEvent* evt)
     }
 }
 
-LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
+LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector):
     visual(new CrossSectionVisual),
     leftMinus(new QToolButton), leftPlus(new QToolButton),
     rightMinus(new QToolButton), rightPlus(new QToolButton),
@@ -446,6 +446,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     modifiedLabel(new QLabel),
     resetButton(new QPushButton("Reset")),
     savePresetButton(new QPushButton("Save as Preset")),
+    hasProfileSelector(showProfileSelector),
     incLogo(":/icons/add.png"), decLogo(":/icons/minus.png")
 {
     setMinimumWidth(550);
@@ -794,10 +795,30 @@ QSize LaneConfigWidget::sizeHint() const
 void LaneConfigWidget::GotoRoadMode()
 {
     show();
+    bool wasRail = visual->IsRailMode();
     visual->SetRailMode(false);
     visual->SetMode(true);
-    // Populate road profiles on first entry or when switching from rail
-    PopulateRoadProfiles();
+    // Populate road profiles only if we have a profile selector and need to
+    if (hasProfileSelector && (profileCombo->count() == 0 || wasRail))
+        PopulateRoadProfiles();
+}
+
+void LaneConfigWidget::SetRoadModeOnly()
+{
+    bool wasRail = visual->IsRailMode();
+    visual->SetRailMode(false);
+    visual->SetMode(true);
+    if (hasProfileSelector && (profileCombo->count() == 0 || wasRail))
+        PopulateRoadProfiles();
+}
+
+void LaneConfigWidget::SetRailModeOnly()
+{
+    bool wasRoad = !visual->IsRailMode();
+    visual->SetRailMode(true);
+    visual->SetMode(true);
+    if (hasProfileSelector && (profileCombo->count() == 0 || wasRoad))
+        PopulateRailProfiles();
 }
 
 void LaneConfigWidget::GotoLaneMode()
@@ -810,9 +831,12 @@ void LaneConfigWidget::GotoLaneMode()
 void LaneConfigWidget::GotoRailMode()
 {
     show();
+    bool wasRoad = !visual->IsRailMode();
     visual->SetRailMode(true);
     visual->SetMode(true);
-    PopulateRailProfiles();
+    // Populate rail profiles only if we have a profile selector and need to
+    if (hasProfileSelector && (profileCombo->count() == 0 || wasRoad))
+        PopulateRailProfiles();
 }
 
 void LaneConfigWidget::SetRailProfile(int trackCount, double gauge, double trackSpacing)
@@ -824,24 +848,32 @@ void LaneConfigWidget::SetRailProfile(int trackCount, double gauge, double track
 
 void LaneConfigWidget::PopulateRoadProfiles()
 {
-    QSignalBlocker blocker(profileCombo);
-    profileCombo->clear();
-    auto profiles = roads::RoadProfileCatalog::all();
-    for (auto it = profiles.begin(); it != profiles.end(); ++it)
-        profileCombo->addItem(it.key(), it.key());
-    profileCombo->setCurrentText("city_2x1");
-    profileCombo->setToolTip("Select a road profile preset");
+    {
+        QSignalBlocker blocker(profileCombo);
+        profileCombo->clear();
+        auto profiles = roads::RoadProfileCatalog::all();
+        for (auto it = profiles.begin(); it != profiles.end(); ++it)
+            profileCombo->addItem(it.key(), it.key());
+        profileCombo->setCurrentText("city_2x1");
+        profileCombo->setToolTip("Select a road profile preset");
+    }
+    // Load the default profile to sync lane config + metadata (signals unblocked)
+    LoadProfile("city_2x1");
 }
 
 void LaneConfigWidget::PopulateRailProfiles()
 {
-    QSignalBlocker blocker(profileCombo);
-    profileCombo->clear();
-    auto profiles = roads::RailProfileCatalog::all();
-    for (auto it = profiles.begin(); it != profiles.end(); ++it)
-        profileCombo->addItem(it.key(), it.key());
-    profileCombo->setCurrentText("single_standard");
-    profileCombo->setToolTip("Select a rail profile preset");
+    {
+        QSignalBlocker blocker(profileCombo);
+        profileCombo->clear();
+        auto profiles = roads::RailProfileCatalog::all();
+        for (auto it = profiles.begin(); it != profiles.end(); ++it)
+            profileCombo->addItem(it.key(), it.key());
+        profileCombo->setCurrentText("single_standard");
+        profileCombo->setToolTip("Select a rail profile preset");
+    }
+    // Load the default rail profile (signals unblocked)
+    LoadProfile("single_standard");
 }
 
 void LaneConfigWidget::LoadProfile(const QString& key)
