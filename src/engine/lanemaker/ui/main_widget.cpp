@@ -314,48 +314,15 @@ MainWidget::MainWidget(QWidget* parent)
     addCaption("Create");
     makeModeButton(createModeButton, "road_mode", tr("Road"),
                    tr("Draw new roads"));
-    makeModeButton(straightLineButton, "straight_line", tr("Line"),
-                   tr("Click two points for a straight road"));
-    makeModeButton(createLaneModeButton, "lane_mode", tr("Lane"),
-                   tr("Add/modify lanes"));
-    makeModeButton(roundaboutModeButton, "roundabout_mode", tr("Roundabt"),
-                   tr("Click on the map to create a roundabout"));
 
-    // ── EDIT ──
-    addCaption("Edit");
-    makeModeButton(modifyModeButton, "modify_mode", tr("Modify"),
-                   tr("Edit road geometry"));
-    makeModeButton(destroyModeButton, "destroy_mode", tr("Delete"),
-                   tr("Delete roads"));
-    makeModeButton(flipLaneButton, "flip_lane_road", tr("Flip"),
-                   tr("Click a lane to reverse its direction"));
+    // ── NAVIGATE ──
+    addCaption("Navigate");
     makeModeButton(dragModeButton, "view_mode", tr("View"),
                    tr("Select / pan / zoom"));
-
-    // ── ANNOTATE ──
-    addCaption("Annotate");
-    makeModeButton(signModeButton, "sign_mode", tr("Sign"),
-                   tr("Click on a road to place a traffic sign"));
-    makeModeButton(markingModeButton, "marking_mode", tr("Marking"),
-                   tr("Click on a lane to place a road marking"));
-    makeModeButton(furnitureModeButton, "furniture_mode", tr("Object"),
-                   tr("Click on a road to place road furniture"));
-    makeModeButton(measureModeButton, "measure_mode", tr("Measure"),
-                   tr("Click points to measure distance, angle, area"));
 
     pointerModeGroup = new QButtonGroup(this);
     pointerModeGroup->setExclusive(true);
     pointerModeGroup->addButton(createModeButton);
-    pointerModeGroup->addButton(straightLineButton);
-    pointerModeGroup->addButton(createLaneModeButton);
-    pointerModeGroup->addButton(modifyModeButton);
-    pointerModeGroup->addButton(destroyModeButton);
-    pointerModeGroup->addButton(flipLaneButton);
-    pointerModeGroup->addButton(signModeButton);
-    pointerModeGroup->addButton(markingModeButton);
-    pointerModeGroup->addButton(roundaboutModeButton);
-    pointerModeGroup->addButton(furnitureModeButton);
-    pointerModeGroup->addButton(measureModeButton);
     pointerModeGroup->addButton(dragModeButton);
 
     // Keyboard shortcuts — single letters while the canvas has focus.
@@ -374,42 +341,10 @@ MainWidget::MainWidget(QWidget* parent)
         btn->setToolTip(QString("%1 (%2)").arg(tip, key));
     };
     addModeShortcut("R", createModeButton,      tr("Draw new roads"));
-    addModeShortcut("K", straightLineButton,    tr("Click two points for a straight road"));
-    addModeShortcut("L", createLaneModeButton,  tr("Add/modify lanes"));
-    addModeShortcut("O", roundaboutModeButton,  tr("Click on the map to create a roundabout"));
-    addModeShortcut("M", modifyModeButton,      tr("Edit road geometry"));
-    addModeShortcut("X", destroyModeButton,     tr("Delete roads"));
-    addModeShortcut("F", flipLaneButton,        tr("Click a lane to reverse its direction"));
     addModeShortcut("V", dragModeButton,        tr("Select / pan / zoom"));
-    addModeShortcut("G", signModeButton,        tr("Click on a road to place a traffic sign"));
-    addModeShortcut("N", markingModeButton,     tr("Click on a lane to place a road marking"));
-    addModeShortcut("T", furnitureModeButton,   tr("Click on a road to place road furniture"));
-    addModeShortcut("U", measureModeButton,     tr("Click points to measure distance, angle, area"));
 
     sidebarLayout->addWidget(createModeButton);
-    sidebarLayout->addWidget(straightLineButton);
-    sidebarLayout->addWidget(createLaneModeButton);
-    sidebarLayout->addWidget(roundaboutModeButton);
-    sidebarLayout->addWidget(modifyModeButton);
-    sidebarLayout->addWidget(destroyModeButton);
-    sidebarLayout->addWidget(flipLaneButton);
     sidebarLayout->addWidget(dragModeButton);
-    sidebarLayout->addWidget(signModeButton);
-    sidebarLayout->addWidget(markingModeButton);
-    sidebarLayout->addWidget(furnitureModeButton);
-    sidebarLayout->addWidget(measureModeButton);
-
-    // ── UTILITY (bottom) ──
-    sidebarLayout->addSpacing(6);
-    snapSettingsButton = new QToolButton;
-    snapSettingsButton->setIcon(loadSvgIcon("snap_settings"));
-    snapSettingsButton->setIconSize(paletteIconSize);
-    snapSettingsButton->setText(tr("Snap"));
-    snapSettingsButton->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    snapSettingsButton->setToolTip(tr("Snap settings — toggle snapping categories"));
-    snapSettingsButton->setCheckable(false);
-    snapSettingsButton->setChecked(false);
-    sidebarLayout->addWidget(snapSettingsButton);
 
     // Esc always returns to the safe View mode (but not while typing)
     auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
@@ -770,17 +705,6 @@ MainWidget::MainWidget(QWidget* parent)
     setLayout(mainLayout);
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
-    connect(straightLineButton, &QAbstractButton::toggled, this, &MainWidget::gotoStraightLineMode);
-    connect(createLaneModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateLaneMode);
-    connect(destroyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDestroyMode);
-    connect(modifyModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoModifyMode);
-    connect(flipLaneButton, &QAbstractButton::toggled, this, &MainWidget::gotoFlipLaneMode);
-    connect(signModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoPlaceSignMode);
-    connect(markingModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoPlaceMarkingMode);
-    connect(roundaboutModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoundaboutMode);
-    connect(furnitureModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoPlaceFurnitureMode);
-    connect(measureModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoMeasureMode);
-    connect(snapSettingsButton, &QAbstractButton::clicked, this, &MainWidget::toggleSnapSettings);
     connect(dragModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDragMode);
     connect(mapViewGL, &LM::MapViewGL::MousePerformedAction, this, &MainWidget::OnMouseAction);
     connect(mapViewGL, &LM::MapViewGL::KeyPerformedAction, this, &MainWidget::OnKeyPress);
@@ -2824,21 +2748,6 @@ void MainWidget::SetModeFromReplay(int mode)
     {
     case LM::Mode_Create:
         createModeButton->setChecked(true);
-        break;
-    case LM::Mode_StraightLine:
-        straightLineButton->setChecked(true);
-        break;
-    case LM::Mode_CreateLanes:
-        createLaneModeButton->setChecked(true);
-        break;
-    case LM::Mode_Modify:
-        modifyModeButton->setChecked(true);
-        break;
-    case LM::Mode_FlipLane:
-        flipLaneButton->setChecked(true);
-        break;
-    case LM::Mode_Destroy:
-        destroyModeButton->setChecked(true);
         break;
     default:
         dragModeButton->setChecked(true);

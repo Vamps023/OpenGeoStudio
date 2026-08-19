@@ -172,15 +172,7 @@ protected:
     RoadDrawingSession* drawingSession = nullptr;
 
     QButtonGroup* pointerModeGroup;
-    QToolButton* createModeButton, * createLaneModeButton, * destroyModeButton, * modifyModeButton, * dragModeButton;
-    QToolButton* straightLineButton;  // Straight line tool
-    QToolButton* flipLaneButton;      // Flip lane direction on drawn road
-    QToolButton* signModeButton;      // Place traffic signs on roads
-    QToolButton* markingModeButton;   // Place road markings on lanes
-    QToolButton* roundaboutModeButton; // Create roundabouts
-    QToolButton* furnitureModeButton; // Place road furniture
-    QToolButton* measureModeButton;   // Measurement tool
-    QToolButton* snapSettingsButton;  // Snapping settings
+    QToolButton* createModeButton, * dragModeButton;
     QToolButton* viewModeButton;   // 2D/3D toggle
     QToolButton* loadMapButton;    // Load satellite map background
     QToolButton* zoomInButton;     // Zoom in
