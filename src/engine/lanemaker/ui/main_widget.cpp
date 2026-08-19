@@ -420,28 +420,8 @@ MainWidget::MainWidget(QWidget* parent)
     sep3->setStyleSheet("color: #21262d;");
     topBarLayout->addWidget(sep3);
 
-    // SCANeR-style road profile selector
-    auto* profileLabel = new QLabel("Profile:");
-    topBarLayout->addWidget(profileLabel);
-    profileCombo = new QComboBox(this);
-    profileCombo->setMinimumWidth(220);
-    profileCombo->setStyleSheet(
-        "QComboBox { background: #161b22; border: 1px solid #21262d; border-radius: 6px;"
-        "padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
-        "QComboBox:hover { border-color: #1f6feb; }"
-        "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #161b22; border: 1px solid #21262d;"
-        "selection-background-color: #1f6feb; color: #e6edf3; }");
-    // Populate with all profiles from the catalog
-    {
-        auto profiles = roads::RoadProfileCatalog::all();
-        for (auto it = profiles.begin(); it != profiles.end(); ++it) {
-            profileCombo->addItem(it.key(), it.key());  // display text, userData
-        }
-        profileCombo->setCurrentText("city_2x1");
-    }
-    profileCombo->setToolTip(tr("Select a SCANeR-style road profile — sets lane width, lane count, and offsets"));
-    topBarLayout->addWidget(profileCombo);
+    // Profile selector is now in the LaneConfigWidget (Cross-Section Studio)
+    // No top-bar profile combo needed anymore.
 
     auto* sep3b = new QFrame;
     sep3b->setFrameShape(QFrame::VLine);
@@ -715,8 +695,13 @@ MainWidget::MainWidget(QWidget* parent)
     connect(redoButton, &QAbstractButton::clicked, g_mainWindow, &MainWindow::redo);
     connect(drawOptionButton, &QAbstractButton::clicked, drawOptionDialog, &QDialog::open);
     connect(viewModeButton, &QAbstractButton::toggled, this, &MainWidget::toggleViewMode);
-    connect(profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWidget::onProfileChanged);
+    // Profile combo is now inside LaneConfigWidget — wire its signal
+    connect(laneConfig, &LaneConfigWidget::ProfileChanged, this, [this](const QString& key) {
+        if (mapViewGL) mapViewGL->update();
+    });
+    connect(laneConfig, &LaneConfigWidget::RoadMetadataChanged, this, [this](double, bool, bool) {
+        if (mapViewGL) mapViewGL->update();
+    });
     connect(loadMapButton, &QAbstractButton::toggled, this, [this](bool checked) {
         if (checked) {
             loadMapBackground();
@@ -887,129 +872,26 @@ void MainWidget::gotoStraightLineMode(bool checked)
     laneConfig->GotoRoadMode();
 }
 
-void MainWidget::onProfileChanged(int index)
-{
-    if (index < 0) return;
-    QString key = profileCombo->itemData(index).toString();
-
-    // Check if we're in rail mode (rail profiles loaded)
-    if (g_laneConfig && g_laneConfig->RailMode())
-    {
-        // Rail profile selection
-        roads::RailProfile railProfile = roads::RailProfileCatalog::get(key);
-
-        // Update lane width to match rail gauge + ballast
-        LM::LaneWidth = railProfile.gauge + 0.5;  // gauge + clearance
-
-        // For rail, use single lane per track; trackCount maps to laneCount
-        LM::LanePlan leftPlan, rightPlan;
-        if (railProfile.trackCount == 1)
-        {
-            leftPlan.laneCount = 0;
-            leftPlan.offsetx2 = 0;
-            rightPlan.laneCount = 1;
-            rightPlan.offsetx2 = 0;
-        }
-        else
-        {
-            // Multiple tracks: split evenly left/right
-            int rightLanes = (railProfile.trackCount + 1) / 2;
-            int leftLanes = railProfile.trackCount - rightLanes;
-            leftPlan.laneCount = static_cast<int8_t>(leftLanes);
-            leftPlan.offsetx2 = 0;
-            rightPlan.laneCount = static_cast<int8_t>(rightLanes);
-            rightPlan.offsetx2 = 0;
-        }
-
-        laneConfig->SetOption(leftPlan, rightPlan);
-        laneConfig->SetRailProfile(railProfile.trackCount,
-                                    railProfile.gauge,
-                                    railProfile.trackSpacing);
-
-        auto* spinner = laneConfig->findChild<QDoubleSpinBox*>();
-        if (spinner) {
-            QSignalBlocker blocker(spinner);
-            spinner->setValue(LM::LaneWidth);
-        }
-
-        if (mapViewGL) mapViewGL->update();
-        return;
-    }
-
-    // Road profile selection (default)
-    roads::RoadProfile profile = roads::RoadProfileCatalog::get(key);
-
-    // Update global lane width
-    LM::LaneWidth = profile.laneWidth;
-
-    // Update lane configuration: left/right lanes and offsets
-    LM::LanePlan leftPlan, rightPlan;
-    leftPlan.laneCount = static_cast<int8_t>(profile.leftLanes);
-    leftPlan.offsetx2 = static_cast<int8_t>(profile.leftOffsetX2);
-    rightPlan.laneCount = static_cast<int8_t>(profile.rightLanes);
-    rightPlan.offsetx2 = static_cast<int8_t>(profile.rightOffsetX2);
-
-    // Apply to the lane config widget (this records the action and repaints)
-    laneConfig->SetOption(leftPlan, rightPlan);
-
-    // Update the lane width spinner to reflect the profile's lane width
-    // The spinner's valueChanged signal will also set LM::LaneWidth, but
-    // we already set it above so block signals to avoid redundant work.
-    auto* spinner = laneConfig->findChild<QDoubleSpinBox*>();
-    if (spinner) {
-        QSignalBlocker blocker(spinner);
-        spinner->setValue(profile.laneWidth);
-    }
-
-    // Force a repaint of the viewport to show updated geometry
-    if (mapViewGL) mapViewGL->update();
-}
-
 void MainWidget::SetRailMode(bool railMode)
 {
     if (railMode)
     {
-        // Switch profile combo to rail profiles
-        if (profileCombo)
-        {
-            QSignalBlocker blocker(profileCombo);
-            profileCombo->clear();
-            auto railProfiles = roads::RailProfileCatalog::all();
-            for (auto it = railProfiles.begin(); it != railProfiles.end(); ++it) {
-                profileCombo->addItem(it.key(), it.key());
-            }
-            profileCombo->setCurrentText("single_standard");
-            profileCombo->setToolTip(
-                tr("Select a rail profile — sets gauge, track count, and spacing"));
-        }
-        // Switch cross-section visual to rail mode
+        // Switch LaneConfigWidget to rail mode (populates rail profiles internally)
         if (laneConfig)
         {
             laneConfig->GotoRailMode();
-            auto defaultProfile = roads::RailProfileCatalog::get("single_standard");
-            laneConfig->SetRailProfile(defaultProfile.trackCount,
-                                        defaultProfile.gauge,
-                                        defaultProfile.trackSpacing);
+            laneConfig->PopulateRailProfiles();
+            laneConfig->LoadProfile("single_standard");
         }
     }
     else
     {
-        // Restore road profiles
-        if (profileCombo)
-        {
-            QSignalBlocker blocker(profileCombo);
-            profileCombo->clear();
-            auto roadProfiles = roads::RoadProfileCatalog::all();
-            for (auto it = roadProfiles.begin(); it != roadProfiles.end(); ++it) {
-                profileCombo->addItem(it.key(), it.key());
-            }
-            profileCombo->setCurrentText("city_2x1");
-            profileCombo->setToolTip(
-                tr("Select a SCANeR-style road profile — sets lane width, lane count, and offsets"));
-        }
+        // Restore road profiles in LaneConfigWidget
         if (laneConfig)
         {
             laneConfig->GotoRoadMode();
+            laneConfig->PopulateRoadProfiles();
+            laneConfig->LoadProfile("city_2x1");
         }
     }
 }

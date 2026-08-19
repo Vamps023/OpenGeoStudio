@@ -125,7 +125,6 @@ private slots:
     void toggleSnapSettings();
     void toggleViewMode(bool checked);
     void onMapMoved();
-    void onProfileChanged(int index);
     void onSelectionChanged();
     void onInspectorPropertyChanged();
     void onObjectTreeItemClicked(QTreeWidgetItem* item, int column);
@@ -179,7 +178,6 @@ protected:
     QToolButton* zoomOutButton;    // Zoom out
     QToolButton* fitButton;        // Fit to content
     QLineEdit* searchEdit;         // Location search bar
-    QComboBox* profileCombo;       // SCANeR-style road profile selector
 
     LaneConfigWidget* laneConfig;
     DrawOptionDialog* drawOptionDialog;

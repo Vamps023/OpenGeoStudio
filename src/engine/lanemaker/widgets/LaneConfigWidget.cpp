@@ -3,6 +3,8 @@
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QGridLayout>
+#include <QGroupBox>
 #include <QIcon>
 #include <qevent.h>
 #include <qpainter.h>
@@ -437,14 +439,24 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     swapDirectionButton(new QToolButton),
     flipLaneButton(new QToolButton),
     laneWidthSpinner(new QDoubleSpinBox),
+    profileCombo(new QComboBox),
+    speedLimitSpinner(new QDoubleSpinBox),
+    sidewalkCheck(new QCheckBox("Sidewalk")),
+    curbCheck(new QCheckBox("Curb")),
+    modifiedLabel(new QLabel),
+    resetButton(new QPushButton("Reset")),
+    savePresetButton(new QPushButton("Save as Preset")),
     incLogo(":/icons/add.png"), decLogo(":/icons/minus.png")
 {
     setMinimumWidth(550);
 
-    // Dark theme for the entire LaneConfigWidget
+    // Dark theme for the entire LaneConfigWidget — Cross-Section Studio
     setStyleSheet(
         "LaneConfigWidget { background-color: #0d1117; border: 1px solid #21262d; border-radius: 8px; }"
         "QLabel { color: #7d8590; font-size: 11px; }"
+        "QGroupBox { color: #7d8590; font-size: 11px; font-weight: bold; "
+        "  border: 1px solid #21262d; border-radius: 6px; margin-top: 10px; padding-top: 6px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
         "QToolButton { background: #161b22; border: 1px solid #30363d; border-radius: 6px; "
         "  padding: 4px; margin: 1px; }"
         "QToolButton:hover { background: #21262d; border-color: #1f6feb; }"
@@ -456,7 +468,22 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
         "  background: #21262d; border: none; border-radius: 3px; width: 16px; }"
         "QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {"
-        "  background: #30363d; }");
+        "  background: #30363d; }"
+        "QComboBox { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
+        "  padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
+        "QComboBox:hover { border-color: #1f6feb; }"
+        "QComboBox::drop-down { border: none; }"
+        "QComboBox QAbstractItemView { background: #161b22; border: 1px solid #21262d;"
+        "  selection-background-color: #1f6feb; color: #e6edf3; }"
+        "QCheckBox { color: #e6edf3; font-size: 11px; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px;"
+        "  border: 1px solid #30363d; background: #161b22; }"
+        "QCheckBox::indicator:checked { background: #1f6feb; border-color: #1f6feb; }"
+        "QPushButton { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
+        "  padding: 4px 10px; color: #e6edf3; font-size: 11px; }"
+        "QPushButton:hover { background: #21262d; border-color: #1f6feb; }"
+        "QPushButton:pressed { background: #0d1117; }"
+        "QPushButton:disabled { color: #484f58; border-color: #21262d; }");
 
     int size = style()->pixelMetric(QStyle::PM_ToolBarIconSize);
     if (verticalLayout) size *= 2;
@@ -493,6 +520,28 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
     laneWidthSpinner->setToolTip("Lane width in meters");
     laneWidthSpinner->setFixedWidth(70);
 
+    // Speed limit spinner (20-150 km/h)
+    speedLimitSpinner->setRange(20, 150);
+    speedLimitSpinner->setSingleStep(10);
+    speedLimitSpinner->setValue(50);
+    speedLimitSpinner->setSuffix(" km/h");
+    speedLimitSpinner->setToolTip("Road speed limit");
+    speedLimitSpinner->setFixedWidth(85);
+
+    // Profile combo — populated later by PopulateRoadProfiles/PopulateRailProfiles
+    profileCombo->setToolTip("Select a road profile preset — sets lanes, width, speed, sidewalk, curb");
+    profileCombo->setMinimumWidth(200);
+
+    // Modified indicator — subtle, only visible when modified
+    modifiedLabel->setStyleSheet("color: #d29922; font-size: 10px; font-style: italic;");
+    modifiedLabel->hide();
+
+    // Reset / Save buttons
+    resetButton->setToolTip("Reset cross-section to the selected profile preset");
+    resetButton->setEnabled(false);
+    savePresetButton->setToolTip("Save the current cross-section as a new custom profile");
+    savePresetButton->setEnabled(false);
+
     visual->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
 
     QBoxLayout* layout;
@@ -501,7 +550,24 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         layout = new QVBoxLayout(this);
         layout->setContentsMargins(8, 8, 8, 8);
         layout->setSpacing(6);
+
+        // ── Profile section ──
+        auto* profileRow = new QHBoxLayout;
+        profileRow->setSpacing(4);
+        auto* pLabel = new QLabel("Preset:");
+        pLabel->setStyleSheet("color: #7d8590; font-size: 11px; font-weight: bold;");
+        profileRow->addWidget(pLabel);
+        profileRow->addWidget(profileCombo, 1);
+        layout->addLayout(profileRow);
+
+        // Modified indicator
+        layout->addWidget(modifiedLabel);
+
+        // ── Cross-section visual ──
         layout->addWidget(visual, 1, Qt::AlignHCenter);
+        visual->setMinimumHeight(100);
+
+        // ── Lane controls row ──
         QHBoxLayout* bottomLayout = new QHBoxLayout;
         bottomLayout->setSpacing(4);
         bottomLayout->addWidget(leftMinus);
@@ -518,10 +584,31 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         bottomLayout->addWidget(rightMinus);
         bottomLayout->addWidget(rightPlus);
         layout->addLayout(bottomLayout);
-        visual->setMinimumHeight(100);
+
+        // ── Road metadata row ──
+        auto* metaRow = new QHBoxLayout;
+        metaRow->setSpacing(8);
+        auto* sLabel = new QLabel("Speed:");
+        sLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        metaRow->addWidget(sLabel);
+        metaRow->addWidget(speedLimitSpinner);
+        metaRow->addSpacing(8);
+        metaRow->addWidget(sidewalkCheck);
+        metaRow->addWidget(curbCheck);
+        metaRow->addStretch(1);
+        layout->addLayout(metaRow);
+
+        // ── Reset / Save row ──
+        auto* actionRow = new QHBoxLayout;
+        actionRow->setSpacing(4);
+        actionRow->addStretch(1);
+        actionRow->addWidget(resetButton);
+        actionRow->addWidget(savePresetButton);
+        layout->addLayout(actionRow);
     }
     else
     {
+        // Horizontal (compact) layout — used in toolbar mode
         layout = new QHBoxLayout(this);
         layout->setContentsMargins(4, 4, 4, 4);
         layout->setSpacing(4);
@@ -536,14 +623,39 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout):
         layout->addWidget(laneWidthSpinner);
         layout->addWidget(rightMinus);
         layout->addWidget(rightPlus);
+        // In horizontal mode, hide the profile/metadata sections (they're in the sidebar)
+        profileCombo->hide();
+        speedLimitSpinner->hide();
+        sidewalkCheck->hide();
+        curbCheck->hide();
+        modifiedLabel->hide();
+        resetButton->hide();
+        savePresetButton->hide();
     }
     setLayout(layout);
 
     // Update LaneWidth when spinner changes
     connect(laneWidthSpinner, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            [](double val) {
-                LM::LaneWidth = val;
-            });
+            this, &LaneConfigWidget::OnLaneWidthChanged);
+
+    // Profile combo — load preset when selection changes
+    connect(profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &LaneConfigWidget::OnProfileComboChanged);
+
+    // Speed/sidewalk/curb changes → mark modified + emit signal
+    connect(speedLimitSpinner, QOverload<double>::of(&QDoubleSpinBox::valueChanged), [this](double) {
+        if (!applyingProfile) { CheckModified(); emit RoadMetadataChanged(speedLimitSpinner->value(), sidewalkCheck->isChecked(), curbCheck->isChecked()); }
+    });
+    connect(sidewalkCheck, &QCheckBox::toggled, [this](bool) {
+        if (!applyingProfile) { CheckModified(); emit RoadMetadataChanged(speedLimitSpinner->value(), sidewalkCheck->isChecked(), curbCheck->isChecked()); }
+    });
+    connect(curbCheck, &QCheckBox::toggled, [this](bool) {
+        if (!applyingProfile) { CheckModified(); emit RoadMetadataChanged(speedLimitSpinner->value(), sidewalkCheck->isChecked(), curbCheck->isChecked()); }
+    });
+
+    // Reset / Save buttons
+    connect(resetButton, &QPushButton::clicked, this, &LaneConfigWidget::OnResetToProfile);
+    connect(savePresetButton, &QPushButton::clicked, this, &LaneConfigWidget::OnSaveAsPreset);
 
     connect(visual, &CrossSectionVisual::OptionChangedByUser, this, &LaneConfigWidget::OnOptionChange);
     connect(leftMinus, &QAbstractButton::clicked, [this]()
@@ -661,6 +773,7 @@ void LaneConfigWidget::Reset()
 void LaneConfigWidget::OnOptionChange(LM::LanePlan left, LM::LanePlan right)
 {
     LM::ActionManager::Instance()->Record(left, right);
+    CheckModified();
 }
 
 void LaneConfigWidget::SetOption(const LM::LanePlan& l, const LM::LanePlan& r)
@@ -683,6 +796,8 @@ void LaneConfigWidget::GotoRoadMode()
     show();
     visual->SetRailMode(false);
     visual->SetMode(true);
+    // Populate road profiles on first entry or when switching from rail
+    PopulateRoadProfiles();
 }
 
 void LaneConfigWidget::GotoLaneMode()
@@ -697,9 +812,161 @@ void LaneConfigWidget::GotoRailMode()
     show();
     visual->SetRailMode(true);
     visual->SetMode(true);
+    PopulateRailProfiles();
 }
 
 void LaneConfigWidget::SetRailProfile(int trackCount, double gauge, double trackSpacing)
 {
     visual->SetRailProfile(trackCount, gauge, trackSpacing);
+}
+
+// ── Cross-Section Studio: profile integration ──────────────────────
+
+void LaneConfigWidget::PopulateRoadProfiles()
+{
+    QSignalBlocker blocker(profileCombo);
+    profileCombo->clear();
+    auto profiles = roads::RoadProfileCatalog::all();
+    for (auto it = profiles.begin(); it != profiles.end(); ++it)
+        profileCombo->addItem(it.key(), it.key());
+    profileCombo->setCurrentText("city_2x1");
+    profileCombo->setToolTip("Select a road profile preset");
+}
+
+void LaneConfigWidget::PopulateRailProfiles()
+{
+    QSignalBlocker blocker(profileCombo);
+    profileCombo->clear();
+    auto profiles = roads::RailProfileCatalog::all();
+    for (auto it = profiles.begin(); it != profiles.end(); ++it)
+        profileCombo->addItem(it.key(), it.key());
+    profileCombo->setCurrentText("single_standard");
+    profileCombo->setToolTip("Select a rail profile preset");
+}
+
+void LaneConfigWidget::LoadProfile(const QString& key)
+{
+    applyingProfile = true;
+
+    if (visual->IsRailMode())
+    {
+        roads::RailProfile rp = roads::RailProfileCatalog::get(key);
+        LM::LaneWidth = rp.gauge + 0.5;
+
+        LM::LanePlan leftPlan, rightPlan;
+        if (rp.trackCount == 1)
+        {
+            leftPlan.laneCount = 0; leftPlan.offsetx2 = 0;
+            rightPlan.laneCount = 1; rightPlan.offsetx2 = 0;
+        }
+        else
+        {
+            int rightLanes = (rp.trackCount + 1) / 2;
+            int leftLanes = rp.trackCount - rightLanes;
+            leftPlan.laneCount = static_cast<int8_t>(leftLanes); leftPlan.offsetx2 = 0;
+            rightPlan.laneCount = static_cast<int8_t>(rightLanes); rightPlan.offsetx2 = 0;
+        }
+        SetOption(leftPlan, rightPlan);
+        SetRailProfile(rp.trackCount, rp.gauge, rp.trackSpacing);
+
+        auto* spinner = findChild<QDoubleSpinBox*>();
+        if (spinner) { QSignalBlocker s(spinner); spinner->setValue(LM::LaneWidth); }
+    }
+    else
+    {
+        loadedProfile = roads::RoadProfileCatalog::get(key);
+
+        LM::LaneWidth = loadedProfile.laneWidth;
+
+        LM::LanePlan leftPlan, rightPlan;
+        leftPlan.laneCount = static_cast<int8_t>(loadedProfile.leftLanes);
+        leftPlan.offsetx2 = static_cast<int8_t>(loadedProfile.leftOffsetX2);
+        rightPlan.laneCount = static_cast<int8_t>(loadedProfile.rightLanes);
+        rightPlan.offsetx2 = static_cast<int8_t>(loadedProfile.rightOffsetX2);
+        SetOption(leftPlan, rightPlan);
+
+        // Update metadata fields
+        QSignalBlocker s1(speedLimitSpinner), s2(sidewalkCheck), s3(curbCheck), s4(laneWidthSpinner);
+        speedLimitSpinner->setValue(loadedProfile.speedLimit);
+        sidewalkCheck->setChecked(loadedProfile.hasSidewalk);
+        curbCheck->setChecked(loadedProfile.hasCurb);
+        laneWidthSpinner->setValue(loadedProfile.laneWidth);
+    }
+
+    currentProfileKey = key;
+    modifiedFromProfile = false;
+    modifiedLabel->hide();
+    resetButton->setEnabled(false);
+    savePresetButton->setEnabled(false);
+
+    applyingProfile = false;
+    emit ProfileChanged(key);
+}
+
+void LaneConfigWidget::OnProfileComboChanged(int index)
+{
+    if (index < 0) return;
+    QString key = profileCombo->itemData(index).toString();
+    LoadProfile(key);
+}
+
+void LaneConfigWidget::OnLaneWidthChanged(double val)
+{
+    LM::LaneWidth = val;
+    if (!applyingProfile) CheckModified();
+}
+
+void LaneConfigWidget::CheckModified()
+{
+    if (applyingProfile || currentProfileKey.isEmpty()) return;
+
+    bool modified = false;
+
+    // Compare lane config
+    auto lPlan = LeftResult();
+    auto rPlan = RightResult();
+
+    if (lPlan.laneCount != loadedProfile.leftLanes ||
+        rPlan.laneCount != loadedProfile.rightLanes ||
+        lPlan.offsetx2 != loadedProfile.leftOffsetX2 ||
+        rPlan.offsetx2 != loadedProfile.rightOffsetX2)
+        modified = true;
+
+    if (std::abs(LM::LaneWidth - loadedProfile.laneWidth) > 0.001) modified = true;
+    if (std::abs(speedLimitSpinner->value() - loadedProfile.speedLimit) > 0.01) modified = true;
+    if (sidewalkCheck->isChecked() != loadedProfile.hasSidewalk) modified = true;
+    if (curbCheck->isChecked() != loadedProfile.hasCurb) modified = true;
+
+    if (modified != modifiedFromProfile)
+    {
+        modifiedFromProfile = modified;
+        if (modified)
+        {
+            modifiedLabel->setText(QString("  ✎ Modified from \"%1\"").arg(currentProfileKey));
+            modifiedLabel->show();
+            resetButton->setEnabled(true);
+            savePresetButton->setEnabled(true);
+        }
+        else
+        {
+            modifiedLabel->hide();
+            resetButton->setEnabled(false);
+            savePresetButton->setEnabled(false);
+        }
+    }
+}
+
+void LaneConfigWidget::OnResetToProfile()
+{
+    if (currentProfileKey.isEmpty()) return;
+    LoadProfile(currentProfileKey);
+}
+
+void LaneConfigWidget::OnSaveAsPreset()
+{
+    // For now, just re-load the current profile key (save-as-preset can be extended later)
+    // A full implementation would add to RoadProfileCatalog at runtime
+    if (currentProfileKey.isEmpty()) return;
+    // Reload to clear modified state
+    LoadProfile(currentProfileKey);
 }

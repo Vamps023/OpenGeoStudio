@@ -1,6 +1,7 @@
 #pragma once
 #include <QtWidgets>
 #include "road_profile.h"
+#include "RoadTypes.hpp"
 
 #include <array>
 #include <vector>
@@ -110,10 +111,36 @@ public:
 
     void SetRailProfile(int trackCount, double gauge, double trackSpacing);
 
+    /// Load a road profile preset by key (e.g. "city_2x1")
+    void LoadProfile(const QString& key);
+
+    /// Populate the profile combo with road profiles (called when entering road mode)
+    void PopulateRoadProfiles();
+
+    /// Populate the profile combo with rail profiles (called when entering rail mode)
+    void PopulateRailProfiles();
+
+    /// Current profile key
+    QString CurrentProfileKey() const { return currentProfileKey; }
+
+    /// Whether the current config has been modified from the loaded profile
+    bool IsModifiedFromProfile() const { return modifiedFromProfile; }
+
     virtual QSize sizeHint() const override;
+
+signals:
+    /// Emitted when the profile selection changes (by user or programmatically)
+    void ProfileChanged(const QString& key);
+    /// Emitted when road-level metadata (speed/sidewalk/curb) changes
+    void RoadMetadataChanged(double speedLimit, bool hasSidewalk, bool hasCurb);
 
 private slots:
     void OnOptionChange(LM::LanePlan left, LM::LanePlan right);
+    void OnProfileComboChanged(int index);
+    void OnLaneWidthChanged(double val);
+    void OnResetToProfile();
+    void OnSaveAsPreset();
+    void CheckModified();
 
 private:
     CrossSectionVisual* visual;
@@ -121,6 +148,22 @@ private:
     QToolButton* swapDirectionButton;  // Swap left/right lane direction
     QToolButton* flipLaneButton;       // Flip selected lane direction
     QDoubleSpinBox* laneWidthSpinner;
+
+    // ── Unified Cross-Section Studio additions ──
+    QComboBox* profileCombo;           // Profile preset selector (moved from top bar)
+    QDoubleSpinBox* speedLimitSpinner;  // Speed limit (km/h)
+    QCheckBox* sidewalkCheck;           // Has sidewalk?
+    QCheckBox* curbCheck;               // Has curb?
+    QLabel* modifiedLabel;             // "Modified from <profile>" indicator
+    QPushButton* resetButton;          // Reset to profile preset
+    QPushButton* savePresetButton;     // Save current config as new preset
+
+    QString currentProfileKey;         // Key of the currently loaded profile
+    bool modifiedFromProfile = false;  // True if user has tweaked away from the preset
+    bool applyingProfile = false;      // Guard to suppress modified-flag while loading a preset
+
+    // Snapshot of the loaded profile for comparison + reset
+    roads::RoadProfile loadedProfile;
 
     const QPixmap incLogo, decLogo;
 };
