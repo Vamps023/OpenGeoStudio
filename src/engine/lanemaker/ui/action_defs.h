@@ -15,7 +15,12 @@ namespace LM
         Mode_Destroy,
         Mode_Modify,
         Mode_StraightLine,
-        Mode_FlipLane
+        Mode_FlipLane,
+        Mode_PlaceSign,
+        Mode_PlaceMarking,
+        Mode_CreateRoundabout,
+        Mode_PlaceFurniture,
+        Mode_Measure
     };
 
     enum ActionType

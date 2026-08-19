@@ -25,5 +25,12 @@
         <file>svg/swap_direction.svg</file>
         <file>svg/flip_lane.svg</file>
         <file>svg/flip_lane_road.svg</file>
+        <file>svg/sign_mode.svg</file>
+        <file>svg/marking_mode.svg</file>
+        <file>svg/validation.svg</file>
+        <file>svg/roundabout_mode.svg</file>
+        <file>svg/furniture_mode.svg</file>
+        <file>svg/measure_mode.svg</file>
+        <file>svg/snap_settings.svg</file>
     </qresource>
 </RCC>

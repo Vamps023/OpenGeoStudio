@@ -18,18 +18,21 @@ namespace LM
 
     void AbstractGraphicsItem::AddQuads(const odr::Line3D& lBorder, const odr::Line3D& rBorder, QColor color)
     {
+        if (!g_mapViewGL) return;
         if (lBorder.size() > 1)
             graphicsIndex.push_back(g_mapViewGL->AddQuads(lBorder, rBorder, color, objectID));
     }
 
     void AbstractGraphicsItem::AddLine(const odr::Line3D& border, double width, QColor color)
     {
+        if (!g_mapViewGL) return;
         if (border.size() > 1)
             graphicsIndex.push_back(g_mapViewGL->AddLine(border, width, color, objectID));
     }
 
     void AbstractGraphicsItem::AddPoly(const odr::Line3D& boundary, QColor color, double h)
     {
+        if (!g_mapViewGL) return;
         if (boundary.size() < 3)
         {
             return;
@@ -46,6 +49,11 @@ namespace LM
 
     void AbstractGraphicsItem::Clear()
     {
+        if (!g_mapViewGL)
+        {
+            graphicsIndex.clear();
+            return;
+        }
         for (auto idx : graphicsIndex)
         {
             g_mapViewGL->RemoveItem(idx, objectID == -1);
@@ -111,7 +119,12 @@ namespace LM
         for (const auto& id2Lane : laneSection.id_to_lane)
         {
             const auto& lane = id2Lane.second;
-            if (lane.type == "median" || lane.type == "driving")
+            // Render all lane types: driving, median, sidewalk, shoulder,
+            // biking, bus, parking, border (curb)
+            if (lane.type == "median" || lane.type == "driving" ||
+                lane.type == "sidewalk" || lane.type == "shoulder" ||
+                lane.type == "biking" || lane.type == "bus" ||
+                lane.type == "parking" || lane.type == "border")
             {
                 odr::Line3D innerBorder, outerBorder;
                 gen.get_lane_border_line(lane, sMin, sMax, 0.1f, outerBorder, innerBorder);
@@ -127,8 +140,29 @@ namespace LM
                 // outline for highlight
                 auto sMid = (sMin + sMax) / 2;
                 double lane_width = std::abs(lane.outer_border.get(sMid) - lane.inner_border.get(sMid));
-                AddQuads(innerBorder, outerBorder, lane.type == "median" ? 
-                    (lane_width > LaneWidth + epsilon ? Qt::darkGreen : Qt::yellow) : Qt::darkGray);
+
+                // Choose color based on lane type
+                QColor laneColor;
+                if (lane.type == "median")
+                    laneColor = (lane_width > LaneWidth + epsilon ? Qt::darkGreen : Qt::yellow);
+                else if (lane.type == "driving")
+                    laneColor = Qt::darkGray;
+                else if (lane.type == "sidewalk")
+                    laneColor = QColor(180, 180, 180);  // light gray
+                else if (lane.type == "shoulder")
+                    laneColor = QColor(120, 120, 120);  // medium gray
+                else if (lane.type == "biking")
+                    laneColor = QColor(100, 149, 237);  // blue
+                else if (lane.type == "bus")
+                    laneColor = QColor(255, 165, 0);    // orange
+                else if (lane.type == "parking")
+                    laneColor = QColor(169, 169, 169);  // dark gray
+                else if (lane.type == "border")
+                    laneColor = Qt::gray;               // curb
+                else
+                    laneColor = Qt::darkGray;
+
+                AddQuads(innerBorder, outerBorder, laneColor);
 
                 // Draw magnetic snap area
                 const double MagneticSnapDist = 2;

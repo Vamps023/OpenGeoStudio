@@ -10,6 +10,7 @@ namespace LM
     {
         const double RoadMinLength = 5; // Discard if any leftover road is too short
 
+        int overlapSafety = 0;
         while (true)
         {
             std::optional<LM::Road::RoadsOverlap> overlap = newRoad->FirstOverlap(newPartBegin, newPartEnd);
@@ -17,6 +18,12 @@ namespace LM
             if (!overlap.has_value())
             {
                 break;
+            }
+
+            if (++overlapSafety > 1000)
+            {
+                spdlog::error("CreateJunctionAtZOverlap: infinite loop detected, aborting");
+                return false;
             }
 
             auto road2 = overlap->road2.lock();

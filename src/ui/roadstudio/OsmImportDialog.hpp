@@ -35,6 +35,7 @@
 #include <QComboBox>
 #include <QTextEdit>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -187,6 +188,8 @@ private slots:
         if (path.isEmpty()) return;
 
         OsmExporter::OpenDriveParams params;
+        if (m_elevationCheck->isChecked() && m_elevation.valid())
+            params.elevation = &m_elevation;
         QString error;
         if (OsmExporter::exportToOpenDrive(path, m_result.network,
                                             m_result.junctions,
@@ -207,6 +210,8 @@ private slots:
         if (path.isEmpty()) return;
 
         OsmExporter::GeoJsonParams params;
+        if (m_elevationCheck->isChecked() && m_elevation.valid())
+            params.elevation = &m_elevation;
         QString error;
         if (OsmExporter::exportToGeoJson(path, m_result.network,
                                           m_result.junctions,
@@ -335,6 +340,14 @@ private:
         exportLayout->addWidget(m_exportGeoButton);
 
         mainLayout->addLayout(exportLayout);
+
+        // Load exported network into the Road Studio editor after this dialog closes
+        m_openInEditor = true;
+        auto* openInEditorCheck = new QCheckBox("Load exported roads into the editor");
+        openInEditorCheck->setChecked(true);
+        connect(openInEditorCheck, &QCheckBox::toggled, this,
+                [this](bool on) { m_openInEditor = on; });
+        mainLayout->addWidget(openInEditorCheck);
 
         // Close button
         auto* closeLayout = new QHBoxLayout();

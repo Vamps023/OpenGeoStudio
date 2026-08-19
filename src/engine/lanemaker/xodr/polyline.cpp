@@ -161,8 +161,13 @@ namespace LM
             }
 
             iFound = true;
-            auto candSA = (sMarksA[0] * heLengthA[1] + sMarksA[1] * heLengthA[0]) / (heLengthA[0] + heLengthA[1]);
-            auto candSB = (sMarksB[0] * heLengthB[1] + sMarksB[1] * heLengthB[0]) / (heLengthB[0] + heLengthB[1]);
+            // Guard against division by zero when half-edge lengths sum to zero
+            double denomA = heLengthA[0] + heLengthA[1];
+            double denomB = heLengthB[0] + heLengthB[1];
+            auto candSA = (std::abs(denomA) < 1e-12) ? sMarksA[0] :
+                (sMarksA[0] * heLengthA[1] + sMarksA[1] * heLengthA[0]) / denomA;
+            auto candSB = (std::abs(denomB) < 1e-12) ? sMarksB[0] :
+                (sMarksB[0] * heLengthB[1] + sMarksB[1] * heLengthB[0]) / denomB;
             outSA = searchBeginA == odr::RoadLink::ContactPoint_End ? std::max(outSA, candSA) : std::min(outSA, candSA);
             outSB = searchBeginB == odr::RoadLink::ContactPoint_End ? std::max(outSB, candSB) : std::min(outSB, candSB);
         }

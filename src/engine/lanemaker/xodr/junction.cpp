@@ -13,11 +13,21 @@
 
 namespace LM
 {
+    // Safe string-to-int conversion that logs a warning instead of throwing
+    static int safeStoi(const std::string& s, int fallback = -1)
+    {
+        try { return std::stoi(s); }
+        catch (const std::exception& e) {
+            spdlog::warn("safeStoi: failed to parse '{}' as int: {}", s, e.what());
+            return fallback;
+        }
+    }
+
     AbstractJunction::AbstractJunction() :
         generated("", std::to_string(IDGenerator::ForType(IDType::Junction)->GenerateID(this)), odr::JunctionType::Common)
     {
         generated.name = "Junction " + generated.id;
-        if (std::stoi(ID()) >= MaxJunctionID)
+        if (safeStoi(ID()) >= MaxJunctionID)
         {
             throw std::logic_error("Junction exceeds maximum supported number!");
         }
@@ -26,7 +36,7 @@ namespace LM
     AbstractJunction::AbstractJunction(const odr::Junction& serialized) :
         generated(serialized)
     {
-        IDGenerator::ForType(IDType::Junction)->TakeID(std::stoi(ID()), this);
+        IDGenerator::ForType(IDType::Junction)->TakeID(safeStoi(ID()), this);
     }
 
     int AbstractJunction::Attach(ConnectionInfo conn)
@@ -128,11 +138,12 @@ namespace LM
             }
             else
             {
-                assert(false);
+                spdlog::error("Junction::Degenerate: unexpected contact point");
+                return;
             }
 
             clearLinkage(ID(), onlyRoad->ID());
-            IDGenerator::ForType(IDType::Road)->NotifyChange(std::stoi(onlyRoad->ID()));
+            IDGenerator::ForType(IDType::Road)->NotifyChange(safeStoi(onlyRoad->ID()));
             formedFrom.clear();
             // Junction will then be destroyed
         }
@@ -177,6 +188,11 @@ namespace LM
         auto contactA = formedFrom.begin()->contact;
         auto roadB = formedFrom.rbegin()->road.lock();
         auto contactB = formedFrom.rbegin()->contact;
+        if (!roadA || !roadB)
+        {
+            spdlog::warn("Junction::CanDegerate: expired road reference");
+            return false;
+        }
         if (roadA == roadB)
         {
             // RoadJoin_SelfLoop
@@ -191,6 +207,12 @@ namespace LM
         auto contactA = formedFrom.begin()->contact;
         auto roadB = formedFrom.rbegin()->road.lock();
         auto contactB = formedFrom.rbegin()->contact;
+
+        if (!roadA || !roadB)
+        {
+            spdlog::warn("Junction::Degenerate: expired road reference");
+            return;
+        }
 
         clearLinkage(ID(), roadA->ID());
         if (contactA == odr::RoadLink::ContactPoint_Start)
@@ -224,7 +246,9 @@ namespace LM
         std::set<std::pair<Road*, odr::RoadLink::ContactPoint>> rtn;
         for (auto info : formedFrom)
         {
-            rtn.emplace(std::make_pair(info.road.lock().get(), info.contact));
+            auto locked = info.road.lock();
+            if (!locked) continue;
+            rtn.emplace(std::make_pair(locked.get(), info.contact));
         }
         return rtn;
     }
@@ -251,6 +275,11 @@ namespace LM
     double AbstractJunction::Elevation() const
     {
         const auto road = formedFrom.begin()->road.lock();
+        if (!road)
+        {
+            spdlog::warn("Junction::Elevation: expired road reference");
+            return 0.0;
+        }
         auto s = formedFrom.begin()->contact == odr::RoadLink::ContactPoint_Start ? 0 :
             road->Length();
         return road->RefLine().elevation_profile.get(s);
@@ -268,7 +297,7 @@ namespace LM
 
         if (!ID().empty())
         {
-            IDGenerator::ForType(IDType::Junction)->FreeID(std::stoi(ID()));
+            IDGenerator::ForType(IDType::Junction)->FreeID(safeStoi(ID()));
         }
     }
 
@@ -349,7 +378,7 @@ namespace LM
 #endif
         GenerateSignalPhase();
 
-        IDGenerator::ForType(IDType::Junction)->NotifyChange(std::stoi(ID()));
+        IDGenerator::ForType(IDType::Junction)->NotifyChange(safeStoi(ID()));
 
         return generationError;
     }
@@ -365,6 +394,11 @@ namespace LM
         auto contactA = formedFrom.begin()->contact;
         auto roadB = formedFrom.rbegin()->road.lock();
         auto contactB = formedFrom.rbegin()->contact;
+        if (!roadA || !roadB)
+        {
+            spdlog::warn("Junction::CanDegerate: expired road reference");
+            return false;
+        }
         auto roadAIn = contactA == odr::RoadLink::ContactPoint_Start ? roadA->generated.rr_profile.LeftExit().laneCount :
             roadA->generated.rr_profile.RightExit().laneCount;
         auto roadAOut = contactA == odr::RoadLink::ContactPoint_Start ? roadA->generated.rr_profile.RightEntrance().laneCount :
@@ -504,6 +538,7 @@ namespace LM
             
             // If two connecting roads originate from same lane, put them in the same group.
             auto allIncomings = connectingToIncomingLanes.at(groupInitiator->ID());
+            int safetyCounter = 0;
             while (true)
             {
                 bool enrolledThisRound = false;
@@ -524,6 +559,11 @@ namespace LM
                 }
                 if (!enrolledThisRound)
                     break;
+                if (++safetyCounter > 10000)
+                {
+                    spdlog::error("Junction::Generate: infinite loop detected in group assignment");
+                    break;
+                }
             }
 
             for (int i = pendingAssign.size() - 1; i >= 0; --i)
@@ -670,7 +710,7 @@ namespace LM
                     throw std::logic_error("DirectJunction::CreateFrom Invalid contact point");
                 }
                 clearLinkage(ID(), connectedRoad->ID());
-                IDGenerator::ForType(IDType::Road)->NotifyChange(std::stoi(connectedRoad->ID()));
+                IDGenerator::ForType(IDType::Road)->NotifyChange(safeStoi(connectedRoad->ID()));
             }
             formedFrom.clear();
             // Junction will then be destroyed
@@ -690,7 +730,7 @@ namespace LM
                 connectedRoad->successorJunction = shared_from_this();
                 connectedRoad->generated.successor = odr::RoadLink(ID(), odr::RoadLink::Type_Junction);
             }
-            IDGenerator::ForType(IDType::Road)->NotifyChange(std::stoi(connectedRoad->ID()));
+            IDGenerator::ForType(IDType::Road)->NotifyChange(safeStoi(connectedRoad->ID()));
         }
 
         generated.id_to_connection.clear();
@@ -754,7 +794,7 @@ namespace LM
         }
 #endif
 
-        IDGenerator::ForType(IDType::Junction)->NotifyChange(std::stoi(ID()));
+        IDGenerator::ForType(IDType::Junction)->NotifyChange(safeStoi(ID()));
 
         return JunctionError::Junction_NoError;
     }

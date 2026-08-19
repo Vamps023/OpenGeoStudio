@@ -29,10 +29,21 @@ namespace LM
 {
     bool Road::ClearingMap = false;
 
+    // Safe string-to-int conversion that logs a warning instead of throwing
+    // for nonnumeric IDs (which can occur when loading corrupted/old files).
+    static int safeStoi(const std::string& s, int fallback = -1)
+    {
+        try { return std::stoi(s); }
+        catch (const std::exception& e) {
+            spdlog::warn("safeStoi: failed to parse '{}' as int: {}", s, e.what());
+            return fallback;
+        }
+    }
+
     Road::Road(const LaneProfile& p, std::unique_ptr<odr::RoadGeometry> l) :
         generated(std::to_string(IDGenerator::ForType(IDType::Road)->GenerateID(this)), 0, "-1")
     {
-        if (std::stoi(ID()) >= MaxRoadID)
+        if (safeStoi(ID()) >= MaxRoadID)
         {
             throw std::logic_error("Junction exceeds maximum supported number!");
         }
@@ -45,7 +56,7 @@ namespace LM
     Road::Road(const LaneProfile& p, odr::RefLine& l) :
         generated(std::to_string(IDGenerator::ForType(IDType::Road)->GenerateID(this)), 0, "-1")
     {
-        if (std::stoi(ID()) >= MaxRoadID)
+        if (safeStoi(ID()) >= MaxRoadID)
         {
             throw std::logic_error("Junction exceeds maximum supported number!");
         }
@@ -57,7 +68,7 @@ namespace LM
     Road::Road(const odr::Road& serialized):
         generated(serialized)
     {
-        IDGenerator::ForType(IDType::Road)->TakeID(std::stoi(ID()), this);
+        IDGenerator::ForType(IDType::Road)->TakeID(safeStoi(ID()), this);
     }
 
     void Road::Generate(bool notifyJunctions)
@@ -68,7 +79,7 @@ namespace LM
         generated.PlaceMarkings();
         generated.DeriveLaneBorders();
 
-        IDGenerator::ForType(IDType::Road)->NotifyChange(std::stoi(ID()));
+        IDGenerator::ForType(IDType::Road)->NotifyChange(safeStoi(ID()));
 
         if (notifyJunctions)
         {
@@ -126,27 +137,43 @@ namespace LM
 
     Road::~Road()
     {
-        if (successorJunction != nullptr)
+        try
         {
-            if (!ClearingMap)
-                successorJunction->NotifyPotentialChange();
-            successorJunction.reset();
-        }
-        if (predecessorJunction != nullptr)
-        {
-            if (!ClearingMap)
-                predecessorJunction->NotifyPotentialChange();
-            predecessorJunction.reset();
-        }
+            if (successorJunction != nullptr)
+            {
+                if (!ClearingMap)
+                    successorJunction->NotifyPotentialChange();
+                successorJunction.reset();
+            }
+            if (predecessorJunction != nullptr)
+            {
+                if (!ClearingMap)
+                    predecessorJunction->NotifyPotentialChange();
+                predecessorJunction.reset();
+            }
 
-        if (!ID().empty())
-        {
-            spdlog::trace("del road {}", ID());
-            IDGenerator::ForType(IDType::Road)->FreeID(std::stoi(ID()));
+            if (!ID().empty())
+            {
 #ifndef G_TEST
-            s_to_section_graphics.clear();
-            g_mapViewGL->RemoveObject(std::stoi(ID()));
+                spdlog::trace("del road {}", ID());
 #endif
+                IDGenerator::ForType(IDType::Road)->FreeID(safeStoi(ID()));
+#ifndef G_TEST
+                s_to_section_graphics.clear();
+                if (g_mapViewGL)
+                    g_mapViewGL->RemoveObject(safeStoi(ID()));
+#endif
+            }
+        }
+        catch (const std::exception& e)
+        {
+#ifndef G_TEST
+            spdlog::warn("Road::~Road: exception during cleanup: {}", e.what());
+#endif
+        }
+        catch (...)
+        {
+            // Suppress exceptions in destructor to prevent UB
         }
     }
 
@@ -491,7 +518,7 @@ namespace LM
 
     void Road::EnableHighlight(bool enabled)
     {
-        auto id = std::stoi(ID());
+        auto id = safeStoi(ID());
         uint8_t currFlag = static_cast<uint8_t>(g_mapViewGL->GetObjectFlag(id));
         if (enabled)
         {
@@ -507,7 +534,7 @@ namespace LM
 
     void Road::Hide(bool hidden)
     {
-        auto id = std::stoi(ID());
+        auto id = safeStoi(ID());
         uint8_t currFlag = static_cast<uint8_t>(g_mapViewGL->GetObjectFlag(id));
         if (hidden)
         {
@@ -523,7 +550,7 @@ namespace LM
 
     void Road::ShowGreenLight(bool green)
     {
-        auto id = std::stoi(ID());
+        auto id = safeStoi(ID());
         uint8_t currFlag = static_cast<uint8_t>(g_mapViewGL->GetObjectFlag(id));
         if (green)
         {

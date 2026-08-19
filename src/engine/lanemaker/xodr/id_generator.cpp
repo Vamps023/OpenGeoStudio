@@ -1,6 +1,7 @@
 #include "id_generator.h"
 #include <cassert>
 #include <array>
+#include "spdlog/spdlog.h"
 
 std::array<std::unique_ptr<IDGenerator>, static_cast<size_t>(IDType::Count)> idStore;
 
@@ -62,20 +63,27 @@ void IDGenerator::NotifyChange(uint32_t id)
     auto it = assignTo.find(id);
     if (it == assignTo.end())
     {
-        throw;
+        spdlog::warn("NotifyChange: ID {} is not assigned", id);
+        return;
     }
     changeList[id] = it->second;
 }
 
 bool IDGenerator::FreeID(uint32_t id)
 {
-    if (assigned.size() <= id || !assignTo.at(id))
+    if (assigned.size() <= id)
     {
-        // ID does not exist
-        assert(false);
+        spdlog::warn("FreeID: ID {} is out of range", id);
+        return false;
+    }
+    auto it = assignTo.find(id);
+    if (it == assignTo.end() || !it->second)
+    {
+        spdlog::warn("FreeID: ID {} is not assigned", id);
+        return false;
     }
     assigned[id] = false;
-    assignTo.erase(id);
+    assignTo.erase(it);
     changeList[id] = nullptr;
     return true;
 }

@@ -25,6 +25,10 @@ public:
 
     void SetHighlightTo(std::shared_ptr<LM::Road>);
 
+    // Public static utility — used by MainWidget inspector
+    static std::shared_ptr<LM::Road> GetPointerRoad();
+    static odr::Vec2D CursorAtHeight(double);
+
 protected:
     class CustomCursorItem: LM::TemporaryGraphics
     {
@@ -50,9 +54,6 @@ protected:
         Snap_Line,
         Snap_Point
     };
-
-    static std::shared_ptr<LM::Road> GetPointerRoad();
-    static odr::Vec2D CursorAtHeight(double);
 
     float SnapDistFromScale() const;
 

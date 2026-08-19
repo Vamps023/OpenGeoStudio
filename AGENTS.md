@@ -33,6 +33,7 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 | `test_world_model` | World Authoring model tests | 34/34 pass |
 | `test_world_workflow` | World Authoring workflow tests | 22/22 pass |
 | `test_osm_pipeline` | OSM import pipeline tests | 155/155 pass |
+| `test_road_studio` | Road Studio feature tests | 290+ pass (signs, markings, furniture, snapping, measurement, persistence, templates, road model, lanes, cross-section, junctions, roundabouts) |
 | `geometry_segment_tests` | Road engine geometry tests | 261 tests |
 
 ## Architecture

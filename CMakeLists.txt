@@ -162,6 +162,8 @@ set(LANEMAKER_UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_widget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/sign_system.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/marking_graphics.cpp
 )
 # LaneMaker widget sources
 set(LANEMAKER_WIDGET_SOURCES
@@ -685,6 +687,32 @@ if(BUILD_TESTS)
     if(MSVC)
         target_compile_options(test_houston_roundtrip PRIVATE /EHa /bigobj)
     endif()
+
+    # ─── Road Studio feature tests ────────────────────────────
+    add_executable(test_road_studio
+        src/engine/lanemaker/test/test_road_studio.cpp
+        src/engine/lanemaker/ui/sign_system.cpp
+        src/engine/lanemaker/xodr/cross_section_extender.cpp
+    )
+    set_target_properties(test_road_studio PROPERTIES AUTOMOC ON)
+    target_include_directories(test_road_studio PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/xodr
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/libOpenDRIVE/thirdparty
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
+    )
+    target_link_libraries(test_road_studio PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        lanemaker::core
+    )
+    if(MSVC)
+        target_compile_options(test_road_studio PRIVATE /EHa /bigobj)
+    endif()
+    target_compile_definitions(test_road_studio PRIVATE G_TEST)
 endif()
 
 # ─── Print Configuration Summary ─────────────────────────────

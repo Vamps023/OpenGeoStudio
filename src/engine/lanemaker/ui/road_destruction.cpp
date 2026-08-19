@@ -2,6 +2,7 @@
 #include "stats.h"
 #include "junction.h"
 #include "map_view_gl.h"
+#include "sign_system.h"
 
 #include <qevent.h>
 
@@ -92,8 +93,22 @@ bool RoadDestroySession::Complete()
 
     if (from == 0 && to == target->Length())
     {
+        std::string destroyedRoadID = target->ID();
         auto nRemoved = world->allRoads.erase(target);
         if (nRemoved != 1) throw std::logic_error("Road to destroy is not found in world!");
+        // Clean up all signs, markings, and furniture associated with
+        // the destroyed road to prevent orphaned registry entries.
+        auto* signReg = LM::SignRegistry::Instance();
+        auto* markReg = LM::MarkingRegistry::Instance();
+        auto* furnReg = LM::FurnitureRegistry::Instance();
+        // Collect IDs first to avoid iterator invalidation when removing
+        std::vector<std::string> signIds, markIds, furnIds;
+        for (const auto* s : signReg->signsForRoad(destroyedRoadID)) signIds.push_back(s->id);
+        for (const auto* m : markReg->markingsForRoad(destroyedRoadID)) markIds.push_back(m->id);
+        for (const auto* f : furnReg->furnitureForRoad(destroyedRoadID)) furnIds.push_back(f->id);
+        for (const auto& id : signIds) signReg->removeSign(id);
+        for (const auto& id : markIds) markReg->removeMarking(id);
+        for (const auto& id : furnIds) furnReg->removeFurniture(id);
     }
     else if (from == 0)
     {

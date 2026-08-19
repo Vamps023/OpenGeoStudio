@@ -295,6 +295,73 @@ struct RoadProfileCatalog {
                 false, false, 1, 1, 0, 0, 50,
                 "Custom — user-defined configuration"
             }},
+
+            // ─── Bicycle / Bike Lane ────────────────────
+            {"urban_bike_2x1", {
+                "urban_bike_2x1", "asphalt", "marking", 3.25,
+                true, true, 1, 1, 0, 0, 40,
+                "Urban with bike lane — 1 lane each way, sidewalk, 3.25m"
+            }},
+            {"bike_lane_only", {
+                "bike_lane_only", "asphalt", "marking", 1.5,
+                true, true, 0, 1, 0, 0, 25,
+                "Bike lane only — 1.5m width, sidewalk"
+            }},
+
+            // ─── Bus Lane ───────────────────────────────
+            {"bus_lane_2x2", {
+                "bus_lane_2x2", "asphalt", "marking", 3.5,
+                true, true, 2, 2, 0, 0, 50,
+                "Bus corridor — 2 lanes each way, sidewalk, curb"
+            }},
+
+            // ─── Divided Highway with Median ────────────
+            {"divided_highway_2x3", {
+                "divided_highway_2x3", "asphalt", "marking", 3.75,
+                false, false, 3, 3, 2, 2, 110,
+                "Divided highway — 3 lanes each way, 2m median offset"
+            }},
+            {"divided_highway_2x2", {
+                "divided_highway_2x2", "asphalt", "marking", 3.75,
+                false, false, 2, 2, 2, 2, 100,
+                "Divided highway — 2 lanes each way, 2m median offset"
+            }},
+
+            // ─── Residential with Sidewalk ──────────────
+            {"residential_2x1", {
+                "residential_2x1", "asphalt", "marking", 3.0,
+                true, true, 1, 1, 0, 0, 30,
+                "Residential — 1 lane each way, 3.0m, sidewalk, curb"
+            }},
+            {"residential_narrow", {
+                "residential_narrow", "asphalt", "marking", 2.75,
+                true, true, 1, 1, 0, 0, 20,
+                "Narrow residential — 2.75m lanes, sidewalk"
+            }},
+
+            // ─── Industrial ─────────────────────────────
+            {"industrial_2x1", {
+                "industrial_2x1", "asphalt", "marking", 4.0,
+                false, true, 1, 1, 0, 0, 40,
+                "Industrial — 4.0m lanes, curb, no sidewalk"
+            }},
+            {"industrial_2x2", {
+                "industrial_2x2", "asphalt", "marking", 4.0,
+                false, true, 2, 2, 0, 0, 40,
+                "Industrial — 2 lanes each way, 4.0m, curb"
+            }},
+
+            // ─── Expressway ─────────────────────────────
+            {"expressway_2x3", {
+                "expressway_2x3", "asphalt", "marking", 3.75,
+                false, false, 3, 3, 1, 1, 100,
+                "Expressway — 3 lanes each way, 1m median"
+            }},
+            {"expressway_2x4", {
+                "expressway_2x4", "asphalt", "marking", 3.75,
+                false, false, 4, 4, 1, 1, 110,
+                "Expressway — 4 lanes each way, 1m median"
+            }},
         };
     }
 

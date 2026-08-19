@@ -21,6 +21,9 @@
 #include "util.h"
 #include "replay_window.h"
 #include "preference.h"
+#include "sign_system.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include "spdlog/spdlog.h"
 
@@ -225,6 +228,23 @@ void MainWindow::saveToPath(const QString& path)
     }
     QFile::remove(tempFile);
 
+    // Save Road Studio custom data (signs, markings, furniture) as a
+    // JSON sidecar file alongside the .xodr file.
+    QString sidecarPath = s + ".json";
+    QJsonObject sidecar;
+    sidecar["signs"] = LM::SignRegistry::Instance()->placedToJson();
+    sidecar["markings"] = LM::MarkingRegistry::Instance()->placedToJson();
+    sidecar["furniture"] = LM::FurnitureRegistry::Instance()->placedToJson();
+    QJsonDocument doc(sidecar);
+    QFile sidecarFile(sidecarPath);
+    if (sidecarFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        sidecarFile.write(doc.toJson(QJsonDocument::Compact));
+        sidecarFile.close();
+        spdlog::info("saveToPath: saved sidecar to: {}", sidecarPath.toStdString());
+    } else {
+        spdlog::error("saveToPath: failed to write sidecar: {}", sidecarPath.toStdString());
+    }
+
     loadedFileName = s.toStdString();
     setProperty("lastRoadFile", s);
 }
@@ -343,8 +363,45 @@ void MainWindow::loadFromPath(const QString& path)
         LM::ActionManager::Instance()->Record(content.toStdString());
     }
 
+    // Load Road Studio custom data (signs, markings, furniture) from
+    // the JSON sidecar file alongside the .xodr file.
+    QString sidecarPath = s + ".json";
+    if (QFile::exists(sidecarPath)) {
+        QFile sidecarFile(sidecarPath);
+        if (sidecarFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QByteArray sidecarData = sidecarFile.readAll();
+            sidecarFile.close();
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(sidecarData, &parseError);
+            if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                QJsonObject obj = doc.object();
+                LM::SignRegistry::Instance()->clearPlaced();
+                LM::MarkingRegistry::Instance()->clearPlaced();
+                LM::FurnitureRegistry::Instance()->clearPlaced();
+                LM::SignRegistry::Instance()->placedFromJson(obj["signs"].toArray());
+                LM::MarkingRegistry::Instance()->placedFromJson(obj["markings"].toArray());
+                LM::FurnitureRegistry::Instance()->placedFromJson(obj["furniture"].toArray());
+                spdlog::info("loadFromPath: loaded sidecar from: {}", sidecarPath.toStdString());
+            } else {
+                spdlog::warn("loadFromPath: failed to parse sidecar: {}", parseError.errorString().toStdString());
+            }
+        }
+    } else {
+        // No sidecar — clear registries to avoid stale data
+        LM::SignRegistry::Instance()->clearPlaced();
+        LM::MarkingRegistry::Instance()->clearPlaced();
+        LM::FurnitureRegistry::Instance()->clearPlaced();
+    }
+
     loadedFileName = s.toStdString();
     setProperty("lastRoadFile", s);
+
+    // Refresh the UI after loading
+    auto* mainWidget = MainWidget::Instance();
+    if (mainWidget) {
+        mainWidget->refreshAllCustomGraphics();
+        mainWidget->refreshObjectTree();
+    }
 
     if (LM::g_mapViewGL) {
         LM::g_mapViewGL->update();
@@ -360,6 +417,11 @@ void MainWindow::undo()
     }
     else
     {
+        auto* mainWidget = MainWidget::Instance();
+        if (mainWidget) {
+            mainWidget->refreshAllCustomGraphics();
+            mainWidget->refreshObjectTree();
+        }
         LM::g_mapViewGL->update();
     }
 }
@@ -373,6 +435,11 @@ void MainWindow::redo()
     }
     else
     {
+        auto* mainWidget = MainWidget::Instance();
+        if (mainWidget) {
+            mainWidget->refreshAllCustomGraphics();
+            mainWidget->refreshObjectTree();
+        }
         LM::g_mapViewGL->update();
     }
 }

@@ -186,6 +186,18 @@ void ReplayWindow::FillHistoryTable()
 				desc += " flip lane";
 				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
 				break;
+			case LM::Mode_PlaceSign:
+				desc += " place sign";
+				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
+				break;
+			case LM::Mode_PlaceMarking:
+				desc += " place marking";
+				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
+				break;
+			case LM::Mode_CreateRoundabout:
+				desc += " create roundabout";
+				icon = QIcon(QPixmap(":/icons/modify_mode.PNG"));
+				break;
 			case LM::Mode_Destroy:
 				desc += " destroy";
 				icon = QIcon(QPixmap(":/icons/destroy_mode.png"));
