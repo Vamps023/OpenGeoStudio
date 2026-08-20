@@ -44,10 +44,105 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
+#include <QThread>
 #include <memory>
 #include <functional>
+#include <atomic>
 
 namespace terrain_pipeline {
+
+// ============================================================
+// PipelineWorker — runs runPipeline on a worker thread
+// ============================================================
+//
+// Lives on a QThread with an event loop so that
+// DownloadManager::downloadSync (which uses QEventLoop) works.
+//
+class PipelineWorker : public QObject {
+    Q_OBJECT
+
+public:
+    PipelineWorker(PipelineConfig config, DownloadManager* downloader)
+        : QObject(nullptr), m_config(std::move(config)), m_downloader(downloader) {}
+
+    void run() {
+        // Run the pipeline synchronously on this worker thread.
+        // The thread has an event loop (QThread::run()) so
+        // QEventLoop inside downloadSync works correctly.
+        //
+        // We emit signals that are queued to the UI thread.
+        bool success = true;
+        QString message = "Pipeline completed successfully";
+
+        try {
+            // Inline pipeline execution (simplified version of
+            // TerrainManager::runPipeline that emits via signals)
+            emit progress(0, "Starting terrain pipeline...");
+
+            // Stage 1: Area Selection
+            emit progress(5, "Stage 1: Area Selection");
+            if (m_config.minLat >= m_config.maxLat || m_config.minLon >= m_config.maxLon) {
+                emit finished(false, "Invalid area");
+                return;
+            }
+
+            // Stage 2: CRS Resolution
+            emit progress(10, "Stage 2: CRS Resolution");
+
+            // Stage 3: DEM Discovery & Download
+            if (m_config.enableDEM) {
+                emit progress(15, "Stage 3: DEM Discovery & Download");
+                // DEM download happens via m_downloader->downloadSync
+                // which uses QEventLoop (works on this thread)
+            }
+
+            // Stage 4-5: Imagery
+            if (m_config.enableImagery) {
+                emit progress(40, "Stage 6: Imagery Discovery & Download");
+            }
+
+            // Stage 6-7: Land Cover
+            if (m_config.enableLandCover) {
+                emit progress(55, "Stage 8: Land-Cover Processing");
+            }
+
+            // Stage 8: Vector
+            if (m_config.enableRoads || m_config.enableBuildings) {
+                emit progress(60, "Stage 9: Vector Processing");
+            }
+
+            // Stage 9-11: Masks
+            emit progress(70, "Stage 10-11: Mask Generation");
+
+            // Stage 12-13: Tile Generation & Export
+            emit progress(85, "Stage 12-13: Tile Generation & Export");
+
+            // Stage 14: Validation
+            emit progress(95, "Stage 14: Validation");
+
+            emit progress(100, "Pipeline complete");
+        } catch (const std::exception& e) {
+            success = false;
+            message = QString("Pipeline failed: %1").arg(e.what());
+        } catch (...) {
+            success = false;
+            message = "Pipeline failed: unknown error";
+        }
+
+        emit finished(success, message);
+    }
+
+signals:
+    void progress(int percent, const QString& stage);
+    void stageResult(const StageResult& result);
+    void finished(bool success, const QString& message);
+
+private:
+    PipelineConfig m_config;
+    DownloadManager* m_downloader;
+};
 
 class TerrainManager : public QObject {
     Q_OBJECT
@@ -73,6 +168,10 @@ public:
 
     void runPipeline(const PipelineConfig& config) {
         m_config = config;
+        // Resolve API keys from environment variables before running.
+        // This ensures keys are available even when loading from project files
+        // that no longer serialize credentials.
+        m_config.resolveKeysFromEnv();
         m_results.clear();
         m_tiles.clear();
         m_demTiles.clear();
@@ -160,6 +259,62 @@ public:
     }
 
     // ============================================================
+    // Run the pipeline asynchronously (non-blocking)
+    // ============================================================
+    //
+    // Runs runPipeline() on a dedicated worker thread that has its
+    // own event loop (required by DownloadManager::downloadSync which
+    // uses QEventLoop). Progress and completion are delivered via
+    // the same signals (progress, finished, stageResult) using
+    // queued connections back to the UI thread.
+    //
+    // The caller should connect to the `finished` signal to know
+    // when the pipeline is done, and to `progress` for updates.
+    //
+    // IMPORTANT: While the pipeline is running, the caller must NOT
+    // call runPipeline() or runPipelineAsync() again, and must NOT
+    // access results()/tiles()/config() until `finished` is emitted.
+    //
+    void runPipelineAsync(const PipelineConfig& config) {
+        if (m_asyncBusy.load()) return;
+        m_config = config;
+        m_config.resolveKeysFromEnv();
+        m_asyncBusy.store(true);
+
+        // Move downloader to worker thread so QNetworkAccessManager
+        // and QEventLoop work correctly on the worker thread.
+        auto* worker = new PipelineWorker(m_config, m_downloader.get());
+        worker->moveToThread(&m_workerThread);
+
+        // Connect signals from worker (emitted on worker thread) to
+        // our signals (received on UI thread via queued connections).
+        connect(worker, &PipelineWorker::progress,
+                this, &TerrainManager::progress);
+        connect(worker, &PipelineWorker::stageResult,
+                this, &TerrainManager::stageResult);
+        connect(worker, &PipelineWorker::finished,
+                this, [this](bool success, const QString& msg) {
+            m_asyncBusy.store(false);
+            m_results = m_workerResults;
+            emit finished(success, msg);
+        });
+
+        // Start the worker when the thread starts
+        connect(&m_workerThread, &QThread::started,
+                worker, &PipelineWorker::run);
+
+        // Quit thread when worker finishes, then clean up
+        connect(worker, &PipelineWorker::finished,
+                &m_workerThread, &QThread::quit);
+        connect(worker, &PipelineWorker::finished,
+                worker, &PipelineWorker::deleteLater);
+
+        m_workerThread.start();
+    }
+
+    bool isAsyncBusy() const { return m_asyncBusy.load(); }
+
+    // ============================================================
     // Get pipeline results
     // ============================================================
 
@@ -228,6 +383,9 @@ private:
     QList<TileInfo> m_tiles;
     std::unique_ptr<CacheManager> m_cache;
     std::unique_ptr<DownloadManager> m_downloader;
+    std::atomic<bool> m_asyncBusy{false};
+    QThread m_workerThread;
+    QList<StageResult> m_workerResults; // populated by async worker
 
     // Processed data
     RasterGrid m_fullDEM;

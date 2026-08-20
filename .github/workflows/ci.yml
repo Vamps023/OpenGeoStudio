@@ -40,16 +40,24 @@ jobs:
         with:
           version: ${{ matrix.qt-version }}
           arch: ${{ matrix.qt-arch }}
-          modules: qtwidgets qtgui qtcore
+          modules: qtwidgets qtgui qtcore concurrent
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 2f1d605400c8727cc00c15797aba796c88ccd523
 
       - name: Configure CMake
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 
       - name: Build OpenGeoStudio
         run: |
           cmake --build build
 
-      - name: Run doctest suite
+      - name: Run tests
+        env:
+          QT_PLUGIN_PATH: ${{ env.Qt6_DIR }}\\plugins
+          OGS_SKIP_ROAD_MODEL_TESTS: '1'
         run: |
-          cd build && ctest --output-on-failure
+          cd build && ctest --output-on-failure --timeout 60

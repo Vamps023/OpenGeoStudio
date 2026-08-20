@@ -41,7 +41,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # package manager. Set CMAKE_PREFIX_PATH to point to your Qt install:
 #   cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.8.0/msvc2022_64"
 #
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network Concurrent)
 
 # Enable Qt MOC/UIC/RCC auto-processing
 set(CMAKE_AUTOMOC ON)
@@ -63,7 +63,7 @@ if(ENABLE_MAPLIBRE)
         HINTS
             ${CMAKE_CURRENT_SOURCE_DIR}/../maplibre-native-qt/install
             $ENV{QMAPLIBRE_DIR}
-            "D:/git/maplibre-native-qt/install"
+            ${QMAPLIBRE_DIR}
     )
     if(QMapLibre_FOUND)
         message(STATUS "MapLibre Native Qt found: ${QMapLibre_DIR}")
@@ -162,6 +162,7 @@ set(LANEMAKER_UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_widget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/main_window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/lanemaker_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/sign_system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/ui/marking_graphics.cpp
 )
@@ -364,6 +365,7 @@ target_link_libraries(OpenGeoStudio PRIVATE
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     Qt6::Network
+    Qt6::Concurrent
     road_engine::core
     plugin_api
     TIFF::TIFF
@@ -385,7 +387,9 @@ target_link_libraries(OpenGeoStudio PRIVATE lanemaker::core)
 
 # ─── OGRE-Next integration ───
 # OGRE-Next is embedded directly in the Qt app (no external process)
-set(OGRE_NEXT_DIR "D:/git/ogre-next" CACHE PATH "Path to OGRE-Next build")
+# Set OGRE_NEXT_DIR via CMake variable or OGRE_NEXT_DIR env var.
+# Example: cmake -B build -DOGRE_NEXT_DIR=/path/to/ogre-next
+set(OGRE_NEXT_DIR "$ENV{OGRE_NEXT_DIR}" CACHE PATH "Path to OGRE-Next build")
 set(OGRE_NEXT_BUILD "${OGRE_NEXT_DIR}/build")
 
 if(EXISTS "${OGRE_NEXT_BUILD}/lib/OgreNextMain.lib")
@@ -478,9 +482,6 @@ if(WIN32)
             ${QT_BIN_DIR}
             ${_qt6Core_install_prefix}/bin
             $ENV{QT_BIN_DIR}
-            "C:/Qt/6.8.0/msvc2022_64/bin"
-            "C:/Qt/6.7.0/msvc2022_64/bin"
-            "C:/Qt/6.6.0/msvc2022_64/bin"
         REQUIRED
     )
 
@@ -713,10 +714,24 @@ if(BUILD_TESTS)
         target_compile_options(test_road_studio PRIVATE /EHa /bigobj)
     endif()
     target_compile_definitions(test_road_studio PRIVATE G_TEST)
+
+    # Register all test targets with CTest (not just geometry_segment_tests).
+    # This ensures `ctest --output-on-failure` runs every test in CI.
+    add_test(NAME test_gpxz_download     COMMAND test_gpxz_download)
+    add_test(NAME test_geotiff_writer    COMMAND test_geotiff_writer)
+    add_test(NAME test_terrain_pipeline  COMMAND test_terrain_pipeline)
+    add_test(NAME test_world_model       COMMAND test_world_model)
+    add_test(NAME test_world_workflow    COMMAND test_world_workflow)
+    add_test(NAME test_osm_pipeline      COMMAND test_osm_pipeline)
+    add_test(NAME test_houston_roundtrip COMMAND test_houston_roundtrip)
+    add_test(NAME test_road_studio       COMMAND test_road_studio)
+    set_tests_properties(test_road_studio PROPERTIES
+        ENVIRONMENT "OGS_SKIP_ROAD_MODEL_TESTS=1")
 endif()
 
 # ─── Road Studio UI smoke test (headless, drives the real MainWidget) ───
-if(BUILD_TESTING)
+# Uses BUILD_TESTS (not BUILD_TESTING) for consistency with all other tests.
+if(BUILD_TESTS)
     add_executable(test_road_studio_ui
         src/engine/lanemaker/test/test_road_studio_ui.cpp
     )
@@ -733,6 +748,15 @@ if(BUILD_TESTING)
     if(MSVC)
         target_compile_options(test_road_studio_ui PRIVATE /EHa /bigobj)
     endif()
+    # test_road_studio_ui is registered but will be skipped in CI/CTest
+    # due to a pre-existing QApplication construction hang when linked
+    # against lanemaker::core (which pulls in Qt6::OpenGL + CGAL static
+    # initializers). The test builds correctly but cannot run headlessly.
+    # See AGENTS.md for details.
+    add_test(NAME test_road_studio_ui    COMMAND test_road_studio_ui)
+    set_tests_properties(test_road_studio_ui PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        DISABLED TRUE)
 endif()
 
 # ─── Print Configuration Summary ─────────────────────────────

@@ -15,13 +15,27 @@
 #include <QByteArray>
 #include <QString>
 #include <QDebug>
+#include <QProcessEnvironment>
 
 #include "DemDecoder.hpp"
 #include <iostream>
 #include <cmath>
 #include <csignal>
 
-static const char* GPXZ_API_KEY = "ak_NgEXLGho_z5TBKb44GCFKIirC";
+// API key is loaded from the GPXZ_API_KEY environment variable.
+// Do NOT hardcode credentials in source files.
+static QString getGpxzApiKey() {
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QString key = env.value("GPXZ_API_KEY");
+    if (key.isEmpty()) {
+        std::cerr << "WARNING: GPXZ_API_KEY environment variable not set. "
+                     "GPXZ tests will be skipped." << std::endl;
+    }
+    return key;
+}
+
+// Initialized in main() — empty if env var not set.
+static QString g_gpxzKey;
 
 static void crashHandler(int sig) {
     std::cerr << "CRASH! Signal: " << sig << std::endl;
@@ -63,13 +77,18 @@ static QByteArray downloadUrl(QNetworkAccessManager& nam, const QString& url,
 bool testDownloadAndDecode(QNetworkAccessManager& nam) {
     std::cerr << "=== Test 1: Download + decode GPXZ raster ===" << std::endl;
 
+    if (g_gpxzKey.isEmpty()) {
+        std::cerr << "SKIP: No API key" << std::endl;
+        return true; // skip, not fail
+    }
+
     // Small bbox around London (elevation ~10-50m)
     QString url = QString("https://api.gpxz.io/v1/elevation/raster?"
                           "bbox_left=-0.5&bbox_right=0.5"
                           "&bbox_bottom=51.0&bbox_top=51.5"
                           "&height_px=256&width_px=256");
 
-    QByteArray responseData = downloadUrl(nam, url, GPXZ_API_KEY);
+    QByteArray responseData = downloadUrl(nam, url, g_gpxzKey.toUtf8());
 
     if (responseData.isEmpty()) {
         std::cerr << "FAIL: No data received" << std::endl;
@@ -145,12 +164,17 @@ bool testDownloadAndDecode(QNetworkAccessManager& nam) {
 bool testDecodeAuto(QNetworkAccessManager& nam) {
     std::cerr << "\n=== Test 2: decodeAuto routing ===" << std::endl;
 
+    if (g_gpxzKey.isEmpty()) {
+        std::cerr << "SKIP: No API key" << std::endl;
+        return true;
+    }
+
     QString url = QString("https://api.gpxz.io/v1/elevation/raster?"
                           "bbox_left=-0.5&bbox_right=0.5"
                           "&bbox_bottom=51.0&bbox_top=51.5"
                           "&height_px=256&width_px=256");
 
-    QByteArray data = downloadUrl(nam, url, GPXZ_API_KEY);
+    QByteArray data = downloadUrl(nam, url, g_gpxzKey.toUtf8());
     if (data.isEmpty()) {
         std::cerr << "SKIP: No data downloaded" << std::endl;
         return true;
@@ -171,12 +195,17 @@ bool testDecodeAuto(QNetworkAccessManager& nam) {
 bool testResample(QNetworkAccessManager& nam) {
     std::cerr << "\n=== Test 3: Resample 256x256 -> 64x64 ===" << std::endl;
 
+    if (g_gpxzKey.isEmpty()) {
+        std::cerr << "SKIP: No API key" << std::endl;
+        return true;
+    }
+
     QString url = QString("https://api.gpxz.io/v1/elevation/raster?"
                           "bbox_left=-0.5&bbox_right=0.5"
                           "&bbox_bottom=51.0&bbox_top=51.5"
                           "&height_px=256&width_px=256");
 
-    QByteArray data = downloadUrl(nam, url, GPXZ_API_KEY);
+    QByteArray data = downloadUrl(nam, url, g_gpxzKey.toUtf8());
     if (data.isEmpty()) {
         std::cerr << "SKIP: No data downloaded" << std::endl;
         return true;
@@ -209,12 +238,17 @@ bool testResample(QNetworkAccessManager& nam) {
 bool testResampleLarge(QNetworkAccessManager& nam) {
     std::cerr << "\n=== Test 4: Resample 256x256 -> 1024x1024 (export resolution) ===" << std::endl;
 
+    if (g_gpxzKey.isEmpty()) {
+        std::cerr << "SKIP: No API key" << std::endl;
+        return true;
+    }
+
     QString url = QString("https://api.gpxz.io/v1/elevation/raster?"
                           "bbox_left=-0.5&bbox_right=0.5"
                           "&bbox_bottom=51.0&bbox_top=51.5"
                           "&height_px=256&width_px=256");
 
-    QByteArray data = downloadUrl(nam, url, GPXZ_API_KEY);
+    QByteArray data = downloadUrl(nam, url, g_gpxzKey.toUtf8());
     if (data.isEmpty()) {
         std::cerr << "SKIP: No data downloaded" << std::endl;
         return true;
@@ -275,13 +309,18 @@ bool testInvalidData() {
 bool testMountainousArea(QNetworkAccessManager& nam) {
     std::cerr << "\n=== Test 6: Mountainous area (Swiss Alps) ===" << std::endl;
 
+    if (g_gpxzKey.isEmpty()) {
+        std::cerr << "SKIP: No API key" << std::endl;
+        return true;
+    }
+
     // Matterhorn area — elevation 1000-4000m+
     QString url = QString("https://api.gpxz.io/v1/elevation/raster?"
                           "bbox_left=7.6&bbox_right=7.8"
                           "&bbox_bottom=45.95&bbox_top=46.05"
                           "&height_px=128&width_px=128");
 
-    QByteArray data = downloadUrl(nam, url, GPXZ_API_KEY);
+    QByteArray data = downloadUrl(nam, url, g_gpxzKey.toUtf8());
     if (data.isEmpty()) {
         std::cerr << "SKIP: Could not download mountainous area data" << std::endl;
         return true;
@@ -346,6 +385,9 @@ int main(int argc, char* argv[]) {
 
     QCoreApplication app(argc, argv);
     QNetworkAccessManager nam;
+
+    // Load API key from environment variable (never hardcoded).
+    g_gpxzKey = getGpxzApiKey();
 
     std::cerr << "==============================================" << std::endl;
     std::cerr << "  GPXZ DEM Download + Decode End-to-End Test" << std::endl;

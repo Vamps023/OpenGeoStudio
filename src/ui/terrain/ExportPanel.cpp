@@ -75,8 +75,11 @@ ExportPanel::ExportPanel(TerrainStore* store, ApplicationContext* ctx, QWidget* 
     connect(m_engine, &ExportEngine::progress, this, &ExportPanel::onExportProgress);
     connect(m_engine, &ExportEngine::finished, this, &ExportPanel::onExportFinished);
     connect(m_store, &TerrainStore::tileSelectionChanged, this, [this]() {
-        int count = m_store->selectedTiles().size();
-        m_tileCountLabel->setText(QString("%1 tiles selected").arg(count));
+        const int count = m_store->selectedTiles().size();
+        const int total = m_store->tileGrid().tiles.size();
+        m_tileCountLabel->setText(QString("%1 of %2 tiles selected — only these download "
+                                          "(click tiles, Ctrl+drag to box-select)")
+                                      .arg(count).arg(total));
         if (m_tileBadge) m_tileBadge->setText(QString::number(count));
         // Update export button text dynamically
         if (count > 0) {

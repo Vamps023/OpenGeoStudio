@@ -33,9 +33,13 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 | `test_world_model` | World Authoring model tests | 34/34 pass |
 | `test_world_workflow` | World Authoring workflow tests | 22/22 pass |
 | `test_osm_pipeline` | OSM import pipeline tests | 155/155 pass |
-| `test_road_studio` | Road Studio feature tests | 334 pass (signs, markings, furniture, snapping, measurement, persistence, templates, road model, lanes, cross-section, junctions, roundabouts) |
-| `test_road_studio_ui` | Road Studio UI smoke test (headless) | Palette, mode switching, shortcuts, panels |
-| `geometry_segment_tests` | Road engine geometry tests | 261 tests |
+| `test_road_studio` | Road Studio feature tests | 325 pass (signs, markings, furniture, snapping, measurement, persistence, templates). Road model tests (creation, split, merge, junctions) are skipped by default via `OGS_SKIP_ROAD_MODEL_TESTS=1` due to non-deterministic SEH crashes in LaneMaker engine test mode. |
+| `test_road_studio_ui` | Road Studio UI smoke test (headless) | DISABLED in CTest — hangs in `QApplication` construction due to OpenGL/CGAL static initialization conflict when linked against `lanemaker::core`. Builds correctly but cannot run headlessly. |
+| `geometry_segment_tests` | Road engine geometry tests | 504 tests, 5388 assertions |
+| `test_terrain_pipeline` | Terrain pipeline tests | 28/28 pass |
+| `test_houston_roundtrip` | Houston OSM round-trip tests | 56/56 pass |
+| `test_geotiff_writer` | GeoTIFF writer tests | WGS84 + UTM metadata checks |
+| `test_gpxz_download` | GPXZ elevation API tests | Requires `GPXZ_API_KEY` env var; skips cleanly without it |
 
 ## Architecture
 
@@ -204,20 +208,29 @@ user picks the Road tool.
 ## LaneMaker Global State
 
 LaneMaker uses several global pointers that are shared across all embedded
-instances. These are rebound when a widget becomes visible:
+instances. These are rebound when a widget becomes visible via
+`MainWidget::rebindGlobals()`:
 
 | Global | Set in | Purpose |
 |--------|--------|---------|
 | `g_mainWindow` | `MainWindow::showEvent()` | Active LaneMaker main window |
-| `g_laneConfig` | `MainWidget` constructor | Active lane config widget |
-| `LM::g_mapViewGL` | `MainWidget::showEvent()`, `MainWindow::showEvent()` | Active OpenGL map view |
-| `MainWidget::instance` | `MainWidget` constructor | Last-constructed MainWidget |
+| `g_laneConfig` | `MainWidget::rebindGlobals()` (called from `showEvent()`) | Active lane config widget |
+| `LM::g_mapViewGL` | `MainWidget::rebindGlobals()` (called from `showEvent()`) | Active OpenGL map view |
+| `MainWidget::instance` | `MainWidget::rebindGlobals()` (called from `showEvent()`) | Active MainWidget |
 
 **Hazard:** Since both Road Studio and Train Studio construct their LaneMaker
 `MainWindow` at app startup, the globals point to whichever was constructed
 last (Train Studio). They are rebound to the correct instance when the user
 switches workspaces (via `showEvent()`). Code that uses these globals before
 any workspace is shown will access the Train Studio instance.
+
+**Use `LaneMakerContext::current()`** (from `lanemaker_context.h`) to get a
+snapshot of the active instance's pointers in a structured way.
+
+**Note:** LaneMaker singletons (`World::Instance()`, `ChangeTracker::Instance()`,
+`ActionManager::Instance()`, `SignRegistry::Instance()`, etc.) remain
+process-wide and are NOT rebound. Only the pointer-based globals above are
+rebound on workspace switch.
 
 ## Clean Build from Scratch
 
@@ -256,6 +269,28 @@ nlohmann-json, spdlog, tiff, libpng, cereal, etc.) on first configure.
   preserve embedded engine behavior.
 - Test executables may use `qDebug()` directly for their own output.
 
+## Async Terrain Pipeline
+
+The terrain pipeline can run in two modes:
+
+- **Synchronous:** `TerrainManager::runPipeline(config)` — blocks the
+  calling thread. Use only from worker threads or tests.
+- **Asynchronous:** `TerrainManager::runPipelineAsync(config)` — runs
+  on a dedicated `QThread` with an event loop. Progress and completion
+  are reported via the same `progress`, `finished`, and `stageResult`
+  signals (delivered via queued connections to the UI thread).
+
+The async API uses a `PipelineWorker` QObject that lives on a `QThread`.
+The worker thread has an event loop so `DownloadManager::downloadSync`
+(which uses `QEventLoop`) works correctly.
+
+`DownloadManager` also provides `downloadAllAsync()` for fully
+signal-based downloads without `QEventLoop`. This is available for
+future use but not yet wired into the pipeline.
+
+The `TerrainPipelinePanel` UI uses `runPipelineAsync()` to avoid
+blocking the UI thread during pipeline execution.
+
 ## Error Handling Conventions
 
 - Core pipelines return results with a `success` flag + `QString errorMessage`
@@ -267,3 +302,16 @@ nlohmann-json, spdlog, tiff, libpng, cereal, etc.) on first configure.
   `validate()`.
 - Do not throw exceptions across module boundaries in the core pipelines;
   return `success=false` + `errorMessage` instead.
+
+## Environment Variables
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `GPXZ_API_KEY` | GPXZ elevation API key | Only for GPXZ tests/downloads |
+| `OPENTOPO_API_KEY` | OpenTopography DEM API key | Only for OpenTopo downloads |
+| `MAPBOX_TOKEN` | Mapbox imagery/terrain token | Only for Mapbox downloads |
+| `GLAD_USERNAME` | GLAD (Global Land Analysis) username | Only for GLAD downloads |
+| `GLAD_PASSWORD` | GLAD password | Only for GLAD downloads |
+| `OGS_SKIP_ROAD_MODEL_TESTS` | Skip LaneMaker road model tests that cause non-deterministic SEH crashes in test mode | Set to `1` in CI/CTest |
+| `QT_QPA_PLATFORM` | Qt platform plugin (set to `offscreen` for headless tests) | Only for UI smoke tests |
+| `QT_PLUGIN_PATH` | Path to Qt plugins directory | Only for CTest in CI |

@@ -54,6 +54,9 @@ struct ProjectBounds {
 };
 
 struct Project {
+    static constexpr int SCHEMA_VERSION = 1;  // Increment on breaking schema changes
+
+    int schemaVersion = SCHEMA_VERSION;  // .ogproj schema version for migration support
     QString id;
     QString name;
     QString createdAt;   // ISO-8601
@@ -69,6 +72,7 @@ struct Project {
 
     QJsonObject toJson() const {
         QJsonObject j;
+        j["schemaVersion"] = schemaVersion;
         j["id"] = id;
         j["name"] = name;
         j["createdAt"] = createdAt;
@@ -84,6 +88,10 @@ struct Project {
 
     static Project fromJson(const QJsonObject& j) {
         Project p;
+        // schemaVersion: defaults to 0 if missing (legacy projects without
+        // the field). Migration logic should check this value and upgrade
+        // the project as needed.
+        p.schemaVersion = j["schemaVersion"].toInt(0);
         p.id = j["id"].toString();
         p.name = j["name"].toString();
         p.createdAt = j["createdAt"].toString();
@@ -95,6 +103,13 @@ struct Project {
         p.basePath = j["basePath"].toString();
         if (auto b = ProjectBounds::fromJson(j["bounds"].toObject())) {
             p.bounds = *b;
+        }
+        // If the loaded schema is older than current, mark for migration.
+        // Future migration functions will be called here:
+        //   if (p.schemaVersion < SCHEMA_VERSION) p = migrate(p);
+        // For now, just update the version so new saves include it.
+        if (p.schemaVersion < SCHEMA_VERSION) {
+            p.schemaVersion = SCHEMA_VERSION;
         }
         return p;
     }

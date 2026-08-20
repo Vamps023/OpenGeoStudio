@@ -138,8 +138,11 @@ void MainWindow::showEvent(QShowEvent* e)
     // Both RoadStudioWidget and TrainStudioWidget create a MainWindow, and
     // the globals would otherwise point to whichever was constructed last.
     g_mainWindow = this;
-    if (mainWidget && mainWidget->mapViewGL) {
-        LM::g_mapViewGL = mainWidget->mapViewGL;
+    // Rebind all LaneMaker globals (g_mapViewGL, g_laneConfig, MainWidget::instance)
+    // to this window's MainWidget via the public rebindGlobals() method.
+    MainWidget* mw = getMainWidget();
+    if (mw) {
+        mw->rebindGlobals();
     }
 }
 

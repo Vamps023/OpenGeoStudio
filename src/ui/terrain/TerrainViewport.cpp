@@ -104,6 +104,9 @@ void TerrainOverlayWidget::drawSelectionBox(QPainter& p) {
         p.drawRect(rect);
     }
 
+    // Ctrl+drag rectangle tile selection
+    drawRectSelection(p);
+
     // Draw saved bounds
     const auto& bounds = m_store->selectedBounds();
     if (bounds.isValid() && !m_selecting) {
@@ -127,16 +130,73 @@ void TerrainOverlayWidget::drawTileGrid(QPainter& p) {
         QPointF br = geoToScreen(tile.bounds.south, tile.bounds.east);
         QRectF rect(tl, br);
 
-        bool isSelected = selected.contains(tile.id());
+        const bool isSelected = selected.contains(tile.id());
+        const bool isHovered = m_showGrid && tile.id() == m_hoverTile;
         if (isSelected) {
             p.setPen(QPen(QColor(0, 255, 100, 200), 2));
             p.setBrush(QColor(0, 255, 100, 60));
+        } else if (isHovered) {
+            p.setPen(QPen(QColor(255, 255, 255, 220), 2));
+            p.setBrush(QColor(255, 255, 255, 25));
         } else {
             p.setPen(QPen(QColor(255, 255, 255, 100), 1, Qt::DashLine));
             p.setBrush(Qt::NoBrush);
         }
         p.drawRect(rect.normalized());
     }
+}
+
+// Tile under a screen position, or empty string when over no tile
+QString TerrainOverlayWidget::tileAt(const QPointF& screen) const {
+    if (!m_showGrid) return QString();
+    double lat, lon;
+    screenToGeo(screen, lat, lon);
+    if (std::isnan(lat) || std::isnan(lon)) return QString();
+    const auto& grid = m_store->tileGrid();
+    for (const auto& tile : grid.tiles) {
+        if (lat <= tile.bounds.north && lat >= tile.bounds.south &&
+            lon >= tile.bounds.west && lon <= tile.bounds.east) {
+            return tile.id();
+        }
+    }
+    return QString();
+}
+
+// Select (or deselect) every tile intersecting the Ctrl+drag rectangle
+void TerrainOverlayWidget::applyRectSelection(bool select) {
+    double lat1, lon1, lat2, lon2;
+    screenToGeo(m_rectStart, lat1, lon1);
+    screenToGeo(m_rectEnd, lat2, lon2);
+    if (std::isnan(lat1) || std::isnan(lon1)) return;
+
+    const double rNorth = std::max(lat1, lat2);
+    const double rSouth = std::min(lat1, lat2);
+    const double rEast = std::max(lon1, lon2);
+    const double rWest = std::min(lon1, lon2);
+
+    const auto& grid = m_store->tileGrid();
+    const auto& selected = m_store->selectedTiles();
+    for (const auto& tile : grid.tiles) {
+        const bool intersects = tile.bounds.north >= rSouth && tile.bounds.south <= rNorth &&
+                                tile.bounds.east >= rWest && tile.bounds.west <= rEast;
+        if (!intersects) continue;
+        const bool isSelected = selected.contains(tile.id());
+        if (select != isSelected)
+            m_store->toggleTile(tile.id());
+    }
+}
+
+void TerrainOverlayWidget::drawRectSelection(QPainter& p) {
+    if (!m_rectSelecting) return;
+    QRectF rect(QRectF(m_rectStart, m_rectEnd).normalized());
+    if (m_rectSelectMode) {
+        p.setPen(QPen(QColor(0, 255, 100, 220), 2, Qt::DashLine));
+        p.setBrush(QColor(0, 255, 100, 40));
+    } else {
+        p.setPen(QPen(QColor(255, 120, 120, 220), 2, Qt::DashLine));
+        p.setBrush(QColor(255, 120, 120, 40));
+    }
+    p.drawRect(rect);
 }
 
 void TerrainOverlayWidget::drawTileLabels(QPainter& p) {
@@ -160,15 +220,17 @@ void TerrainOverlayWidget::drawTileLabels(QPainter& p) {
 void TerrainOverlayWidget::mousePressEvent(QMouseEvent* event) {
     const QPointF pos = event->position();
 
-    if (event->button() == Qt::MiddleButton ||
-        (event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier))) {
+    if (event->button() == Qt::MiddleButton) {
         m_panning = true;
         m_lastPanPos = pos;
         setCursor(Qt::ClosedHandCursor);
         return;
     }
 
-    if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier)) {
+    // Shift+drag (no Ctrl) draws the export area bounding box (1:1 square)
+    if (event->button() == Qt::LeftButton &&
+        (event->modifiers() & Qt::ShiftModifier) &&
+        !(event->modifiers() & Qt::ControlModifier)) {
         m_selecting = true;
         m_selectStart = pos;
         m_selectEnd = pos;
@@ -177,19 +239,24 @@ void TerrainOverlayWidget::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    // Click on tile toggles selection
+    // Ctrl+drag selects all tiles intersecting the rectangle;
+    // Ctrl+Alt+drag deselects them
+    if (event->button() == Qt::LeftButton &&
+        (event->modifiers() & Qt::ControlModifier)) {
+        m_rectSelecting = true;
+        m_rectSelectMode = !(event->modifiers() & Qt::AltModifier);
+        m_rectStart = pos;
+        m_rectEnd = pos;
+        update();
+        return;
+    }
+
+    // Plain left press: click toggles the tile under the cursor,
+    // drag pans the map (disambiguated in mouseMoveEvent)
     if (event->button() == Qt::LeftButton) {
-        double lat, lon;
-        screenToGeo(pos, lat, lon);
-        const auto& grid = m_store->tileGrid();
-        for (const auto& tile : grid.tiles) {
-            if (lat <= tile.bounds.north && lat >= tile.bounds.south &&
-                lon >= tile.bounds.west && lon <= tile.bounds.east) {
-                m_store->toggleTile(tile.id());
-                update();
-                return;
-            }
-        }
+        m_maybeClick = true;
+        m_pressPos = pos;
+        return;
     }
 }
 
@@ -213,7 +280,33 @@ void TerrainOverlayWidget::mouseMoveEvent(QMouseEvent* event) {
         m_selectEnd.setX(m_selectStart.x() + (dx >= 0 ? size : -size));
         m_selectEnd.setY(m_selectStart.y() + (dy >= 0 ? size : -size));
         update();
+        return;
     }
+
+    if (m_rectSelecting) {
+        m_rectEnd = pos;
+        update();
+        return;
+    }
+
+    // Promote a plain-left press to panning once it becomes a drag
+    if (m_maybeClick) {
+        if ((pos - m_pressPos).manhattanLength() > 4.0) {
+            m_maybeClick = false;
+            m_panning = true;
+            m_lastPanPos = m_pressPos;
+            setCursor(Qt::ClosedHandCursor);
+        }
+        return;
+    }
+
+    // Hover affordance: highlight the tile under the cursor
+    const QString hover = tileAt(pos);
+    if (hover != m_hoverTile) {
+        m_hoverTile = hover;
+        update();
+    }
+    setCursor(hover.isEmpty() ? Qt::ArrowCursor : Qt::PointingHandCursor);
 }
 
 void TerrainOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
@@ -239,6 +332,24 @@ void TerrainOverlayWidget::mouseReleaseEvent(QMouseEvent* event) {
 
         if (bounds.isValid()) {
             m_store->setBounds(bounds);
+        }
+        update();
+        return;
+    }
+
+    if (m_rectSelecting && event->button() == Qt::LeftButton) {
+        m_rectSelecting = false;
+        applyRectSelection(m_rectSelectMode);
+        update();
+        return;
+    }
+
+    // Plain click (never became a drag) toggles the tile under the cursor
+    if (m_maybeClick && event->button() == Qt::LeftButton) {
+        m_maybeClick = false;
+        const QString id = tileAt(event->position());
+        if (!id.isEmpty()) {
+            m_store->toggleTile(id);
         }
         update();
     }

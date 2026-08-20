@@ -18,6 +18,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QAuthenticator>
+#include <QProcessEnvironment>
 #include <cmath>
 #include <utility>
 #include <limits>
@@ -35,6 +36,29 @@
 #ifndef TIFFTAG_GEOKEYDIRECTORY
 #define TIFFTAG_GEOKEYDIRECTORY 34735
 #endif
+
+// ============================================================
+// Credential helpers — load from environment variables, never hardcoded
+// ============================================================
+
+// GLAD SRTM credentials: loaded from GLAD_USER and GLAD_PASSWORD env vars.
+// Returns empty QByteArray if not set (caller should skip GLAD auth).
+static QByteArray gladAuthHeader() {
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QString user = env.value("GLAD_USER");
+    QString pass = env.value("GLAD_PASSWORD");
+    if (user.isEmpty() || pass.isEmpty())
+        return {};
+    return "Basic " + (user + ":" + pass).toUtf8().toBase64();
+}
+
+// GPXZ API key: loaded from GPXZ_API_KEY env var if not set in settings.
+// Returns the key from settings, or env var fallback, or empty.
+static QString resolveGpxzApiKey(const QString& settingsKey) {
+    if (!settingsKey.isEmpty())
+        return settingsKey;
+    return QProcessEnvironment::systemEnvironment().value("GPXZ_API_KEY");
+}
 
 // ============================================================
 // Shared DEM sampling helpers
@@ -244,9 +268,11 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     QNetworkRequest request((QUrl(url)));
     request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
     if (m_store->exportSettings().demSource == terrain::DemSource::GLAD_SRTM) {
-        // GLAD uses basic auth: glad/ardpas
-        QString header = "glad:ardpas";
-        request.setRawHeader("Authorization", "Basic " + header.toUtf8().toBase64());
+        // GLAD uses basic auth — credentials from env vars GLAD_USER/GLAD_PASSWORD
+        QByteArray auth = gladAuthHeader();
+        if (!auth.isEmpty()) {
+            request.setRawHeader("Authorization", auth);
+        }
     }
     if (!m_store->exportSettings().openTopoApiKey.isEmpty() &&
         m_store->exportSettings().demSource != terrain::DemSource::GLAD_SRTM &&
@@ -254,9 +280,11 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         request.setRawHeader("api-key", m_store->exportSettings().openTopoApiKey.toUtf8());
     }
     // GPXZ uses x-api-key header (more secure than URL parameter)
-    if (m_store->exportSettings().demSource == terrain::DemSource::GPXZ_LiDAR &&
-        !m_store->exportSettings().gpxzApiKey.isEmpty()) {
-        request.setRawHeader("x-api-key", m_store->exportSettings().gpxzApiKey.toUtf8());
+    if (m_store->exportSettings().demSource == terrain::DemSource::GPXZ_LiDAR) {
+        QString gpxzKey = resolveGpxzApiKey(m_store->exportSettings().gpxzApiKey);
+        if (!gpxzKey.isEmpty()) {
+            request.setRawHeader("x-api-key", gpxzKey.toUtf8());
+        }
     }
 
     QNetworkReply* reply = m_network->get(request);
@@ -506,9 +534,11 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
 
     QNetworkRequest request((QUrl(url)));
     request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
-    // GLAD uses basic auth: glad/ardpas
-    request.setRawHeader("Authorization",
-                         "Basic " + QByteArray("glad:ardpas").toBase64());
+    // GLAD imagery uses basic auth — credentials from env vars GLAD_USER/GLAD_PASSWORD
+    QByteArray gladAuth = gladAuthHeader();
+    if (!gladAuth.isEmpty()) {
+        request.setRawHeader("Authorization", gladAuth);
+    }
 
     QNetworkReply* reply = m_network->get(request);
     QTimer::singleShot(60000, reply, [reply]() {
@@ -612,7 +642,7 @@ QString ExportEngine::demTileUrl(const terrain::Tile& tile, int z, int x, int y)
     case terrain::DemSource::OpenTopo_NASADEM: demType = "NASADEM"; break;
     case terrain::DemSource::OpenTopo_USGS_3DEP: demType = "USGS10m"; break;
     case terrain::DemSource::GPXZ_LiDAR:
-        if (settings.gpxzApiKey.isEmpty()) return {};
+        if (resolveGpxzApiKey(settings.gpxzApiKey).isEmpty()) return {};
         // API key is passed via x-api-key header (set in downloadDemForTile).
         // GPXZ requires resolution_m between 0.5 and 1000 metres, so compute
         // an approximate resolution from the tile dimensions and clamp it.

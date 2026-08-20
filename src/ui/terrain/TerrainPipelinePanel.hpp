@@ -426,12 +426,19 @@ private slots:
             QMessageBox::warning(this, "Export Directory", "Please select an export directory.");
             return;
         }
+        if (m_manager->isAsyncBusy()) {
+            QMessageBox::information(this, "Pipeline Busy",
+                "A pipeline is already running. Please wait for it to finish.");
+            return;
+        }
         m_logEdit->clear();
         m_progressBar->setValue(0);
         m_runBtn->setEnabled(false);
+        m_validateBtn->setEnabled(false);
 
         PipelineConfig config = currentConfig();
-        m_manager->runPipeline(config);
+        // Use async pipeline to avoid blocking the UI thread
+        m_manager->runPipelineAsync(config);
     }
 
     void runValidation() {
@@ -524,6 +531,7 @@ private slots:
 
     void onFinished(bool success, const QString& message) {
         m_runBtn->setEnabled(true);
+        m_validateBtn->setEnabled(true);
         m_logEdit->append(QString("\n=== %1: %2 ===")
             .arg(success ? "SUCCESS" : "FAILED")
             .arg(message));

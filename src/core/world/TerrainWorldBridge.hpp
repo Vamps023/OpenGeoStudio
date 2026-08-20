@@ -16,7 +16,12 @@
 #include <QString>
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
+#include <QCache>
 #include "../logger/Logger.hpp"
+
+#include <cmath>
+#include <mutex>
 
 namespace world {
 
@@ -149,15 +154,84 @@ public:
         material.layers.append(layer);
     }
 
-    // Sample terrain height at world coordinates
-    // This is a simplified version — the real implementation would
-    // use the heightmap data from the terrain pipeline
+    // Sample terrain height at world coordinates.
+    // Loads the heightmap from world.settings.heightmapPath (if set)
+    // and samples bilinearly. Returns 0 if no heightmap is available.
+    // The heightmap is cached per-path for performance.
     static float sampleHeight(const World& world, float x, float z)
     {
-        // For now, return 0 — the actual sampling is done by OgreWidget
-        // which has the loaded heightmap image
-        Q_UNUSED(world); Q_UNUSED(x); Q_UNUSED(z);
-        return 0;
+        const QString& hmPath = world.settings.heightmapPath;
+        if (hmPath.isEmpty() || !QFile::exists(hmPath))
+            return 0.0f;
+
+        // Cache the loaded heightmap image by path.
+        // This avoids re-reading the file on every sample call.
+        static QCache<QString, QImage> heightmapCache(4);  // cache up to 4 heightmaps
+        static std::mutex cacheMutex;
+
+        QImage* hm = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            hm = heightmapCache.object(hmPath);
+            if (!hm) {
+                auto img = std::make_unique<QImage>(hmPath);
+                if (img->isNull())
+                    return 0.0f;
+                // Convert to grayscale (8-bit) for height sampling
+                if (img->format() != QImage::Format_Grayscale8 &&
+                    img->format() != QImage::Format_Indexed8) {
+                    *img = img->convertToFormat(QImage::Format_Grayscale8);
+                }
+                hm = img.get();
+                heightmapCache.insert(hmPath, img.release());
+            }
+        }
+
+        // World coordinates → heightmap pixel coordinates
+        float terrainSize = world.settings.terrainSize;
+        float halfSize = terrainSize * 0.5f;
+        float heightScale = world.settings.heightScale;
+
+        // Map world (x, z) to [0, 1] in heightmap space
+        float u = (x + halfSize) / terrainSize;
+        float v = (z + halfSize) / terrainSize;
+
+        // Clamp to [0, 1]
+        u = std::max(0.0f, std::min(1.0f, u));
+        v = std::max(0.0f, std::min(1.0f, v));
+
+        // Convert to pixel coordinates
+        int w = hm->width();
+        int h = hm->height();
+        float fx = u * (w - 1);
+        float fy = v * (h - 1);
+
+        // Bilinear sampling
+        int x0 = int(fx);
+        int y0 = int(fy);
+        int x1 = std::min(x0 + 1, w - 1);
+        int y1 = std::min(y0 + 1, h - 1);
+        float dx = fx - x0;
+        float dy = fy - y0;
+
+        // Sample grayscale values (0-255 → 0.0-1.0)
+        auto sampleGray = [](const QImage* img, int px, int py) -> float {
+            QRgb pixel = img->pixel(px, py);
+            return qGray(pixel) / 255.0f;
+        };
+
+        float h00 = sampleGray(hm, x0, y0);
+        float h10 = sampleGray(hm, x1, y0);
+        float h01 = sampleGray(hm, x0, y1);
+        float h11 = sampleGray(hm, x1, y1);
+
+        float height = h00 * (1 - dx) * (1 - dy) +
+                       h10 * dx * (1 - dy) +
+                       h01 * (1 - dx) * dy +
+                       h11 * dx * dy;
+
+        // Scale to world height
+        return height * heightScale;
     }
 
     // Calculate slope at a point (simplified)

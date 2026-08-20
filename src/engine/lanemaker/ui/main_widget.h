@@ -72,6 +72,11 @@ public:
 
     static MainWidget* Instance();
 
+    // Called by MainWindow::showEvent() to rebind global pointers
+    // (g_laneConfig, MainWidget::instance) to this widget, so that
+    // the currently-visible workspace's LaneConfigWidget is authoritative.
+    void rebindGlobals();
+
     void Painted();
 
     void Reset();

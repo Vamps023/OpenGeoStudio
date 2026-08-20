@@ -16,6 +16,7 @@
 #include <QMap>
 #include <QDateTime>
 #include <QStandardPaths>
+#include <QProcessEnvironment>
 #include <vector>
 #include <array>
 #include <cstdint>
@@ -478,9 +479,9 @@ struct PipelineConfig {
         j["enableBuildings"] = enableBuildings;
         j["demSource"] = static_cast<int>(demSource);
         j["imagerySource"] = static_cast<int>(imagerySource);
-        j["openTopoApiKey"] = openTopoApiKey;
-        j["gpxzApiKey"] = gpxzApiKey;
-        j["mapboxToken"] = mapboxToken;
+        // SECURITY: Never serialize API keys/tokens to project files.
+        // They are resolved at runtime from environment variables instead.
+        // See ARCHITECTURE_RULES.md rule 5.
         j["tileRows"] = tileRows;
         j["tileCols"] = tileCols;
         j["exportDir"] = exportDir;
@@ -517,9 +518,9 @@ struct PipelineConfig {
         c.enableBuildings = j["enableBuildings"].toBool(false);
         c.demSource = static_cast<terrain::DemSource>(j["demSource"].toInt(0));
         c.imagerySource = static_cast<terrain::ImagerySource>(j["imagerySource"].toInt(1));
-        c.openTopoApiKey = j["openTopoApiKey"].toString();
-        c.gpxzApiKey = j["gpxzApiKey"].toString();
-        c.mapboxToken = j["mapboxToken"].toString();
+        // SECURITY: API keys are NOT loaded from project files.
+        // Resolve from environment variables at runtime.
+        // Legacy files may still contain these fields, but we ignore them.
         c.tileRows = j["tileRows"].toInt(2);
         c.tileCols = j["tileCols"].toInt(2);
         c.exportDir = j["exportDir"].toString();
@@ -536,6 +537,19 @@ struct PipelineConfig {
             c.masks.append(MaskDefinition::fromJson(v.toObject()));
 
         return c;
+    }
+
+    // Resolve API keys from environment variables.
+    // Called after fromJson() or when starting a pipeline run.
+    // Env vars: OPENTOPO_API_KEY, GPXZ_API_KEY, MAPBOX_TOKEN
+    void resolveKeysFromEnv() {
+        const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        if (openTopoApiKey.isEmpty())
+            openTopoApiKey = env.value("OPENTOPO_API_KEY");
+        if (gpxzApiKey.isEmpty())
+            gpxzApiKey = env.value("GPXZ_API_KEY");
+        if (mapboxToken.isEmpty())
+            mapboxToken = env.value("MAPBOX_TOKEN");
     }
 
     // Default masks for a full pipeline run

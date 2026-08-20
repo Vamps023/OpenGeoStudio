@@ -62,6 +62,9 @@ private:
     void drawSelectionBox(QPainter& p);
     void drawTileGrid(QPainter& p);
     void drawTileLabels(QPainter& p);
+    QString tileAt(const QPointF& screen) const;
+    void applyRectSelection(bool select);
+    void drawRectSelection(QPainter& p);
 
     TerrainStore* m_store;
     MapViewportWidget* m_map;
@@ -73,6 +76,19 @@ private:
     QPointF m_selectEnd;
     bool m_panning = false;
     QPointF m_lastPanPos;
+
+    // Click-to-toggle vs drag-to-pan disambiguation
+    bool m_maybeClick = false;
+    QPointF m_pressPos;
+
+    // Ctrl+drag multi tile select / Ctrl+Alt+drag deselect
+    bool m_rectSelecting = false;
+    bool m_rectSelectMode = true;  // true = select, false = deselect
+    QPointF m_rectStart;
+    QPointF m_rectEnd;
+
+    // Hovered tile for visual affordance
+    QString m_hoverTile;
 
     bool m_showGrid = true;
     bool m_showLabels = true;

@@ -845,15 +845,25 @@ void MainWidget::resizeEvent(QResizeEvent* event)
 #endif
 }
 
-void MainWidget::showEvent(QShowEvent* event)
+void MainWidget::rebindGlobals()
 {
-    QFrame::showEvent(event);
-    // Update the global pointer to point to THIS widget's MapViewGL.
-    // This is needed because TrainStudioWidget also creates a MainWindow/MapViewGL,
-    // and the global g_mapViewGL would otherwise point to the wrong instance.
+    // Rebind global pointers so LaneMaker's road engine uses THIS widget's
+    // instances. This is needed because TrainStudioWidget also creates a
+    // MainWindow/MapViewGL, and the globals would otherwise point to the
+    // wrong instance.
     if (mapViewGL) {
         LM::g_mapViewGL = mapViewGL;
     }
+    if (laneConfig) {
+        g_laneConfig = laneConfig;
+    }
+    instance = this;
+}
+
+void MainWidget::showEvent(QShowEvent* event)
+{
+    QFrame::showEvent(event);
+    rebindGlobals();
 }
 
 void MainWidget::gotoCreateRoadMode(bool checked)

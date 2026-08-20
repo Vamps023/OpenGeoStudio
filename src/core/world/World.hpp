@@ -547,11 +547,23 @@ public:
 
     bool saveToFile(const QString& path) const {
         QDir().mkpath(QFileInfo(path).absolutePath());
-        QFile f(path);
+        // Transactional save: write to temp file, then atomically rename.
+        QString tempPath = path + ".tmp";
+        QFile f(tempPath);
         if (!f.open(QIODevice::WriteOnly)) return false;
         QJsonDocument doc(toJson());
-        f.write(doc.toJson(QJsonDocument::Indented));
+        qint64 written = f.write(doc.toJson(QJsonDocument::Indented));
+        f.flush();
         f.close();
+        if (written < 0) {
+            QFile::remove(tempPath);
+            return false;
+        }
+        if (QFile::exists(path)) QFile::remove(path);
+        if (!QFile::rename(tempPath, path)) {
+            QFile::remove(tempPath);
+            return false;
+        }
         return true;
     }
 

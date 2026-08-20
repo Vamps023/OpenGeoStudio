@@ -127,7 +127,7 @@ struct ExportSettings {
     QString openTopoApiKey;
     QString mapboxToken;
     QString maptilerToken;
-    QString gpxzApiKey = "ak_NgEXLGho_z5TBKb44GCFKIirC";
+    QString gpxzApiKey;  // Loaded from env var GPXZ_API_KEY or user settings
     QString stadiaApiKey;
 
     // Local file paths

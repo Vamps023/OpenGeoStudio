@@ -2,6 +2,7 @@
 
 #include "TerrainStore.hpp"
 #include "CoordinateTransform.hpp"
+#include <QProcessEnvironment>
 #include <cmath>
 
 TerrainStore::TerrainStore(EventBus* bus, QObject* parent)
@@ -228,7 +229,8 @@ QJsonObject TerrainStore::toJson() const {
     exp["demSource"] = m_exportSettings.demSourceStr();
     exp["heightmapResolution"] = m_exportSettings.heightmapResolution;
     exp["albedoResolution"] = m_exportSettings.albedoResolution;
-    exp["openTopoApiKey"] = m_exportSettings.openTopoApiKey;
+    // SECURITY: Never serialize API keys to project files.
+    // See ARCHITECTURE_RULES.md rule 5.
     j["exportSettings"] = exp;
 
     return j;
@@ -250,9 +252,21 @@ void TerrainStore::fromJson(const QJsonObject& j) {
 
     if (j.contains("exportSettings")) {
         const QJsonObject exp = j["exportSettings"].toObject();
-        m_exportSettings.openTopoApiKey = exp["openTopoApiKey"].toString();
+        // SECURITY: API keys are NOT loaded from project files.
+        // Resolve from environment variables at runtime instead.
         m_exportSettings.heightmapResolution = exp["heightmapResolution"].toInt(1024);
         m_exportSettings.albedoResolution = exp["albedoResolution"].toInt(1024);
+    }
+
+    // Resolve API keys from environment variables
+    {
+        const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        if (m_exportSettings.openTopoApiKey.isEmpty())
+            m_exportSettings.openTopoApiKey = env.value("OPENTOPO_API_KEY");
+        if (m_exportSettings.gpxzApiKey.isEmpty())
+            m_exportSettings.gpxzApiKey = env.value("GPXZ_API_KEY");
+        if (m_exportSettings.mapboxToken.isEmpty())
+            m_exportSettings.mapboxToken = env.value("MAPBOX_TOKEN");
     }
 
     if (m_bounds.isValid()) {

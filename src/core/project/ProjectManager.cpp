@@ -126,15 +126,38 @@ bool ProjectManager::save() {
     // Ensure parent directory exists
     QDir().mkpath(QFileInfo(m_current.filePath).absolutePath());
 
-    QFile file(m_current.filePath);
-    if (!file.open(QIODevice::WriteOnly)) {
-        m_log.error("Failed to save project:", m_current.filePath);
+    // Transactional save: write to a temp file first, then atomically rename.
+    // This prevents leaving the .ogproj file partially written if the write
+    // fails mid-operation (e.g. disk full, crash).
+    QString tempPath = m_current.filePath + ".tmp";
+    QFile tempFile(tempPath);
+    if (!tempFile.open(QIODevice::WriteOnly)) {
+        m_log.error("Failed to create temp file for project save:", tempPath);
         return false;
     }
 
     QJsonDocument doc(m_current.toJson());
-    file.write(doc.toJson(QJsonDocument::Indented));
-    file.close();
+    qint64 written = tempFile.write(doc.toJson(QJsonDocument::Indented));
+    tempFile.flush();
+    tempFile.close();
+
+    if (written < 0) {
+        m_log.error("Failed to write project data to temp file:", tempPath);
+        QFile::remove(tempPath);
+        return false;
+    }
+
+    // Remove the original file if it exists (rename won't overwrite on all platforms)
+    if (QFile::exists(m_current.filePath)) {
+        QFile::remove(m_current.filePath);
+    }
+
+    // Atomic rename: temp → final
+    if (!QFile::rename(tempPath, m_current.filePath)) {
+        m_log.error("Failed to rename temp file to final path:", tempPath, "->", m_current.filePath);
+        QFile::remove(tempPath);
+        return false;
+    }
 
     m_current.dirty = false;
     m_log.info("Project saved:", m_current.name, "to:", m_current.filePath);
