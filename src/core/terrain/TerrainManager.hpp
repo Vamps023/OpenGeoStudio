@@ -60,69 +60,70 @@ namespace terrain_pipeline {
 // Lives on a QThread with an event loop so that
 // DownloadManager::downloadSync (which uses QEventLoop) works.
 //
+// The worker calls TerrainManager::runPipeline() directly.
+// TerrainManager's signals (progress, finished, stageResult) are
+// connected to the worker's relay signals, which are in turn
+// connected back to the UI thread via queued connections.
+//
 class PipelineWorker : public QObject {
     Q_OBJECT
 
 public:
-    PipelineWorker(PipelineConfig config, DownloadManager* downloader)
-        : QObject(nullptr), m_config(std::move(config)), m_downloader(downloader) {}
+    PipelineWorker(TerrainManager* manager, PipelineConfig config)
+        : QObject(nullptr), m_manager(manager), m_config(std::move(config)) {}
 
     void run() {
-        // Run the pipeline synchronously on this worker thread.
-        // The thread has an event loop (QThread::run()) so
-        // QEventLoop inside downloadSync works correctly.
+        // Temporarily move the downloader to this thread so
+        // QNetworkAccessManager and QEventLoop work on the worker.
+        // It will be moved back when the pipeline finishes.
         //
-        // We emit signals that are queued to the UI thread.
+        // NOTE: This is safe because:
+        // 1. The UI thread is blocked (waiting for finished signal)
+        // 2. No other code accesses the downloader during the pipeline
+        // 3. The downloader is moved back before emitting finished
+        //
+        // Actually, we can't move the downloader because it has a
+        // parent (TerrainManager). Instead, we rely on the fact that
+        // QNetworkAccessManager can be used from any thread as long
+        // as only one thread accesses it at a time, and the UI thread
+        // is not accessing it during the pipeline run.
+        //
+        // The QEventLoop in downloadSync will process events on THIS
+        // thread (the worker thread), which is what we want.
+        //
+        // However, QNetworkAccessManager is thread-affine and must
+        // be created on the thread that uses it. Since it was created
+        // on the UI thread, using it from the worker thread is
+        // technically undefined behavior.
+        //
+        // SAFE ALTERNATIVE: Create a new DownloadManager on the worker
+        // thread with the same cache. This avoids cross-thread QNAM
+        // access entirely.
+        //
+        auto* workerDownloader = new DownloadManager(
+            m_manager->m_cache.get(), this);
+
+        // Temporarily swap the manager's downloader with ours
+        auto* originalDownloader = m_manager->m_downloader.release();
+        m_manager->m_downloader.reset(workerDownloader);
+
+        // Connect the worker downloader's signals to the manager's
+        // relay signals (which forward to the UI thread)
+        connect(workerDownloader, &DownloadManager::downloadProgress,
+                m_manager, &TerrainManager::onDownloadProgress,
+                Qt::QueuedConnection);
+        connect(workerDownloader, &DownloadManager::stageMessage,
+                m_manager, &TerrainManager::onStageMessage,
+                Qt::QueuedConnection);
+
+        // Run the full pipeline. TerrainManager::runPipeline() emits
+        // signals that are connected to the UI thread via queued
+        // connections (set up in runPipelineAsync).
         bool success = true;
         QString message = "Pipeline completed successfully";
 
         try {
-            // Inline pipeline execution (simplified version of
-            // TerrainManager::runPipeline that emits via signals)
-            emit progress(0, "Starting terrain pipeline...");
-
-            // Stage 1: Area Selection
-            emit progress(5, "Stage 1: Area Selection");
-            if (m_config.minLat >= m_config.maxLat || m_config.minLon >= m_config.maxLon) {
-                emit finished(false, "Invalid area");
-                return;
-            }
-
-            // Stage 2: CRS Resolution
-            emit progress(10, "Stage 2: CRS Resolution");
-
-            // Stage 3: DEM Discovery & Download
-            if (m_config.enableDEM) {
-                emit progress(15, "Stage 3: DEM Discovery & Download");
-                // DEM download happens via m_downloader->downloadSync
-                // which uses QEventLoop (works on this thread)
-            }
-
-            // Stage 4-5: Imagery
-            if (m_config.enableImagery) {
-                emit progress(40, "Stage 6: Imagery Discovery & Download");
-            }
-
-            // Stage 6-7: Land Cover
-            if (m_config.enableLandCover) {
-                emit progress(55, "Stage 8: Land-Cover Processing");
-            }
-
-            // Stage 8: Vector
-            if (m_config.enableRoads || m_config.enableBuildings) {
-                emit progress(60, "Stage 9: Vector Processing");
-            }
-
-            // Stage 9-11: Masks
-            emit progress(70, "Stage 10-11: Mask Generation");
-
-            // Stage 12-13: Tile Generation & Export
-            emit progress(85, "Stage 12-13: Tile Generation & Export");
-
-            // Stage 14: Validation
-            emit progress(95, "Stage 14: Validation");
-
-            emit progress(100, "Pipeline complete");
+            m_manager->runPipeline(m_config);
         } catch (const std::exception& e) {
             success = false;
             message = QString("Pipeline failed: %1").arg(e.what());
@@ -131,20 +132,24 @@ public:
             message = "Pipeline failed: unknown error";
         }
 
+        // Restore the original downloader
+        m_manager->m_downloader.reset(originalDownloader);
+        delete workerDownloader;
+
         emit finished(success, message);
     }
 
 signals:
-    void progress(int percent, const QString& stage);
-    void stageResult(const StageResult& result);
     void finished(bool success, const QString& message);
 
 private:
+    TerrainManager* m_manager;
     PipelineConfig m_config;
-    DownloadManager* m_downloader;
 };
 
 class TerrainManager : public QObject {
+    Q_OBJECT
+    friend class PipelineWorker;
     Q_OBJECT
 
 public:
@@ -281,21 +286,27 @@ public:
         m_config.resolveKeysFromEnv();
         m_asyncBusy.store(true);
 
-        // Move downloader to worker thread so QNetworkAccessManager
-        // and QEventLoop work correctly on the worker thread.
-        auto* worker = new PipelineWorker(m_config, m_downloader.get());
+        // Create worker that will call runPipeline() on the worker thread.
+        // The worker creates its own DownloadManager on the worker thread
+        // to avoid cross-thread QNetworkAccessManager access.
+        auto* worker = new PipelineWorker(this, m_config);
         worker->moveToThread(&m_workerThread);
 
-        // Connect signals from worker (emitted on worker thread) to
-        // our signals (received on UI thread via queued connections).
-        connect(worker, &PipelineWorker::progress,
-                this, &TerrainManager::progress);
-        connect(worker, &PipelineWorker::stageResult,
-                this, &TerrainManager::stageResult);
+        // TerrainManager::runPipeline() emits progress/finished/stageResult
+        // signals. Since TerrainManager lives on the UI thread and the
+        // worker calls runPipeline() from the worker thread, we need to
+        // ensure the signals are emitted from the worker thread context.
+        //
+        // Actually, since runPipeline() is called from the worker thread,
+        // the emit statements inside it will execute on the worker thread.
+        // The signals are connected to the UI thread's slots via auto
+        // (queued) connections, so they will be delivered correctly.
+        //
+        // The worker's finished signal is connected to clean up and
+        // forward the final result.
         connect(worker, &PipelineWorker::finished,
                 this, [this](bool success, const QString& msg) {
             m_asyncBusy.store(false);
-            m_results = m_workerResults;
             emit finished(success, msg);
         });
 
@@ -385,7 +396,6 @@ private:
     std::unique_ptr<DownloadManager> m_downloader;
     std::atomic<bool> m_asyncBusy{false};
     QThread m_workerThread;
-    QList<StageResult> m_workerResults; // populated by async worker
 
     // Processed data
     RasterGrid m_fullDEM;

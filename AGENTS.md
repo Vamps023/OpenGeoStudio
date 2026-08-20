@@ -281,6 +281,11 @@ The terrain pipeline can run in two modes:
   signals (delivered via queued connections to the UI thread).
 
 The async API uses a `PipelineWorker` QObject that lives on a `QThread`.
+The worker calls `TerrainManager::runPipeline()` directly, creating a
+temporary `DownloadManager` on the worker thread (to avoid cross-thread
+`QNetworkAccessManager` access). The original downloader is restored
+after the pipeline finishes.
+
 The worker thread has an event loop so `DownloadManager::downloadSync`
 (which uses `QEventLoop`) works correctly.
 
