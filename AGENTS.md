@@ -33,7 +33,7 @@ cmd /c "call ""C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
 | `test_world_model` | World Authoring model tests | 34/34 pass |
 | `test_world_workflow` | World Authoring workflow tests | 22/22 pass |
 | `test_osm_pipeline` | OSM import pipeline tests | 155/155 pass |
-| `test_road_studio` | Road Studio feature tests | 325 pass (signs, markings, furniture, snapping, measurement, persistence, templates). Road model tests (creation, split, merge, junctions) are skipped by default via `OGS_SKIP_ROAD_MODEL_TESTS=1` due to non-deterministic SEH crashes in LaneMaker engine test mode. |
+| `test_road_studio` | Road Studio feature tests | 325 pass (signs, markings, furniture, snapping, measurement, persistence, templates). Road model tests (creation, split, merge, junctions) are skipped by default via `OGS_SKIP_ROAD_MODEL_TESTS=1` due to non-deterministic heap corruption in LaneMaker engine test mode. Partial fixes applied: `LaneProfile::Apply` lower_bound guard, `Road::DeriveLaneBorders` lane ID 0 guard, `LaneProfile::ConvertSide` empty profiles guard. |
 | `test_road_studio_ui` | Road Studio UI smoke test (headless) | DISABLED in CTest — hangs in `QApplication` construction due to OpenGL/CGAL static initialization conflict when linked against `lanemaker::core`. Builds correctly but cannot run headlessly. |
 | `geometry_segment_tests` | Road engine geometry tests | 504 tests, 5388 assertions |
 | `test_terrain_pipeline` | Terrain pipeline tests | 28/28 pass |

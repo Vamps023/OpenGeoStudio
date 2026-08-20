@@ -811,13 +811,19 @@ Mesh3D Road::get_road_object_mesh(const RoadObject& road_object, const double ep
     return road_obj_mesh;
 }
 
-void Road::DeriveLaneBorders() 
+void Road::DeriveLaneBorders()
 {
-    for (auto& sAndSection : s_to_lanesection) 
+    for (auto& sAndSection : s_to_lanesection)
     {
         odr::LaneSection& lanesection = sAndSection.second;
 
         auto id_lane_iter0 = lanesection.id_to_lane.find(0);
+        if (id_lane_iter0 == lanesection.id_to_lane.end())
+        {
+            // Lane ID 0 (center lane) is required for border derivation.
+            // Skip this section if it doesn't have one rather than crashing.
+            continue;
+        }
 
         /* iterate from id #0 towards +inf */
         auto id_lane_iter1 = std::next(id_lane_iter0);

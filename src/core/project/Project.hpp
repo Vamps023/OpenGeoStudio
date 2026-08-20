@@ -27,7 +27,9 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QUuid>
+#include <QStringList>
 #include <optional>
+#include <functional>
 
 struct ProjectBounds {
     double minLat = 0, minLon = 0, maxLat = 0, maxLon = 0;
@@ -104,6 +106,12 @@ struct Project {
         if (auto b = ProjectBounds::fromJson(j["bounds"].toObject())) {
             p.bounds = *b;
         }
+
+        // Sanitize: remove any credential fields from moduleState that may
+        // have been serialized by older versions. Credentials are now
+        // resolved from environment variables, not stored in project files.
+        sanitizeModuleState(p.moduleState);
+
         // If the loaded schema is older than current, mark for migration.
         // Future migration functions will be called here:
         //   if (p.schemaVersion < SCHEMA_VERSION) p = migrate(p);
@@ -112,5 +120,41 @@ struct Project {
             p.schemaVersion = SCHEMA_VERSION;
         }
         return p;
+    }
+
+    // Remove credential fields from moduleState JSON. This handles legacy
+    // .ogproj files that were saved with API keys embedded in terrain
+    // configuration or other module state.
+    static void sanitizeModuleState(QJsonObject& moduleState) {
+        // List of known credential field names to strip
+        static const QStringList credentialKeys = {
+            "openTopoApiKey", "gpxzApiKey", "mapboxToken",
+            "apiKey", "api_key", "token", "secret",
+            "GLAD_USER", "GLAD_PASSWORD"
+        };
+
+        // Recursively sanitize JSON objects
+        std::function<void(QJsonObject&)> sanitizeObj = [&](QJsonObject& obj) {
+            for (const QString& key : credentialKeys) {
+                obj.remove(key);
+            }
+            // Recurse into nested objects
+            for (auto it = obj.begin(); it != obj.end(); ++it) {
+                if (it.value().isObject()) {
+                    QJsonObject nested = it.value().toObject();
+                    sanitizeObj(nested);
+                    obj[it.key()] = nested;
+                }
+            }
+        };
+
+        // Sanitize each module's state
+        for (auto it = moduleState.begin(); it != moduleState.end(); ++it) {
+            if (it.value().isObject()) {
+                QJsonObject moduleObj = it.value().toObject();
+                sanitizeObj(moduleObj);
+                moduleState[it.key()] = moduleObj;
+            }
+        }
     }
 };

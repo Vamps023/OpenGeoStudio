@@ -375,6 +375,13 @@ namespace LM
         /*
         Prepare transitionInfo
         */
+        if (profiles.empty())
+        {
+            // No valid profiles after filtering — nothing to convert.
+            // This can happen when all sections are beyond the road length.
+            return;
+        }
+
         std::map<type_s, LanePlan>::const_iterator pre = profiles.begin(), curr = profiles.begin();
         curr++;
 
@@ -904,7 +911,14 @@ namespace LM
         {
             // Once length is set, no key beyond length except max()
             auto leftKeys = odr::get_map_keys(leftPlans);
-            auto trueEntryKey = *leftKeys.lower_bound(length - 2);
+            // Guard against lower_bound returning end() when all keys
+            // are less than (length - 2). Use the last key in that case.
+            auto it = leftKeys.lower_bound(length - 2);
+            if (it == leftKeys.end() && !leftKeys.empty())
+                it = std::prev(leftKeys.end());
+            if (it == leftKeys.end())
+                throw std::logic_error("LaneProfile::Apply: no left keys");
+            auto trueEntryKey = *it;
             if (trueEntryKey != length)
             {
                 auto trueEntryProfile = leftPlans.at(trueEntryKey);
