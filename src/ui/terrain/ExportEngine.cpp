@@ -1300,8 +1300,10 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
             auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
             if (srcCrs && dstCrs) {
                 gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                auto sw = transform.transform({south, west});
-                auto ne = transform.transform({north, east});
+                // GeoPoint.x = longitude, GeoPoint.y = latitude (after
+                // proj_normalize_for_visualization in CoordinateTransform)
+                auto sw = transform.transform({west, south});
+                auto ne = transform.transform({east, north});
                 if (sw.success && ne.success) {
                     ext.west = sw.point.x;
                     ext.east = ne.point.x;
@@ -1317,8 +1319,8 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
             auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
             if (srcCrs && dstCrs) {
                 gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                auto sw = transform.transform({south, west});
-                auto ne = transform.transform({north, east});
+                auto sw = transform.transform({west, south});
+                auto ne = transform.transform({east, north});
                 if (sw.success && ne.success) {
                     ext.west = sw.point.x;
                     ext.east = ne.point.x;
@@ -1377,8 +1379,8 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
             auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
             if (srcCrs && dstCrs) {
                 gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                auto sw = transform.transform({south, west});
-                auto ne = transform.transform({north, east});
+                auto sw = transform.transform({west, south});
+                auto ne = transform.transform({east, north});
                 if (sw.success && ne.success) {
                     ext.west = sw.point.x;
                     ext.east = ne.point.x;
@@ -1424,8 +1426,8 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
         auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
         if (srcCrs && dstCrs) {
             gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-            auto sw = transform.transform({south, west});
-            auto ne = transform.transform({north, east});
+            auto sw = transform.transform({west, south});
+            auto ne = transform.transform({east, north});
             if (sw.success && ne.success) {
                 ext.west = sw.point.x;
                 ext.east = ne.point.x;
