@@ -57,6 +57,10 @@
 #include "ui/studio3d/Studio3DWidget.hpp"
 #include "main_window.h"
 
+// CRS selector dialog
+#include "gis/ui/CrsSelectorDialog.hpp"
+#include "gis/crs/CRSManager.hpp"
+
 // MapLibre Native Qt map viewport integration
 #if defined(HAVE_MAPLIBRE)
 #include "app/MapViewportWidget.hpp"
@@ -333,6 +337,32 @@ private:
         saveAct->setShortcut(QKeySequence::Save);
         connect(saveAct, &QAction::triggered, this, [this]() {
             saveProjectState();
+        });
+
+        fileMenu->addSeparator();
+
+        QAction* setCrsAct = fileMenu->addAction(tr("Set Project &CRS..."));
+        connect(setCrsAct, &QAction::triggered, this, [this]() {
+            gis::CrsSelectorDialog dlg(this);
+            // Pre-select current project CRS if set
+            auto& proj = m_ctx->projects().current();
+            if (proj.hasProjectCRS()) {
+                auto def = gis::CRSManager::instance().fromAuthId(
+                    proj.projectCrsAuthId.toStdString());
+                if (def) dlg.setSelectedCRS(*def);
+            }
+            connect(&dlg, &gis::CrsSelectorDialog::crsSelected, this,
+                [this](const gis::CRSDefinition& crs) {
+                    auto& p = m_ctx->projects().current();
+                    p.projectCrsAuthId = QString::fromStdString(
+                        crs.authority + ":" + std::to_string(crs.code));
+                    p.projectCrsName = QString::fromStdString(crs.name);
+                    p.projectCrsWkt2 = QString::fromStdString(crs.wkt2);
+                    m_ctx->projects().markDirty();
+                    propagateProjectCrs();
+                    updateStatusBar();
+                });
+            dlg.exec();
         });
 
         fileMenu->addSeparator();
@@ -618,9 +648,12 @@ private:
         const QString engineVersion = QString::fromLatin1(road_engine::versionString());
         if (m_ctx->projects().hasProject()) {
             const auto& p = m_ctx->projects().current();
+            QString crsInfo = p.hasProjectCRS()
+                ? QStringLiteral(" | CRS: %1").arg(p.projectCrsAuthId)
+                : QStringLiteral(" | No CRS set");
             m_statusLabel->setText(
-                QStringLiteral("%1 | Road Engine v%2 | Workspace: %3")
-                    .arg(p.name, engineVersion, m_ctx->workspaces().activeId()));
+                QStringLiteral("%1 | Road Engine v%2 | Workspace: %3%4")
+                    .arg(p.name, engineVersion, m_ctx->workspaces().activeId(), crsInfo));
         } else {
             m_statusLabel->setText(
                 QStringLiteral("No project open | Road Engine v%1 | Workspace: %2")
@@ -701,6 +734,7 @@ private slots:
     }
 
     void onProjectChanged(const Project&) {
+        propagateProjectCrs();
         updateStatusBar();
     }
 
@@ -709,7 +743,28 @@ private slots:
         m_ctx->workspaces().activate("terrain");
         // Restore terrain and road state from the project file
         loadProjectState();
+        propagateProjectCrs();
         updateStatusBar();
+    }
+
+    // Propagate the project CRS to all studios that need it
+    void propagateProjectCrs() {
+        if (!m_ctx->projects().hasProject()) return;
+        const auto& p = m_ctx->projects().current();
+        if (!p.hasProjectCRS()) return;
+
+        // Extract EPSG code from authId (e.g. "EPSG:32643" -> 32643)
+        int epsg = 0;
+        if (p.projectCrsAuthId.startsWith("EPSG:")) {
+            epsg = p.projectCrsAuthId.mid(5).toInt();
+        }
+        if (epsg <= 0) return;
+
+        // Propagate to terrain studio's export settings
+        if (m_terrainStudioWidget) {
+            auto& settings = m_terrainStudioWidget->store()->exportSettings();
+            settings.projectCrsEpsg = epsg;
+        }
     }
 
     // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Project state save/load ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬

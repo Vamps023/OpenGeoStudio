@@ -80,7 +80,18 @@ public:
         config.heightmapFormat = static_cast<terrain::HeightmapFormat>(m_heightmapFormatCombo->currentIndex());
         config.exportPackedMask = m_packedMaskCheck->isChecked();
         config.masks = collectMaskDefinitions();
+        // Propagate project CRS if set
+        if (m_projectCrsEpsg > 0) {
+            config.targetCrs.epsg = m_projectCrsEpsg;
+            config.targetCrs.description = m_projectCrsAuthId;
+        }
         return config;
+    }
+
+    // Set the project CRS for terrain pipeline output
+    void setProjectCrs(const QString& authId, int epsg) {
+        m_projectCrsAuthId = authId;
+        m_projectCrsEpsg = epsg;
     }
 
     void setConfig(const PipelineConfig& config) {
@@ -111,6 +122,8 @@ public:
 
 private:
     TerrainManager* m_manager = nullptr;
+    QString m_projectCrsAuthId;  // Project CRS authority ID (e.g. "EPSG:32643")
+    int m_projectCrsEpsg = 0;    // Project CRS EPSG code
 
     // Area inputs
     QDoubleSpinBox* m_minLatSpin = nullptr;

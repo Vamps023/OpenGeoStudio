@@ -242,6 +242,7 @@ void ExportPanel::setupUi() {
     // last in CrsSource), so map through an explicit table instead of a cast.
     m_crsCombo = new QComboBox();
     m_crsCombo->addItems({
+        "Use Project CRS (if set)",
         "Auto (UTM from bounds centroid)",
         "EPSG:4326 — WGS84 (lat/lon)",
         "EPSG:3857 — Web Mercator",
@@ -252,6 +253,7 @@ void ExportPanel::setupUi() {
         "EPSG:25833 — ETRS89 UTM Zone 33N"
     });
     const terrain::CrsSource crsByIndex[] = {
+        terrain::CrsSource::Project_CRS,
         terrain::CrsSource::Auto_UTM,
         terrain::CrsSource::EPSG_4326,
         terrain::CrsSource::EPSG_3857,
@@ -265,9 +267,8 @@ void ExportPanel::setupUi() {
             [this, crsByIndex](int idx) {
         m_store->setCrsSource(crsByIndex[idx]);
     });
-    // Default to EPSG:4326 — matches GeoTerrain's export default (the
-    // known-good files for Unigine). "Auto UTM" stays one click away.
-    m_crsCombo->setCurrentIndex(1);
+    // Default to Project CRS — falls back to EPSG:4326 if no project CRS set
+    m_crsCombo->setCurrentIndex(0);
     formLayout->addRow("CRS:", m_crsCombo);
 
     // Heightmap resolution

@@ -101,6 +101,7 @@ enum class ImagerySource {
 };
 
 enum class CrsSource {
+    Project_CRS,    // Use the project's CRS (e.g. EPSG:32643)
     EPSG_4326,      // WGS84 (lat/lon)
     EPSG_3857,      // Web Mercator
     EPSG_32633,     // UTM Zone 33N
@@ -116,7 +117,8 @@ struct ExportSettings {
     AlbedoFormat albedoFormat = AlbedoFormat::PNG;
     DemSource demSource = DemSource::AWS_Terrarium; // GeoTerrain default — smooth SRTM-based tiles
     ImagerySource imagerySource = ImagerySource::Google_Satellite;
-    CrsSource crsSource = CrsSource::EPSG_4326; // GeoTerrain default — proven in Unigine
+    CrsSource crsSource = CrsSource::Project_CRS; // Default to project CRS
+    int projectCrsEpsg = 0;  // EPSG code from project (0 = not set, fall back to WGS84)
     int heightmapResolution = 1024;
     int albedoResolution = 1024;
     int imageryZoomLevel = 0;       // 0 = auto

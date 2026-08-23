@@ -26,6 +26,7 @@ public:
     const QSet<QString>& selectedTiles() const { return m_selectedTiles; }
     double tileSizeKm() const { return m_tileSizeKm; }
     const terrain::ExportSettings& exportSettings() const { return m_exportSettings; }
+    terrain::ExportSettings& exportSettings() { return m_exportSettings; }
     const terrain::MaskSettings& maskSettings() const { return m_maskSettings; }
     bool isSelecting() const { return m_isSelecting; }
     bool zoomLocked() const { return m_zoomLocked; }

@@ -55,6 +55,7 @@ public:
     // --- Accessors ---
 
     const Project& current() const { return m_current; }
+    Project& current() { return m_current; }
     bool hasProject() const { return !m_current.isNull(); }
 
     // Mark the current project as dirty (modified)

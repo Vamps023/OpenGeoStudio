@@ -4,6 +4,8 @@
 #include "RasterWriter.hpp"
 #include "../../core/PathHelper.hpp"
 #include "DemDecoder.hpp"
+#include "../../gis/crs/CRSManager.hpp"
+#include "../../gis/crs/CoordinateTransform.hpp"
 
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -1281,7 +1283,60 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
     double south = tile.bounds.south;
 
     auto crs = m_store->exportSettings().crsSource;
+    // If Project_CRS is selected but no project CRS is set, fall back to WGS84
+    if (crs == terrain::CrsSource::Project_CRS && m_store->exportSettings().projectCrsEpsg == 0) {
+        crs = terrain::CrsSource::EPSG_4326;
+    }
     switch (crs) {
+    case terrain::CrsSource::Project_CRS:
+    {
+        // Use the project's CRS EPSG code for UTM projection
+        int epsg = m_store->exportSettings().projectCrsEpsg;
+        if (epsg >= 32601 && epsg <= 32660) {
+            // UTM North
+            ext.utmEpsg = epsg;
+            ext.crsMode = terrain::GeoCrsMode::UTM;
+            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
+            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
+            if (srcCrs && dstCrs) {
+                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
+                auto sw = transform.transform({south, west});
+                auto ne = transform.transform({north, east});
+                if (sw.success && ne.success) {
+                    ext.west = sw.point.x;
+                    ext.east = ne.point.x;
+                    ext.south = sw.point.y;
+                    ext.north = ne.point.y;
+                }
+            }
+        } else if (epsg >= 32701 && epsg <= 32760) {
+            // UTM South
+            ext.utmEpsg = epsg;
+            ext.crsMode = terrain::GeoCrsMode::UTM;
+            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
+            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
+            if (srcCrs && dstCrs) {
+                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
+                auto sw = transform.transform({south, west});
+                auto ne = transform.transform({north, east});
+                if (sw.success && ne.success) {
+                    ext.west = sw.point.x;
+                    ext.east = ne.point.x;
+                    ext.south = sw.point.y;
+                    ext.north = ne.point.y;
+                }
+            }
+        } else {
+            // Unknown project CRS — fall back to WGS84
+            ext.crsMode = terrain::GeoCrsMode::WGS84;
+            ext.west = west;
+            ext.east = east;
+            ext.north = north;
+            ext.south = south;
+        }
+        break;
+    }
+
     case terrain::CrsSource::EPSG_4326:
         // Keep lat/lon as-is
         ext.crsMode = terrain::GeoCrsMode::WGS84;
