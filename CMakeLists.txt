@@ -522,6 +522,17 @@ if(WIN32)
             "$<TARGET_FILE_DIR:OpenGeoStudio>/proj"
         COMMENT "Copying PROJ DLL and proj.db to deploy directory..."
     )
+
+    # Also set up proj.db in the build directory for CTest tests
+    # (tests look for PROJ_LIB=build/proj)
+    add_custom_target(ogs_test_setup ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_BINARY_DIR}/proj"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/share/proj"
+            "${CMAKE_BINARY_DIR}/proj"
+        COMMENT "Setting up PROJ database for CTest..."
+    )
 endif()
 
 # ─── doctest Tests (C++ road engine unit tests) ──────────────
@@ -752,19 +763,63 @@ if(BUILD_TESTS)
     endif()
     target_compile_definitions(test_road_studio PRIVATE G_TEST)
 
+    # Copy QMapLibre DLLs next to the test executable so it can find them
+    # without requiring a developer-specific PATH.
+    if(QMapLibre_FOUND AND WIN32)
+        add_custom_command(TARGET test_road_studio POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:QMapLibre::Core>"
+                "$<TARGET_FILE_DIR:test_road_studio>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:QMapLibre::Widgets>"
+                "$<TARGET_FILE_DIR:test_road_studio>"
+            COMMENT "Copying QMapLibre DLLs for test_road_studio..."
+        )
+    endif()
+
     # Register all test targets with CTest (not just geometry_segment_tests).
     # This ensures `ctest --output-on-failure` runs every test in CI.
-    add_test(NAME test_gpxz_download     COMMAND test_gpxz_download)
-    add_test(NAME test_geotiff_writer    COMMAND test_geotiff_writer)
-    add_test(NAME test_terrain_pipeline  COMMAND test_terrain_pipeline)
-    add_test(NAME test_world_model       COMMAND test_world_model)
-    add_test(NAME test_crs_system        COMMAND test_crs_system)
-    add_test(NAME test_world_workflow    COMMAND test_world_workflow)
-    add_test(NAME test_osm_pipeline      COMMAND test_osm_pipeline)
-    add_test(NAME test_houston_roundtrip COMMAND test_houston_roundtrip)
-    add_test(NAME test_road_studio       COMMAND test_road_studio)
-    set_tests_properties(test_road_studio PROPERTIES
-        ENVIRONMENT "OGS_SKIP_ROAD_MODEL_TESTS=1")
+
+    # Common environment for all tests.
+    # We generate a wrapper batch script that sets up the PATH for Qt and
+    # QMapLibre DLLs, then runs the test executable. This avoids the
+    # semicolon conflict between CMake list separators and Windows PATH.
+    set(OGS_TEST_ENV
+        "OGS_SKIP_ROAD_MODEL_TESTS=1;QT_QPA_PLATFORM=offscreen;PROJ_LIB=${CMAKE_BINARY_DIR}/proj")
+
+    # Generate test wrapper script
+    get_target_property(_qt_core_location Qt6::Core LOCATION_RELEASE)
+    get_filename_component(_qt_bin_dir "${_qt_core_location}" DIRECTORY)
+    set(_qmlib_dir "")
+    if(QMapLibre_FOUND)
+        get_target_property(_qmlib_core QMapLibre::Core IMPORTED_LOCATION_RELEASE)
+        if(_qmlib_core)
+            get_filename_component(_qmlib_dir "${_qmlib_core}" DIRECTORY)
+        endif()
+    endif()
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/cmake/ogs_test_wrapper.bat.in"
+        "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat"
+        @ONLY)
+
+    add_test(NAME test_gpxz_download     COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_gpxz_download>)
+    add_test(NAME test_geotiff_writer    COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_geotiff_writer>)
+    add_test(NAME test_terrain_pipeline  COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_terrain_pipeline>)
+    add_test(NAME test_world_model       COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_world_model>)
+    add_test(NAME test_crs_system        COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_crs_system>)
+    add_test(NAME test_world_workflow    COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_world_workflow>)
+    add_test(NAME test_osm_pipeline      COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_osm_pipeline>)
+    add_test(NAME test_houston_roundtrip COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_houston_roundtrip>)
+    add_test(NAME test_road_studio       COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_road_studio>)
+
+    # Apply common environment to all tests
+    foreach(t_test IN ITEMS
+        test_gpxz_download test_geotiff_writer test_terrain_pipeline
+        test_world_model test_crs_system test_world_workflow
+        test_osm_pipeline test_houston_roundtrip test_road_studio)
+        set_tests_properties(${t_test} PROPERTIES
+            ENVIRONMENT "${OGS_TEST_ENV}")
+    endforeach()
 endif()
 
 # ─── Road Studio UI smoke test (headless, drives the real MainWidget) ───

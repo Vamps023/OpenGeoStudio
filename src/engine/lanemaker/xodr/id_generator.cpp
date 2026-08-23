@@ -3,21 +3,32 @@
 #include <array>
 #include "spdlog/spdlog.h"
 
-std::array<std::unique_ptr<IDGenerator>, static_cast<size_t>(IDType::Count)> idStore;
+// Use a function-local static (Meyers singleton pattern) to avoid the
+// static initialization order fiasco that occurs when the lanemaker
+// static library is linked into a test executable alongside CGAL and
+// Qt6::OpenGL. A global static array would be initialised during
+// dynamic loader setup, before main(), which can trigger conflicting
+// CGAL/Qt OpenGL static initialisers and crash the process.
+static std::array<std::unique_ptr<IDGenerator>, static_cast<size_t>(IDType::Count)>& idStore() {
+    static std::array<std::unique_ptr<IDGenerator>, static_cast<size_t>(IDType::Count)> store;
+    return store;
+}
 
 
 std::unique_ptr<IDGenerator>& IDGenerator::ForType(IDType t)
 {
-    if (idStore[static_cast<size_t>(t)] == nullptr)
+    auto& store = idStore();
+    if (store[static_cast<size_t>(t)] == nullptr)
     {
-        idStore[static_cast<size_t>(t)] = std::make_unique<IDGenerator>();
+        store[static_cast<size_t>(t)] = std::make_unique<IDGenerator>();
     }
-    return idStore[static_cast<size_t>(t)];
+    return store[static_cast<size_t>(t)];
 }
 
 void IDGenerator::Reset()
 {
-    for (auto& gen : idStore)
+    auto& store = idStore();
+    for (auto& gen : store)
     {
         if (gen != nullptr)
         {

@@ -462,7 +462,28 @@ inline GeneratedIntersection generateIntersection(
     auto r2Start = buildApproachCenterline(s2, center, idx2, trimDist2, true);
     auto r2End = buildApproachCenterline(s2, center, idx2, trimDist2, false);
 
-    double zAvg = 0; // TODO: interpolate z
+    // Interpolate elevation at the intersection center by sampling both
+    // roads in 3D and finding the z values nearest to the center point.
+    double zAvg = 0;
+    {
+        auto s1_3d = road1.sampleCenterline3D(32);
+        auto s2_3d = road2.sampleCenterline3D(32);
+        double z1 = 0, z2 = 0;
+        bool found1 = false, found2 = false;
+        double bestD1 = std::numeric_limits<double>::max();
+        double bestD2 = std::numeric_limits<double>::max();
+        for (const auto& p : s1_3d) {
+            double d = std::hypot(p.x - center.x, p.y - center.y);
+            if (d < bestD1) { bestD1 = d; z1 = p.z; found1 = true; }
+        }
+        for (const auto& p : s2_3d) {
+            double d = std::hypot(p.x - center.x, p.y - center.y);
+            if (d < bestD2) { bestD2 = d; z2 = p.z; found2 = true; }
+        }
+        if (found1 && found2) zAvg = (z1 + z2) / 2.0;
+        else if (found1) zAvg = z1;
+        else if (found2) zAvg = z2;
+    }
 
     if (r1Start.size() >= 2) {
         std::reverse(r1Start.begin(), r1Start.end());

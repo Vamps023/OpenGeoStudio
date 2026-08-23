@@ -1,0 +1,9 @@
+@echo off
+REM Auto-generated test wrapper — sets up PATH for Qt and QMapLibre DLLs
+REM before running the test executable. Do not edit manually.
+setlocal
+set "PATH=@_qt_bin_dir@;@_qmlib_dir@;%PATH%"
+set "PROJ_LIB=%~dp0proj"
+set "OGS_SKIP_ROAD_MODEL_TESTS=1"
+set "QT_QPA_PLATFORM=offscreen"
+"%~1" %2 %3 %4 %5 %6 %7 %8 %9

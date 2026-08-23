@@ -2,6 +2,8 @@
 
 #include "TerrainStore.hpp"
 #include "CoordinateTransform.hpp"
+#include "../../gis/crs/CRSManager.hpp"
+#include "../../gis/crs/CoordinateTransform.hpp"
 #include <QProcessEnvironment>
 #include <cmath>
 
@@ -162,16 +164,20 @@ void TerrainStore::computeTileGrid() {
         return;
     }
 
-    // Convert tile size from km to degrees using proper CoordinateTransform
-    // (EPSG:4326 ↔ EPSG:3857 Web Mercator) instead of ad-hoc cos(lat) formula
+    // Convert tile size from km to degrees using PROJ-backed transforms
+    // (EPSG:4326 -> EPSG:3857 Web Mercator) for accurate meters-per-degree
     const double midLat = (m_bounds.north + m_bounds.south) / 2.0;
     const double midLon = (m_bounds.east + m_bounds.west) / 2.0;
-    // Convert center to Web Mercator to get accurate meters-per-degree
-    auto centerMerc = map::CoordinateTransform::lonLatToMercator(midLon, midLat);
-    // Convert center + 1 degree to get meters per degree
-    auto oneDegMerc = map::CoordinateTransform::lonLatToMercator(midLon + 1.0, midLat + 1.0);
-    double metersPerDegLat = oneDegMerc.y - centerMerc.y;
-    double metersPerDegLon = oneDegMerc.x - centerMerc.x;
+    // Use PROJ to convert center and center+1deg to Web Mercator meters
+    auto wgs84 = gis::CRSManager::instance().fromEPSG(4326);
+    auto merc = gis::CRSManager::instance().fromEPSG(3857);
+    gis::CoordinateTransform toMerc(*wgs84, *merc);
+    gis::GeoPoint center{midLon, midLat};
+    gis::GeoPoint oneDeg{midLon + 1.0, midLat + 1.0};
+    auto centerResult = toMerc.transform(center);
+    auto oneDegResult = toMerc.transform(oneDeg);
+    double metersPerDegLat = oneDegResult.point.y - centerResult.point.y;
+    double metersPerDegLon = oneDegResult.point.x - centerResult.point.x;
     const double kmPerDegLat = metersPerDegLat / 1000.0;
     const double kmPerDegLon = metersPerDegLon / 1000.0;
     const double tileSizeDegLat = m_tileSizeKm / kmPerDegLat;
