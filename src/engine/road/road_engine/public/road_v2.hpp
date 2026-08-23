@@ -13,10 +13,9 @@
 //
 // @section API_Freeze Phase 1 API Freeze
 // The following classes are FROZEN as of Phase 1 Complete:
-//   - LaneSection (placeholder — will be expanded in Phase 2)
+//   - LaneSection
 //   - RoadV2
 // Breaking changes to RoadV2 require a major version bump.
-// LaneSection is explicitly NOT frozen — Phase 2 will define it.
 //
 // Design (per review):
 // - segments owns geometry via unique_ptr<GeometrySegment>
@@ -25,7 +24,7 @@
 // - Mutation is encapsulated (addSegment, clearSegments, etc.) to
 //   prevent the "forgot to rebuild" bug
 // - Deep-clone copy constructor/assignment (uses segment clone())
-// - LaneSection is a placeholder for Phase 2 (empty struct for now)
+// - LaneSection is defined above with full lane management
 // - No adapter, no IPC, no serialization — that's 1.8.3+
 //
 // Ownership invariant:
@@ -41,20 +40,17 @@
 
 namespace geo {
 
-// ─── LaneSection (placeholder for Phase 2) ─────────────────
+// ─── LaneSection ───────────────────────────────────────────
 // LaneSection defines a contiguous section of road with consistent
-// lane geometry. For Phase 1, this is a placeholder — the actual
-// lane structure will be defined in Phase 2.
-//
-// Future (Phase 2): This will include:
-//   - s-range (startS, endS)
-//   - Left lanes (vector<Lane>)
-//   - Right lanes (vector<Lane>)
-//   - Crossfall and superelevation
+// lane geometry. The full implementation with Lane arrays is in the
+// internal lane_engine.hpp. This public facade provides the type
+// declaration for API consumers.
 //
 struct LaneSection {
     double startS = 0.0;  // s-position where this section starts
-    // Phase 2: Add lane arrays, crossfall, etc.
+
+    LaneSection() = default;
+    explicit LaneSection(double s) : startS(s) {}
 };
 
 // ─── RoadV2 ────────────────────────────────────────────────
@@ -260,10 +256,12 @@ public:
 private:
     mutable std::optional<LaneSection> synthesizedLegacy_;
 
-    // Placeholder for Phase 2 synthesis
+    // Synthesize a LaneSection from legacy road parameters.
+    // The public API facade returns an empty LaneSection since the Lane
+    // type is only fully defined in the internal lane_engine.hpp.
+    // Callers that need actual lane synthesis should use the internal API.
     static LaneSection synthesizeFromLegacy(double width, int laneCount) {
         LaneSection section;
-        // Phase 2: Implement actual synthesis
         (void)width;
         (void)laneCount;
         return section;

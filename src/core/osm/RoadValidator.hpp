@@ -198,8 +198,20 @@ private:
             }
 
             // Check for excessive curvature (arcs/spirals)
-            // LineSegments have zero curvature, so this only applies to curved segments
-            // TODO: check curvature when arc/spiral segments are used
+            // LineSegments have zero curvature. For arc segments, check
+            // that the radius is above a minimum threshold.
+            if (seg.type() == geo::GeometryType::Arc) {
+                const auto& arc = static_cast<const geo::ArcSegment&>(seg);
+                double radius = arc.radius();
+                if (radius < 1.0) {  // Less than 1m radius is extreme
+                    issues.push_back({
+                        Severity::Warning, "Geometry", roadId, "",
+                        QString("Extremely tight arc radius %1m in segment %2")
+                            .arg(radius, 0, 'f', 2).arg(i),
+                        0
+                    });
+                }
+            }
         }
 
         // Check for duplicate consecutive points

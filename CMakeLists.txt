@@ -23,7 +23,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(OpenGeoStudio
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Native C++/Qt 6 desktop application for geospatial road design"
     LANGUAGES CXX
 )
@@ -368,6 +368,14 @@ target_link_libraries(OpenGeoStudio PRIVATE
     road_engine::core
     TIFF::TIFF
     PROJ::proj
+)
+
+# Single source of truth for application version
+target_compile_definitions(OpenGeoStudio PRIVATE
+    OGS_VERSION="${PROJECT_VERSION}"
+    OGS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    OGS_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    OGS_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
 # Link OpenGL library for 3D viewport

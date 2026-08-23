@@ -904,7 +904,7 @@ int main(int argc, char* argv[]) {
     Q_INIT_RESOURCE(shaders);
     Q_INIT_RESOURCE(images);
     app.setApplicationName(QStringLiteral("OpenGeoStudio"));
-    app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setApplicationVersion(QStringLiteral(OGS_VERSION));
     app.setOrganizationName(QStringLiteral("OpenGeoStudio"));
 
     // Enable log file next to the executable for crash diagnosis

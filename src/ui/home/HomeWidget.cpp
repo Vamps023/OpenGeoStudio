@@ -122,7 +122,7 @@ void HomeWidget::setupUi() {
     sep2->setStyleSheet("color: #484f58;");
     statusLayout->addWidget(sep2);
 
-    auto* versionLabel = new QLabel("v0.1.0");
+    auto* versionLabel = new QLabel("v" OGS_VERSION);
     versionLabel->setStyleSheet("color: #7d8590; font-size: 12px;");
     statusLayout->addWidget(versionLabel);
 

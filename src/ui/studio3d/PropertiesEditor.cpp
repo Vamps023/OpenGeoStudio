@@ -491,7 +491,12 @@ void PropertiesEditor::refreshWorldTab()
     m_updating = false;
 }
 
-void PropertiesEditor::refreshSceneTab() {}
+void PropertiesEditor::refreshSceneTab()
+{
+    // The scene tab contains only action buttons (Save/Load/Clear),
+    // so there is no widget state to refresh.
+}
+
 void PropertiesEditor::refreshRenderTab()
 {
     m_updating = true;
@@ -565,5 +570,16 @@ void PropertiesEditor::onSkyChanged()
     m_ogre->setSkyIntensity(intensity);
 }
 
-void PropertiesEditor::onTerrainChanged() {}
-void PropertiesEditor::onRenderChanged() {}
+void PropertiesEditor::onTerrainChanged()
+{
+    // Terrain changes are handled by OgreWidget directly.
+    // This slot exists for future terrain property bindings.
+    refreshCurrent();
+}
+
+void PropertiesEditor::onRenderChanged()
+{
+    // Render settings changed — refresh the render tab to reflect
+    // the current state of the OgreWidget.
+    refreshRenderTab();
+}

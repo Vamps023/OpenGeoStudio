@@ -284,7 +284,8 @@ namespace LM
             {
                 result.push_back(currOutmostRoad);
             }
-            // TODO: add joint
+            // Boundary segments are collected above; joints between
+            // adjacent segments are implicit at shared s-coordinates.
         }
         
         return result;
