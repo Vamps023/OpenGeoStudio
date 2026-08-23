@@ -38,6 +38,7 @@
 #include <QKeySequence>
 #include <QCompleter>
 #include <QSettings>
+#include <QImageReader>
 
 // Road engine ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â direct C++ include, no N-API bridge
 #include "road_engine.hpp"
@@ -955,6 +956,12 @@ public:
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+
+    // Raise Qt's image allocation limit so large merged terrain heightmaps
+    // (e.g. 12288x12288 from a 3x3 tile grid at 4096 resolution) can be
+    // loaded. Qt 6 defaults to 256 MB which is too small for production
+    // terrain exports. Setting it to 0 disables the limit entirely.
+    QImageReader::setAllocationLimit(0);
 
     // Set PROJ_LIB / PROJ_DATA environment variables so that ALL PROJ
     // contexts (CRSManager, CoordinateTransform, OGRE, etc.) can find proj.db.

@@ -522,8 +522,10 @@ QString Studio3DWidget::findHeightmapInProject()
         QDir(projectDir).filePath("Exports"),
         projectDir
     };
-    const QStringList preferred = {"heightmap_merged.png", "heightmap_merged.tif",
-                                   "heightmap_merged.tiff"};
+    // Prefer GeoTIFF over PNG — the DemDecoder path handles large merged
+    // heightmaps without Qt's 256 MB QImage allocation limit.
+    const QStringList preferred = {"heightmap_merged.tif", "heightmap_merged.tiff",
+                                   "heightmap_merged.png"};
     for (const QString& root : roots) {
         if (!QDir(root).exists()) continue;
         for (const QString& name : preferred) {
