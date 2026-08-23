@@ -414,6 +414,141 @@ void testWGS84_HasPROJJSON() {
 }
 
 // ============================================================
+// Extended CRS Discovery Tests
+// ============================================================
+
+// EPSG:32615 — WGS 84 / UTM zone 15N (the CRS that was missing)
+void testEPSG_32615_Lookup() {
+    auto crs = CRSManager::instance().fromEPSG(32615);
+    VERIFY(crs.has_value(), "EPSG:32615 exists", "Should exist in PROJ database");
+    if (crs) {
+        VERIFY(crs->code == 32615, "EPSG:32615 code", "Wrong code");
+        VERIFY(crs->authority == "EPSG", "EPSG:32615 authority", "Wrong authority");
+        VERIFY(crs->isProjected(), "EPSG:32615 projected", "Should be projected");
+        VERIFY(crs->unit == Unit::Metre, "EPSG:32615 metre", "Should be metre");
+        VERIFY(crs->name.find("UTM") != std::string::npos,
+               "EPSG:32615 name contains UTM", "Name should contain UTM");
+        VERIFY(crs->name.find("15") != std::string::npos,
+               "EPSG:32615 name contains 15", "Name should contain 15");
+    }
+}
+
+// Multiple UTM zones — all 60 northern + key southern zones
+void testMultipleUTMZones() {
+    // Test all northern hemisphere zones 1-60
+    for (int zone = 1; zone <= 60; ++zone) {
+        int epsg = 32600 + zone;
+        auto crs = CRSManager::instance().fromEPSG(epsg);
+        if (!crs) {
+            VERIFY(false, ("EPSG:" + std::to_string(epsg) + " exists").c_str(),
+                   "Should exist in PROJ database");
+            continue;
+        }
+        VERIFY(crs->isProjected(), ("EPSG:" + std::to_string(epsg) + " projected").c_str(),
+               "Should be projected");
+    }
+    std::cout << "  [INFO] All 60 northern UTM zones (32601-32660) verified" << std::endl;
+}
+
+// Southern hemisphere UTM zones
+void testSouthernHemisphereUTM() {
+    for (int zone : {15, 18, 30, 43, 60}) {
+        int epsg = 32700 + zone;
+        auto crs = CRSManager::instance().fromEPSG(epsg);
+        VERIFY(crs.has_value(), ("EPSG:" + std::to_string(epsg) + " exists").c_str(),
+               "Should exist in PROJ database");
+        if (crs) {
+            VERIFY(crs->isProjected(), ("EPSG:" + std::to_string(epsg) + " projected").c_str(),
+                   "Should be projected");
+        }
+    }
+    std::cout << "  [INFO] Southern hemisphere UTM zones (32715, 32718, 32730, 32743, 32760) verified" << std::endl;
+}
+
+// Non-UTM CRS — geographic, Web Mercator, national grids
+void testNonUTM_CRS() {
+    struct CRSCheck { int epsg; const char* name; CRSKind kind; };
+    CRSCheck checks[] = {
+        {4326,  "WGS 84",                CRSKind::Geographic},
+        {3857,  "Pseudo-Mercator",       CRSKind::Projected},
+        {3035,  "ETRS89-extended",       CRSKind::Projected},
+        {25832, "ETRS89 / UTM zone 32N", CRSKind::Projected},
+        {3413,  "WGS 84 / NSIDC",        CRSKind::Projected},
+    };
+
+    for (const auto& c : checks) {
+        auto crs = CRSManager::instance().fromEPSG(c.epsg);
+        VERIFY(crs.has_value(), ("EPSG:" + std::to_string(c.epsg) + " exists").c_str(),
+               "Should exist in PROJ database");
+        if (crs) {
+            VERIFY(crs->kind == c.kind,
+                   ("EPSG:" + std::to_string(c.epsg) + " kind matches").c_str(),
+                   "Wrong CRS kind");
+        }
+    }
+}
+
+// Search for EPSG:32615 by numeric code
+void testSearch_EPSG32615_ByCode() {
+    auto results = CRSManager::instance().search("32615", 10);
+    VERIFY(!results.empty(), "Search: 32615 by code", "Should have results");
+    bool found32615 = false;
+    for (const auto& r : results) {
+        if (r.crs.code == 32615) { found32615 = true; break; }
+    }
+    VERIFY(found32615, "Search: 32615 by code finds it", "Should find EPSG:32615");
+}
+
+// Search for EPSG:32615 by full name
+void testSearch_EPSG32615_ByName() {
+    auto results = CRSManager::instance().search("WGS 84 / UTM zone 15N", 20);
+    VERIFY(!results.empty(), "Search: UTM zone 15N by name", "Should have results");
+    bool found32615 = false;
+    for (const auto& r : results) {
+        if (r.crs.code == 32615) { found32615 = true; break; }
+    }
+    VERIFY(found32615, "Search: UTM zone 15N finds 32615", "Should find EPSG:32615");
+}
+
+// Search for EPSG:32615 by authority:code identifier
+void testSearch_EPSG32615_ByAuthId() {
+    auto crs = CRSManager::instance().fromAny("EPSG:32615");
+    VERIFY(crs.has_value(), "Search: EPSG:32615 by authId", "Should resolve");
+    if (crs) {
+        VERIFY(crs->code == 32615, "Search: EPSG:32615 authId code", "Wrong code");
+    }
+}
+
+// Auto UTM for multiple geographic positions
+void testAutoUtm_MultipleZones() {
+    struct PosTest { double lat; double lon; int expectedEpsg; const char* name; };
+    PosTest tests[] = {
+        // Northern hemisphere
+        {19.0,  72.8,  32643, "Mumbai (UTM 43N)"},
+        {40.0,  -93.0, 32615, "USA Central (UTM 15N)"},
+        {40.0,  -87.0, 32616, "USA Chicago (UTM 16N)"},
+        {34.0,  -118.0,32611, "Los Angeles (UTM 11N)"},
+        {51.5,  -0.1,  32630, "London (UTM 30N)"},
+        {35.7,  139.7, 32654, "Tokyo (UTM 54N)"},
+        // Southern hemisphere
+        {-33.8, 151.2, 32756, "Sydney (UTM 56S)"},
+        {-23.5, -46.6, 32723, "Sao Paulo (UTM 23S)"},
+    };
+
+    for (const auto& t : tests) {
+        auto utm = CRSManager::instance().autoUtm(t.lat, t.lon);
+        VERIFY(utm.has_value(), ("AutoUtm: " + std::string(t.name)).c_str(),
+               "Should resolve");
+        if (utm) {
+            VERIFY(utm->code == t.expectedEpsg,
+                   ("AutoUtm: " + std::string(t.name) + " code").c_str(),
+                   ("Expected " + std::to_string(t.expectedEpsg) +
+                    " but got " + std::to_string(utm->code)).c_str());
+        }
+    }
+}
+
+// ============================================================
 // Main
 // ============================================================
 int main(int argc, char* argv[]) {
@@ -460,6 +595,16 @@ int main(int argc, char* argv[]) {
     testUTM43_HasAreaOfUse();
     testWGS84_HasWKT2();
     testWGS84_HasPROJJSON();
+
+    std::cout << "\n--- Extended CRS Discovery Tests ---" << std::endl;
+    testEPSG_32615_Lookup();
+    testMultipleUTMZones();
+    testSouthernHemisphereUTM();
+    testNonUTM_CRS();
+    testSearch_EPSG32615_ByCode();
+    testSearch_EPSG32615_ByName();
+    testSearch_EPSG32615_ByAuthId();
+    testAutoUtm_MultipleZones();
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_testsPassed << std::endl;

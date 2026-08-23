@@ -1367,50 +1367,105 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
         // that straddle a zone boundary (mismatched eastings).
         double clat = (north + south) / 2.0;
         double clon = (west + east) / 2.0;
-        int zone = static_cast<int>((clon + 180.0) / 6.0) + 1;
-        zone = qBound(1, zone, 60);
-        bool isNorth = clat >= 0.0;
-        double e_w, n_n, e_e, n_s;
-        latLonToUtmZone(north, west, zone, isNorth, e_w, n_n);
-        latLonToUtmZone(south, east, zone, isNorth, e_e, n_s);
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.utmEpsg = isNorth ? (32600 + zone) : (32700 + zone);
-        ext.west = e_w;
-        ext.east = e_e;
-        ext.north = n_n;
-        ext.south = n_s;
+        // Use PROJ's autoUtm for the correct EPSG code
+        auto autoCrs = gis::CRSManager::instance().autoUtm(clat, clon);
+        if (autoCrs) {
+            int epsg = autoCrs->code;
+            ext.utmEpsg = epsg;
+            ext.crsMode = terrain::GeoCrsMode::UTM;
+            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
+            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
+            if (srcCrs && dstCrs) {
+                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
+                auto sw = transform.transform({south, west});
+                auto ne = transform.transform({north, east});
+                if (sw.success && ne.success) {
+                    ext.west = sw.point.x;
+                    ext.east = ne.point.x;
+                    ext.south = sw.point.y;
+                    ext.north = ne.point.y;
+                }
+            }
+        } else {
+            // Fallback: manual UTM zone calculation
+            int zone = static_cast<int>((clon + 180.0) / 6.0) + 1;
+            zone = qBound(1, zone, 60);
+            bool isNorth = clat >= 0.0;
+            double e_w, n_n, e_e, n_s;
+            latLonToUtmZone(north, west, zone, isNorth, e_w, n_n);
+            latLonToUtmZone(south, east, zone, isNorth, e_e, n_s);
+            ext.crsMode = terrain::GeoCrsMode::UTM;
+            ext.utmEpsg = isNorth ? (32600 + zone) : (32700 + zone);
+            ext.west = e_w;
+            ext.east = e_e;
+            ext.north = n_n;
+            ext.south = n_s;
+        }
         break;
     }
 
-    case terrain::CrsSource::EPSG_32633:
-    case terrain::CrsSource::EPSG_32634:
-    case terrain::CrsSource::EPSG_32635:
-    case terrain::CrsSource::EPSG_25832:
-    case terrain::CrsSource::EPSG_25833:
+    case terrain::CrsSource::Custom_EPSG:
     {
-        // Fixed UTM zone — convert lat/lon to UTM meters
-        int targetZone;
-        bool isNorth;
-        if (crs == terrain::CrsSource::EPSG_32633) { targetZone = 33; isNorth = true; ext.utmEpsg = 32633; }
-        else if (crs == terrain::CrsSource::EPSG_32634) { targetZone = 34; isNorth = true; ext.utmEpsg = 32634; }
-        else if (crs == terrain::CrsSource::EPSG_32635) { targetZone = 35; isNorth = true; ext.utmEpsg = 32635; }
-        else if (crs == terrain::CrsSource::EPSG_25832) { targetZone = 32; isNorth = true; ext.utmEpsg = 25832; }
-        else { targetZone = 33; isNorth = true; ext.utmEpsg = 25833; }
+        // Use the user-selected EPSG code from the CRS selector dialog.
+        // This supports ANY CRS in the PROJ database — UTM zones, national
+        // grids, geographic CRS, etc. The transform is done via PROJ.
+        int epsg = m_store->exportSettings().customEpsg;
+        if (epsg <= 0) {
+            // No custom EPSG set — fall back to WGS84
+            ext.crsMode = terrain::GeoCrsMode::WGS84;
+            ext.west = west;
+            ext.east = east;
+            ext.north = north;
+            ext.south = south;
+            break;
+        }
 
-        // Convert the corners using the target zone
-        auto convertPoint = [&](double lat, double lon) -> std::pair<double, double> {
-            double e, n;
-            latLonToUtmZone(lat, lon, targetZone, isNorth, e, n);
-            return {e, n};
-        };
+        auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
+        auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
+        if (srcCrs && dstCrs) {
+            gis::CoordinateTransform transform(*srcCrs, *dstCrs);
+            auto sw = transform.transform({south, west});
+            auto ne = transform.transform({north, east});
+            if (sw.success && ne.success) {
+                ext.west = sw.point.x;
+                ext.east = ne.point.x;
+                ext.south = sw.point.y;
+                ext.north = ne.point.y;
 
-        auto [e_w, n_n] = convertPoint(north, west);
-        auto [e_e, n_s] = convertPoint(south, east);
-        ext.crsMode = terrain::GeoCrsMode::UTM;
-        ext.west = e_w;
-        ext.east = e_e;
-        ext.north = n_n;
-        ext.south = n_s;
+                // Determine the CRS mode from the destination CRS kind
+                if (dstCrs->isProjected()) {
+                    if (dstCrs->code >= 32601 && dstCrs->code <= 32760) {
+                        ext.crsMode = terrain::GeoCrsMode::UTM;
+                    } else {
+                        // Other projected CRS — use UTM mode with the
+                        // actual EPSG code for GeoTIFF metadata
+                        ext.crsMode = terrain::GeoCrsMode::UTM;
+                    }
+                    ext.utmEpsg = epsg;
+                } else if (dstCrs->isGeographic()) {
+                    ext.crsMode = terrain::GeoCrsMode::WGS84;
+                    ext.utmEpsg = epsg;
+                } else {
+                    // Default to UTM mode for other projected CRS
+                    ext.crsMode = terrain::GeoCrsMode::UTM;
+                    ext.utmEpsg = epsg;
+                }
+            } else {
+                // Transform failed — fall back to WGS84
+                ext.crsMode = terrain::GeoCrsMode::WGS84;
+                ext.west = west;
+                ext.east = east;
+                ext.north = north;
+                ext.south = south;
+            }
+        } else {
+            // CRS lookup failed — fall back to WGS84
+            ext.crsMode = terrain::GeoCrsMode::WGS84;
+            ext.west = west;
+            ext.east = east;
+            ext.north = north;
+            ext.south = south;
+        }
         break;
     }
 

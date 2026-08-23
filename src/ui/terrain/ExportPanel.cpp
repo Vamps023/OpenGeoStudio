@@ -3,12 +3,17 @@
 #include "ExportPanel.hpp"
 #include "ExportEngine.hpp"
 
+#include "gis/ui/CrsSelectorDialog.hpp"
+#include "gis/crs/CRSManager.hpp"
+#include "gis/crs/CRSSearch.hpp"
+
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QFrame>
 #include <QStandardPaths>
 #include <QDir>
+#include <QHBoxLayout>
 
 // ============================================================
 // Dark theme stylesheet (GitHub dark inspired, matching Electron)
@@ -238,34 +243,54 @@ void ExportPanel::setupUi() {
     formLayout->addRow("GLAD Interval:", m_gladArdContainer);
     m_gladArdContainer->setVisible(false);
 
-    // CRS — combo order differs from the enum (Auto is first in the UI but
-    // last in CrsSource), so map through an explicit table instead of a cast.
+    // CRS — dynamic combo with "Select CRS..." dialog option
     m_crsCombo = new QComboBox();
-    m_crsCombo->addItems({
-        "Use Project CRS (if set)",
-        "Auto (UTM from bounds centroid)",
-        "EPSG:4326 — WGS84 (lat/lon)",
-        "EPSG:3857 — Web Mercator",
-        "EPSG:32633 — UTM Zone 33N",
-        "EPSG:32634 — UTM Zone 34N",
-        "EPSG:32635 — UTM Zone 35N",
-        "EPSG:25832 — ETRS89 UTM Zone 32N",
-        "EPSG:25833 — ETRS89 UTM Zone 33N"
-    });
-    const terrain::CrsSource crsByIndex[] = {
-        terrain::CrsSource::Project_CRS,
-        terrain::CrsSource::Auto_UTM,
-        terrain::CrsSource::EPSG_4326,
-        terrain::CrsSource::EPSG_3857,
-        terrain::CrsSource::EPSG_32633,
-        terrain::CrsSource::EPSG_32634,
-        terrain::CrsSource::EPSG_32635,
-        terrain::CrsSource::EPSG_25832,
-        terrain::CrsSource::EPSG_25833
-    };
+    m_crsCombo->addItem("Use Project CRS (if set)", static_cast<int>(terrain::CrsSource::Project_CRS));
+    m_crsCombo->addItem("Auto (UTM from bounds centroid)", static_cast<int>(terrain::CrsSource::Auto_UTM));
+    m_crsCombo->addItem("EPSG:4326 — WGS84 (lat/lon)", static_cast<int>(terrain::CrsSource::EPSG_4326));
+    m_crsCombo->addItem("EPSG:3857 — Web Mercator", static_cast<int>(terrain::CrsSource::EPSG_3857));
+    m_crsCombo->addItem("Select CRS...", -1);  // Sentinel: opens CRS selector dialog
+
     connect(m_crsCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, crsByIndex](int idx) {
-        m_store->setCrsSource(crsByIndex[idx]);
+            [this](int idx) {
+        int crsValue = m_crsCombo->itemData(idx).toInt();
+        if (crsValue == -1) {
+            // "Select CRS..." — open the PROJ-backed CRS selector dialog
+            gis::CrsSelectorDialog dialog(this);
+            if (dialog.exec() == QDialog::Accepted) {
+                auto crs = dialog.selectedCRS();
+                if (crs.isValid()) {
+                    // Update export settings with the selected EPSG code
+                    terrain::ExportSettings s = m_store->exportSettings();
+                    s.crsSource = terrain::CrsSource::Custom_EPSG;
+                    s.customEpsg = crs.code;
+                    s.customCrsName = QString::fromStdString(crs.name);
+                    m_store->setExportSettings(s);
+                    // Update combo label to show the selected CRS
+                    // (replace "Select CRS..." entry with the actual CRS name)
+                    QString label = QString("EPSG:%1 — %2")
+                        .arg(crs.code)
+                        .arg(QString::fromStdString(crs.name));
+                    m_crsCombo->setItemText(idx, label);
+                    m_crsCombo->setItemData(idx, static_cast<int>(terrain::CrsSource::Custom_EPSG));
+                    return;
+                }
+            }
+            // User cancelled — revert to previous selection
+            m_crsCombo->blockSignals(true);
+            // Find and select the entry matching the current store setting
+            auto currentSrc = m_store->exportSettings().crsSource;
+            for (int i = 0; i < m_crsCombo->count(); ++i) {
+                if (m_crsCombo->itemData(i).toInt() == static_cast<int>(currentSrc)) {
+                    m_crsCombo->setCurrentIndex(i);
+                    break;
+                }
+            }
+            m_crsCombo->blockSignals(false);
+        } else {
+            auto src = static_cast<terrain::CrsSource>(crsValue);
+            m_store->setCrsSource(src);
+        }
     });
     // Default to Project CRS — falls back to EPSG:4326 if no project CRS set
     m_crsCombo->setCurrentIndex(0);

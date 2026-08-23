@@ -102,14 +102,10 @@ enum class ImagerySource {
 
 enum class CrsSource {
     Project_CRS,    // Use the project's CRS (e.g. EPSG:32643)
+    Auto_UTM,       // Auto-detect UTM from bounds centroid
     EPSG_4326,      // WGS84 (lat/lon)
     EPSG_3857,      // Web Mercator
-    EPSG_32633,     // UTM Zone 33N
-    EPSG_32634,     // UTM Zone 34N
-    EPSG_32635,     // UTM Zone 35N
-    EPSG_25832,     // ETRS89 UTM Zone 32N
-    EPSG_25833,     // ETRS89 UTM Zone 33N
-    Auto_UTM        // Auto-detect UTM from bounds centroid
+    Custom_EPSG     // Arbitrary EPSG code selected via CRS selector dialog
 };
 
 struct ExportSettings {
@@ -119,6 +115,8 @@ struct ExportSettings {
     ImagerySource imagerySource = ImagerySource::Google_Satellite;
     CrsSource crsSource = CrsSource::Project_CRS; // Default to project CRS
     int projectCrsEpsg = 0;  // EPSG code from project (0 = not set, fall back to WGS84)
+    int customEpsg = 0;      // Arbitrary EPSG code when crsSource == Custom_EPSG
+    QString customCrsName;   // Human-readable name for the custom CRS
     int heightmapResolution = 1024;
     int albedoResolution = 1024;
     int imageryZoomLevel = 0;       // 0 = auto
@@ -189,14 +187,11 @@ struct ExportSettings {
 
     QString crsSourceStr() const {
         switch (crsSource) {
-        case CrsSource::EPSG_4326:   return "EPSG:4326";
-        case CrsSource::EPSG_3857:   return "EPSG:3857";
-        case CrsSource::EPSG_32633:  return "EPSG:32633";
-        case CrsSource::EPSG_32634:  return "EPSG:32634";
-        case CrsSource::EPSG_32635:  return "EPSG:32635";
-        case CrsSource::EPSG_25832:  return "EPSG:25832";
-        case CrsSource::EPSG_25833:  return "EPSG:25833";
-        case CrsSource::Auto_UTM:    return "auto";
+        case CrsSource::EPSG_4326:     return "EPSG:4326";
+        case CrsSource::EPSG_3857:     return "EPSG:3857";
+        case CrsSource::Auto_UTM:      return "auto";
+        case CrsSource::Custom_EPSG:   return "EPSG:" + QString::number(customEpsg);
+        case CrsSource::Project_CRS:   return "project";
         }
         return "auto";
     }
