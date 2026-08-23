@@ -76,6 +76,10 @@ public:
     // If not called, PROJ uses its compiled-in default.
     void setDataDirectory(const std::string& dir);
 
+    // Get the PROJ data directory currently in use (may be empty if
+    // the compiled-in default is used).
+    std::string dataDirectory() const { return m_dataDir; }
+
     // Check if PROJ context is valid and proj.db is accessible
     bool isInitialized() const;
 

@@ -26,6 +26,7 @@
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QFileInfo>
+#include <QFile>
 #include <QStandardPaths>
 #include <QDir>
 #include <QDialog>
@@ -949,6 +950,23 @@ public:
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+
+    // Set PROJ_LIB / PROJ_DATA environment variables so that ALL PROJ
+    // contexts (CRSManager, CoordinateTransform, OGRE, etc.) can find proj.db.
+    // Check exe-relative paths: <exeDir>/proj/proj.db and <exeDir>/proj.db.
+    // This is critical for deployed/portable installations where the
+    // compiled-in PROJ data path doesn't exist.
+    if (qEnvironmentVariableIsEmpty("PROJ_LIB") &&
+        qEnvironmentVariableIsEmpty("PROJ_DATA")) {
+        QString exeDir = QCoreApplication::applicationDirPath();
+        if (QFile::exists(exeDir + "/proj/proj.db")) {
+            qputenv("PROJ_LIB", (exeDir + "/proj").toLocal8Bit());
+            qputenv("PROJ_DATA", (exeDir + "/proj").toLocal8Bit());
+        } else if (QFile::exists(exeDir + "/proj.db")) {
+            qputenv("PROJ_LIB", exeDir.toLocal8Bit());
+            qputenv("PROJ_DATA", exeDir.toLocal8Bit());
+        }
+    }
 
     // Set application icon (from original Electron app assets)
     app.setWindowIcon(QIcon(":/icons/app.png"));

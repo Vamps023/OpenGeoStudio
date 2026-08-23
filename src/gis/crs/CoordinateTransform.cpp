@@ -93,6 +93,16 @@ void CoordinateTransform::initialize() {
 
     PJ_CONTEXT* ctx = reinterpret_cast<PJ_CONTEXT*>(m_ctx);
 
+    // Set the PROJ data search paths on this new context so
+    // proj_create_from_database can find proj.db. Without this, each
+    // new PROJ context defaults to the compiled-in path which doesn't
+    // exist in a deployed/portable installation.
+    std::string dataDir = CRSManager::instance().dataDirectory();
+    if (!dataDir.empty()) {
+        const char* dirCStr = dataDir.c_str();
+        proj_context_set_search_paths(ctx, 1, &dirCStr);
+    }
+
     // Create the coordinate operation
     // Use proj_create_crs_to_crs_from_pj for area-of-use selection
     PJ* sourcePj = proj_create_from_database(ctx,
