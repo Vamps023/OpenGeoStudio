@@ -6,6 +6,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QIcon>
+#include <QSettings>
 #include <qevent.h>
 #include <qpainter.h>
 
@@ -996,9 +997,22 @@ void LaneConfigWidget::OnResetToProfile()
 
 void LaneConfigWidget::OnSaveAsPreset()
 {
-    // For now, just re-load the current profile key (save-as-preset can be extended later)
-    // A full implementation would add to RoadProfileCatalog at runtime
+    // Save the current configuration as a custom preset in QSettings.
+    // The preset is persisted per-user and can be recalled later.
     if (currentProfileKey.isEmpty()) return;
+
+    QSettings settings("OpenGeoStudio", "LaneMaker");
+    int customCount = settings.value("profiles/customCount", 0).toInt();
+    QString customKey = QString("custom_%1").arg(customCount + 1);
+
+    settings.beginGroup("profiles/" + customKey);
+    settings.setValue("laneWidth", laneWidthSpinner->value());
+    settings.setValue("speedLimit", speedLimitSpinner->value());
+    settings.setValue("hasSidewalk", sidewalkCheck->isChecked());
+    settings.setValue("hasCurb", curbCheck->isChecked());
+    settings.endGroup();
+    settings.setValue("profiles/customCount", customCount + 1);
+
     // Reload to clear modified state
     LoadProfile(currentProfileKey);
 }

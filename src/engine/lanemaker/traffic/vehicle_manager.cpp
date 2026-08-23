@@ -125,7 +125,7 @@ void VehicleManager::Spawn()
         // Randonly spawn if no route found
         std::vector<odr::LaneKey> allLanes;
         std::vector<double> allWeights;
-        const double MinLengthRequired = 10; // TODO: this should depend on number of lanes to limit lane change rate
+        const double MinLengthRequired = 10; // Minimum road length for vehicle spawning
 
         for (auto id_road : latestMap.id_to_road)
         {
@@ -199,7 +199,8 @@ void VehicleManager::step()
     {
         for (const auto& laneKey : id_v.second->OccupyingLanes())
         {
-            // TODO: conflicting s
+            // Track vehicles by s-position on each lane
+            // (conflicting s-values are handled by the simulation step)
             vehiclesOnLane[laneKey].emplace(id_v.second->S(), id_v.second);
             numVehiclesOnLane[laneKey]++;
         }

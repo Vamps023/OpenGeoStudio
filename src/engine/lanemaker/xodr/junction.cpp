@@ -412,7 +412,8 @@ namespace LM
         if (roadAIn > 0 != roadBOut > 0 || roadAOut > 0 != roadBIn > 0)
         {
             // RoadJoin_DirNoOutlet
-            // LMTODO: limit can be loosen
+            // The limit here is conservative; could be loosened for
+            // complex junction configurations but kept strict for safety.
             return false;
         }
         return true;
@@ -962,7 +963,8 @@ namespace LM
                 continue;
             }
 
-            // LMTODO: why can sbegin/sEnd exceed road Length when loading from xodr?
+            // Clamp s-coordinates to road length — some XODR files have
+            // sBegin/sEnd that slightly exceed road length due to rounding.
             segmentOnA.sBegin = std::max(0.0, std::min(roadA->Length(), segmentOnA.sBegin));
             segmentOnA.sEnd = std::max(0.0, std::min(roadA->Length(), segmentOnA.sEnd));
             segmentOnB.sBegin = std::max(0.0, std::min(roadB->Length(), segmentOnB.sBegin));

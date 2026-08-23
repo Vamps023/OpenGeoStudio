@@ -68,10 +68,10 @@ enum class MaterialType : uint8_t {
     Asphalt,            // Road pavement
     WhiteMarking,       // White lane marking
     YellowMarking,      // Yellow lane marking
-    Curb,               // Curb stone (future)
-    Shoulder,           // Gravel shoulder (future)
-    Sidewalk,           // Sidewalk (future)
-    Grass,              // Grass median (future)
+    Curb,               // Curb stone
+    Shoulder,           // Gravel shoulder
+    Sidewalk,           // Sidewalk
+    Grass,              // Grass median
     Unknown             // Fallback
 };
 

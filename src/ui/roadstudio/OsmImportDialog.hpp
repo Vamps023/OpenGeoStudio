@@ -192,7 +192,7 @@ private slots:
                 m_elevationLabel->setStyleSheet("QLabel { color: #f85149; font-size: 10px; }");
             }
         } else {
-            m_elevationLabel->setText("Elevation sampling disabled — roads will be flat");
+            m_elevationLabel->setText("No heightmap available — roads will be flat");
             m_elevationLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
         }
 

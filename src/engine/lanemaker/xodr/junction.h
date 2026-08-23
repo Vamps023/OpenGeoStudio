@@ -209,7 +209,9 @@ namespace LM
 #endif
     };
 
-    // TODO: inherit same class as Road to manage ID
+    // Junction manages its own ID via the AbstractJunction base class.
+    // Future refactoring could unify ID management with Road through a
+    // common base class.
     class Junction: public AbstractJunction
     {
         friend class LTest::Validation;

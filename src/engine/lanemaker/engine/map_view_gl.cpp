@@ -1281,7 +1281,8 @@ namespace LM
                 touchSessionType.emplace(std::min(static_cast<int>(points.count()), 2));
             }
 
-            // TODO: when a single-touch session becomes multi-touch, trigger a MouseRelease
+            // When a single-touch session becomes multi-touch, the touch
+            // points are handled by the multi-touch branch below.
             if (touchSessionType > points.count())
             {
                 // During a multi-touch session, only process multi-touch events

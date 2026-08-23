@@ -423,7 +423,8 @@ namespace LM
     void ChangeTracker::RestoreChange(const MapChange& change)
     {
         // Tear down after
-        // LMTODO: can be costly for long road
+        // Note: full road teardown iterates all segments; for very long
+        // roads this could be optimized with incremental teardown.
 
         // for the rare event that tearing down road changes nulls all shared_ptr to junction
         std::map<std::string, odr::Junction> tornDownJunctions;

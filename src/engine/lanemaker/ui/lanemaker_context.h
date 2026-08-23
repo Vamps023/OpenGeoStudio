@@ -16,7 +16,8 @@
 // LaneMaker instance's state in a structured way.
 //
 // Phase A (current): Document and centralize global access.
-// Phase B (future): Migrate singletons to instance-based ownership.
+// Phase B: Migrate singletons to instance-based ownership (architectural
+//          refactoring tracked in ARCHITECTURE_RULES.md).
 //
 // See:
 //   - docs/REVERSE_ENGINEERING_PART1_ARCHITECTURE.md Section 0

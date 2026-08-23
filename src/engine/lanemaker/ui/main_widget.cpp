@@ -2242,12 +2242,16 @@ void MainWidget::syncMapToCamera()
 {
 #ifdef HAVE_MAPLIBRE
     if (!m_mapWidget || !m_mapWidget->map()) return;
-    // Center the map on the default location (Pune, India)
-    // In a full implementation, this would convert LaneMaker world coords
-    // to lat/lon and sync the map camera.
+    // LaneMaker works in local Cartesian coordinates and does not have
+    // a georeferenced world origin. The map view is centered on the
+    // last known position from QSettings (or default if none).
     auto* map = m_mapWidget->map();
-    map->setCoordinate(QMapLibre::Coordinate(18.52, 73.85));
-    map->setZoom(15.0);
+    QSettings settings("OpenGeoStudio", "LaneMaker");
+    double lat = settings.value("map/lat", 18.52).toDouble();
+    double lon = settings.value("map/lon", 73.85).toDouble();
+    double zoom = settings.value("map/zoom", 15.0).toDouble();
+    map->setCoordinate(QMapLibre::Coordinate(lat, lon));
+    map->setZoom(zoom);
 #endif
 }
 

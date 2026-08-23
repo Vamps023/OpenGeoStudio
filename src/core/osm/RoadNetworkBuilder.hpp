@@ -65,7 +65,7 @@ public:
         bool preserveJunctionNodes = true;  // keep nodes where roads meet
         bool preserveBridgeTunnel = true;   // keep bridge/tunnel boundary points
         bool preserveLayerChanges = true;   // keep points where layer changes
-        bool fitCurves = false;             // fit arcs/bezier to OSM polylines (future)
+        bool fitCurves = false;             // fit arcs to OSM polylines (disabled by default; OSM data is polyline-based)
     };
 
     // Build result

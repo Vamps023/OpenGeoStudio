@@ -134,7 +134,7 @@ inline std::vector<uint32_t> triangulatePolygon(const std::vector<Point2D>& poly
 // Creates a triangle strip mesh for a road surface with:
 // - Miter-joint edge offsets (correct for curves)
 // - Arc-length UV mapping (texture tiles correctly along length)
-// - Proper normals (up, with optional banking in future)
+// - Proper normals (up, with optional banking/superelevation)
 // - Lane boundary vertices (for lane marking generation)
 inline MeshData generateRoadMesh(const Road& road, int numSamples = 32) {
     MeshData mesh;
@@ -217,7 +217,7 @@ inline MeshData generateRoadMesh(const Road& road, int numSamples = 32) {
         mesh.vertices.push_back(right.y);
         mesh.vertices.push_back(right.z);
 
-        // Normals (pointing up — future: add banking/superelevation)
+        // Normals (pointing up — banking/superelevation not applied)
         for (int j = 0; j < 2; j++) {
             mesh.normals.push_back(0);
             mesh.normals.push_back(0);

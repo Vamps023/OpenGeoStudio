@@ -1,7 +1,7 @@
 #pragma once
 
 // ═══════════════════════════════════════════════════════════
-// Lane Graph — Phase 3.2: Lane-Level Connectivity at Junctions
+// Lane Graph — Lane-Level Connectivity at Junctions
 // ═══════════════════════════════════════════════════════════
 //
 // @file lane_graph.hpp

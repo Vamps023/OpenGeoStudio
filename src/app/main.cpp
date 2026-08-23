@@ -57,7 +57,7 @@
 #include "ui/studio3d/Studio3DWidget.hpp"
 #include "main_window.h"
 
-// Phase 2c: MapLibre Native Qt map viewport
+// MapLibre Native Qt map viewport integration
 #if defined(HAVE_MAPLIBRE)
 #include "app/MapViewportWidget.hpp"
 #endif

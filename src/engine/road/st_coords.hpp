@@ -19,8 +19,8 @@
 // - clampS() centralizes clamping; all eval methods use it.
 // - validateContinuity() returns diagnostics, not bool.
 // - Empty sequence: assert in debug, not silent (0,0).
-// - projectToST() intentionally omitted — declare in Phase 3 when
-//   implemented. A stub returning {0,0} is worse than a compile error.
+// - projectToST() is intentionally not declared. A stub returning {0,0}
+//   would be worse than a compile error. Implement when needed.
 //
 // ─── Boundary semantics ───────────────────────────────────
 // At a segment boundary (e.g., s=10 when seg0.length=10, seg1.length=5):
