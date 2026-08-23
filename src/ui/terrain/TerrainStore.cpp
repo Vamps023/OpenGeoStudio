@@ -249,11 +249,20 @@ void TerrainStore::fromJson(const QJsonObject& j) {
     m_tileSizeKm = j["tileSizeKm"].toDouble(2.0);
     m_zoomLocked = j["zoomLocked"].toBool(false);
 
+    // Compute the tile grid first — this clears m_selectedTiles as a side
+    // effect, so we restore the saved selection AFTER this call.
+    if (m_bounds.isValid()) {
+        computeTileGrid();
+    }
+
+    // Restore the selected tile IDs from the saved state.
+    // This must happen AFTER computeTileGrid() so the selection survives.
     if (j.contains("selectedTiles")) {
         const QJsonArray tiles = j["selectedTiles"].toArray();
         for (const auto& v : tiles) {
             m_selectedTiles.insert(v.toString());
         }
+        emit tileSelectionChanged();
     }
 
     if (j.contains("exportSettings")) {
@@ -275,9 +284,6 @@ void TerrainStore::fromJson(const QJsonObject& j) {
             m_exportSettings.mapboxToken = env.value("MAPBOX_TOKEN");
     }
 
-    if (m_bounds.isValid()) {
-        computeTileGrid();
-    }
     emit boundsChanged(m_bounds);
     emit exportSettingsChanged();
 }

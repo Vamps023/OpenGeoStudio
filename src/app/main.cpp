@@ -832,9 +832,11 @@ private slots:
         const auto& proj = m_ctx->projects().current();
         const QJsonObject& ms = proj.moduleState;
 
-        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Restore terrain state ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+        // Restore terrain state (bounds, tile grid, selected tiles, export settings)
+        bool terrainRestored = false;
         if (ms.contains("terrain")) {
             m_ctx->terrain().fromJson(ms["terrain"].toObject());
+            terrainRestored = true;
         }
 
         // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Restore road network ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â defer loading until Road Studio is visible ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
@@ -857,8 +859,11 @@ private slots:
             }
         }
 
-        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Update project bounds in terrain store ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-        if (proj.bounds.valid) {
+        // Update project bounds in terrain store — but only if the terrain
+        // state was NOT already restored from JSON (which includes bounds +
+        // selected tiles). Calling setBounds() again would recompute the tile
+        // grid and wipe the restored tile selection.
+        if (!terrainRestored && proj.bounds.valid) {
             terrain::GeoBounds bounds;
             bounds.south = proj.bounds.minLat;
             bounds.north = proj.bounds.maxLat;
