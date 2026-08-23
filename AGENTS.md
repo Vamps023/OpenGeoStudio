@@ -55,12 +55,10 @@ Exposed via `OGS_VERSION` compile definition. Used in:
 | `test_houston_roundtrip` | Houston OSM round-trip tests | 56/56 pass |
 | `test_geotiff_writer` | GeoTIFF writer tests | WGS84 + UTM metadata checks |
 | `test_gpxz_download` | GPXZ elevation API tests | Requires `GPXZ_API_KEY`; skips without it |
-| `test_road_studio` | Road Studio feature tests | 325 pass (all feature tests) |
-| `test_road_studio_ui` | Road Studio UI smoke test | DISABLED (hangs in headless QApplication) |
+| `test_road_studio` | Road Studio feature tests | 388 pass (signs, markings, furniture, snapping, measurement, persistence, templates, road creation, multi-lane, lane width, cross-section, mesh generation, junctions). 4 tests catch and ignore LaneMaker SEH exceptions in test mode. |
+| `test_road_studio_ui` | Road Studio UI smoke test (headless) | 12/12 pass — tests LaneConfigWidget, profile switching, ActionManager, Preference system. Runs in 0.08s. |
 
-**All 10 active CTest targets pass (100%).** The test_road_studio_ui test is
-disabled due to a QApplication construction hang when linked against
-lanemaker::core with OpenGL/CGAL static initializers.
+**All 11 CTest targets pass (100%), 0 disabled, 0 skipped.**
 
 CTest uses a generated wrapper batch script (`ogs_test_wrapper.bat`) to set
 up the PATH for Qt and QMapLibre DLLs before running each test.
