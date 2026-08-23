@@ -22,6 +22,10 @@ CMakeSettings.json
 # Temporary / scratch files
 .commit_msg*.txt
 .commit-stage*.txt
+.commit_*.txt
+.commit-*.txt
+_run_*.bat
+_fix_*.ps1
 all_tests.txt
 bt_log.txt
 rs_test.txt
