@@ -31,6 +31,9 @@
 #include <optional>
 #include <functional>
 
+// Forward-declare CRSDefinition to avoid pulling PROJ into every TU
+namespace gis { struct CRSDefinition; }
+
 struct ProjectBounds {
     double minLat = 0, minLon = 0, maxLat = 0, maxLon = 0;
     bool valid = false;
@@ -70,6 +73,15 @@ struct Project {
     QString basePath;    // project folder path
     ProjectBounds bounds;
 
+    // Project CRS — the target CRS for all geospatial data in this project.
+    // Stored as authId (e.g. "EPSG:32643") plus full CRS metadata.
+    // When empty, defaults to EPSG:4326 (WGS84 geographic).
+    QString projectCrsAuthId;       // e.g. "EPSG:32643"
+    QString projectCrsName;         // human-readable name
+    QString projectCrsWkt2;         // WKT2:2019 string for exact restoration
+
+    bool hasProjectCRS() const { return !projectCrsAuthId.isEmpty(); }
+
     bool isNull() const { return id.isEmpty(); }
 
     QJsonObject toJson() const {
@@ -85,6 +97,13 @@ struct Project {
         if (!filePath.isEmpty()) j["filePath"] = filePath;
         if (!basePath.isEmpty()) j["basePath"] = basePath;
         if (bounds.valid) j["bounds"] = bounds.toJson();
+        if (!projectCrsAuthId.isEmpty()) {
+            QJsonObject crs;
+            crs["authId"] = projectCrsAuthId;
+            crs["name"] = projectCrsName;
+            if (!projectCrsWkt2.isEmpty()) crs["wkt2"] = projectCrsWkt2;
+            j["projectCRS"] = crs;
+        }
         return j;
     }
 
@@ -105,6 +124,14 @@ struct Project {
         p.basePath = j["basePath"].toString();
         if (auto b = ProjectBounds::fromJson(j["bounds"].toObject())) {
             p.bounds = *b;
+        }
+
+        // Load project CRS
+        if (j.contains("projectCRS") && j["projectCRS"].isObject()) {
+            QJsonObject crs = j["projectCRS"].toObject();
+            p.projectCrsAuthId = crs["authId"].toString();
+            p.projectCrsName = crs["name"].toString();
+            p.projectCrsWkt2 = crs["wkt2"].toString();
         }
 
         // Sanitize: remove any credential fields from moduleState that may

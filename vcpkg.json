@@ -13,7 +13,8 @@
     "boost-optional",
     "cgal",
     "gtest",
-    "cereal"
+    "cereal",
+    "proj"
   ],
   "builtin-baseline": "2f1d605400c8727cc00c15797aba796c88ccd523"
 }

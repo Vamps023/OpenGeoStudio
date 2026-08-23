@@ -87,6 +87,7 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(TIFF REQUIRED)
 find_package(PNG REQUIRED)
+find_package(PROJ CONFIG REQUIRED)
 
 set(ROAD_ENGINE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/road/geometry.hpp
@@ -301,6 +302,11 @@ set(APP_SOURCES
     src/ui/studio3d/EditorPanels.cpp
     src/ui/studio3d/PropertiesEditor.cpp
     src/ui/studio3d/NPanel.cpp
+    # GIS / CRS (PROJ-backed)
+    src/gis/crs/CRSManager.cpp
+    src/gis/crs/CoordinateTransform.cpp
+    src/gis/crs/CRSSearch.cpp
+    src/gis/ui/CrsSelectorDialog.cpp
 )
 
 if(QMapLibre_FOUND)
@@ -356,6 +362,9 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/world
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/osm
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gis
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/crs
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/ui
 )
 
 target_link_libraries(OpenGeoStudio PRIVATE
@@ -370,6 +379,7 @@ target_link_libraries(OpenGeoStudio PRIVATE
     plugin_api
     TIFF::TIFF
     PNG::PNG
+    PROJ::proj
 )
 
 # Link OpenGL library for 3D viewport
@@ -511,6 +521,19 @@ if(WIN32)
             COMMENT "Copying QMapLibre DLLs to deploy directory..."
         )
     endif()
+
+    # Copy PROJ DLL and proj.db data directory to deploy folder
+    add_custom_command(TARGET OpenGeoStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:PROJ::proj>"
+            "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenGeoStudio>/proj"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/share/proj"
+            "$<TARGET_FILE_DIR:OpenGeoStudio>/proj"
+        COMMENT "Copying PROJ DLL and proj.db to deploy directory..."
+    )
 endif()
 
 # ─── doctest Tests (C++ road engine unit tests) ──────────────
@@ -624,6 +647,29 @@ if(BUILD_TESTS)
         target_compile_options(test_world_model PRIVATE /EHa /bigobj)
     endif()
 
+    # ─── CRS System test suite (PROJ-backed) ────────────────
+    add_executable(test_crs_system
+        src/gis/test/test_crs_system.cpp
+        src/gis/crs/CRSManager.cpp
+        src/gis/crs/CoordinateTransform.cpp
+        src/gis/crs/CRSSearch.cpp
+    )
+    set_target_properties(test_crs_system PROPERTIES AUTOMOC ON)
+    target_include_directories(test_crs_system PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gis
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/crs
+    )
+    target_link_libraries(test_crs_system PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        PROJ::proj
+    )
+    if(MSVC)
+        target_compile_options(test_crs_system PRIVATE /EHa /bigobj)
+    endif()
+
     # ─── World Workflow test suite (3D Studio) ──────────────
     add_executable(test_world_workflow
         src/core/world/test_world_workflow.cpp
@@ -721,6 +767,7 @@ if(BUILD_TESTS)
     add_test(NAME test_geotiff_writer    COMMAND test_geotiff_writer)
     add_test(NAME test_terrain_pipeline  COMMAND test_terrain_pipeline)
     add_test(NAME test_world_model       COMMAND test_world_model)
+    add_test(NAME test_crs_system        COMMAND test_crs_system)
     add_test(NAME test_world_workflow    COMMAND test_world_workflow)
     add_test(NAME test_osm_pipeline      COMMAND test_osm_pipeline)
     add_test(NAME test_houston_roundtrip COMMAND test_houston_roundtrip)
