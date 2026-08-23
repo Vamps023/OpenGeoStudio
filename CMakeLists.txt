@@ -768,6 +768,10 @@ if(BUILD_TESTS)
     )
     if(MSVC)
         target_compile_options(test_road_studio PRIVATE /EHa /bigobj)
+        # Increase stack size to avoid stack overflow in LaneMaker junction tests
+        # (deep recursion in Junction::CreateFrom with complex junction topologies)
+        set_target_properties(test_road_studio PROPERTIES
+            LINK_FLAGS "/STACK:16777216")
     endif()
     target_compile_definitions(test_road_studio PRIVATE G_TEST)
 
@@ -830,8 +834,9 @@ if(BUILD_TESTS)
     endforeach()
 endif()
 
-# ─── Road Studio UI smoke test (headless, drives the real MainWidget) ───
-# Uses BUILD_TESTS (not BUILD_TESTING) for consistency with all other tests.
+# ─── Road Studio UI smoke test (headless) ───
+# Tests LaneConfigWidget, profile switching, and preference system
+# without requiring an OpenGL context (MainWindow/MapViewGL).
 if(BUILD_TESTS)
     add_executable(test_road_studio_ui
         src/engine/lanemaker/test/test_road_studio_ui.cpp
@@ -849,15 +854,9 @@ if(BUILD_TESTS)
     if(MSVC)
         target_compile_options(test_road_studio_ui PRIVATE /EHa /bigobj)
     endif()
-    # test_road_studio_ui is registered but will be skipped in CI/CTest
-    # due to a pre-existing QApplication construction hang when linked
-    # against lanemaker::core (which pulls in Qt6::OpenGL + CGAL static
-    # initializers). The test builds correctly but cannot run headlessly.
-    # See AGENTS.md for details.
-    add_test(NAME test_road_studio_ui    COMMAND test_road_studio_ui)
+    add_test(NAME test_road_studio_ui    COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_road_studio_ui>)
     set_tests_properties(test_road_studio_ui PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-        DISABLED TRUE)
+        TIMEOUT 30)
 endif()
 
 # ─── Print Configuration Summary ─────────────────────────────

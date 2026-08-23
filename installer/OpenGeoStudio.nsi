@@ -43,13 +43,12 @@ Var StartMenuFolder
 
 ; ---- Modern UI Settings ----
 !define MUI_ABORTWARNING
-!define MUI_ICON "installer\installer_icon.ico"
-!define MUI_UNICON "installer\uninstaller_icon.ico"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
+!define MUI_ICON "app-icon.ico"
+!define MUI_UNICON "app-icon.ico"
 
 ; ---- Pages ----
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "LICENSE"
+!insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 
@@ -73,7 +72,7 @@ Var StartMenuFolder
 
 ; ---- Installer name and output ----
 Name "${APP_NAME} ${APP_VERSION}"
-OutFile "OpenGeoStudio-${APP_VERSION}-Windows-x64.exe"
+OutFile "..\build\OpenGeoStudio-${APP_VERSION}-Windows-x64.exe"
 InstallDir "$PROGRAMFILES64\OpenGeoStudio"
 InstallDirRegKey HKCU "${APP_REGKEY}" "InstallDir"
 ShowInstDetails show
@@ -89,7 +88,7 @@ Section "OpenGeoStudio (required)" SecCore
     SetOutPath "$INSTDIR"
     
     ; Copy all files from the deploy directory
-    File /r "build\deploy\*.*"
+    File /r "..\build\deploy\*.*"
 
     ; Write installation registry keys
     WriteRegStr HKCU "${APP_REGKEY}" "InstallDir" "$INSTDIR"
