@@ -88,7 +88,9 @@ Section "OpenGeoStudio (required)" SecCore
     SetOutPath "$INSTDIR"
     
     ; Copy all files from the deploy directory
-    File /r "..\build\deploy\*.*"
+    ; Exclude transient files (log.txt, *.log) that may be locked by a
+    ; running instance of the application.
+    File /r /x log.txt /x *.log /x *.tmp "..\build\deploy\*.*"
 
     ; Write installation registry keys
     WriteRegStr HKCU "${APP_REGKEY}" "InstallDir" "$INSTDIR"
