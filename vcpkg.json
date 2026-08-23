@@ -1,6 +1,6 @@
 {
   "name": "opengeostudio",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "OpenGeoStudio native C++/Qt desktop application — vcpkg dependency manifest",
   "homepage": "https://github.com/nares/OpenGeoStudio",
   "license": "MIT",
