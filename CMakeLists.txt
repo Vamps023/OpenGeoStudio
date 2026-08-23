@@ -876,3 +876,19 @@ if(WIN32)
 endif()
     message(STATUS "  Deploy Dir:        ${CMAKE_BINARY_DIR}/deploy")
 message(STATUS "")
+
+# ─── Packaging (Portable ZIP) ────────────────────────────────
+# The portable ZIP is created from the deploy/ directory after
+# windeployqt has collected all runtime dependencies.
+# Run: cmake --build build --target package_portable
+if(WIN32)
+    add_custom_target(package_portable
+        COMMAND ${CMAKE_COMMAND}
+            -DPACKAGE_DIR=${CMAKE_BINARY_DIR}/deploy
+            -DPACKAGE_VERSION=${PROJECT_VERSION}
+            -DOUTPUT_DIR=${CMAKE_BINARY_DIR}
+            -P ${CMAKE_SOURCE_DIR}/cmake/PackagePortable.cmake
+        DEPENDS OpenGeoStudio
+        COMMENT "Creating portable ZIP package..."
+    )
+endif()
