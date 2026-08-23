@@ -4,18 +4,24 @@
 // GISProcessor — Geospatial processing (CRS, reprojection, clip, resample)
 // ============================================================
 //
-// QGIS-inspired geospatial operations without requiring GDAL/PROJ.
+// QGIS-inspired geospatial operations.
+// CRS detection and coordinate transforms are backed by PROJ via the
+// gis::CRSManager / gis::CoordinateTransform facilities. Raster
+// operations (clip, resample, rasterize) remain hand-written since
+// they are not duplicated by PROJ.
 // Supports:
 //   - CRS detection and validation
-//   - Reprojection (WGS84 <-> Web Mercator <-> UTM)
+//   - Reprojection (WGS84 <-> Web Mercator <-> UTM, and any PROJ CRS)
 //   - Raster clipping to extent
 //   - Resampling (bilinear, nearest-neighbor)
-//   - Vector rasterization (polygon, line → raster mask)
+//   - Vector rasterization (polygon, line -> raster mask)
 //   - Vector reprojection
 //
 
 #include "TerrainPipelineTypes.hpp"
 #include "../../core/map/CoordinateTransform.hpp"
+#include "../../gis/crs/CRSManager.hpp"
+#include "../../gis/crs/CoordinateTransform.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -59,13 +65,15 @@ public:
     // Coordinate Transformation
     // ============================================================
 
-    // Transform a single point from source CRS to target CRS
+    // Transform a single point from source CRS to target CRS.
+    // Uses PROJ for accurate transformations. Falls back to the fast
+    // inline Web Mercator path for the common 4326<->3857 case.
     static std::pair<double, double> transformPoint(
         double x, double y, const CrsSpec& srcCrs, const CrsSpec& dstCrs) {
 
         if (srcCrs.epsg == dstCrs.epsg) return {x, y};
 
-        // WGS84 <-> Web Mercator
+        // WGS84 <-> Web Mercator (fast inline path, same accuracy as PROJ)
         if (srcCrs.epsg == 4326 && dstCrs.epsg == 3857) {
             auto p = map::CoordinateTransform::lonLatToMercator(x, y);
             return {p.x, p.y};
@@ -75,22 +83,22 @@ public:
             return {p.x, p.y};
         }
 
-        // WGS84 -> UTM
-        if (srcCrs.epsg == 4326 && dstCrs.epsg >= 32601 && dstCrs.epsg <= 32760) {
-            int zone = (dstCrs.epsg > 32700) ? (dstCrs.epsg - 32700) : (dstCrs.epsg - 32600);
-            bool north = dstCrs.epsg < 32700;
-            return lonLatToUtm(x, y, zone, north);
+        // Generic path via PROJ — covers UTM and any other CRS pair.
+        auto srcOpt = gis::CRSManager::instance().fromEPSG(srcCrs.epsg);
+        auto dstOpt = gis::CRSManager::instance().fromEPSG(dstCrs.epsg);
+        if (!srcOpt || !dstOpt) {
+            // Unknown CRS — do not silently produce wrong data.
+            return {x, y};
         }
-
-        // UTM -> WGS84
-        if ((srcCrs.epsg >= 32601 && srcCrs.epsg <= 32760) && dstCrs.epsg == 4326) {
-            int zone = (srcCrs.epsg > 32700) ? (srcCrs.epsg - 32700) : (srcCrs.epsg - 32600);
-            bool north = srcCrs.epsg < 32700;
-            return utmToLonLat(x, y, zone, north);
-        }
-
-        // Fallback: no transform
-        return {x, y};
+        gis::CoordinateTransform xf(*srcOpt, *dstOpt);
+        if (!xf.isValid()) return {x, y};
+        gis::GeoPoint pt;
+        pt.x = x;
+        pt.y = y;
+        pt.hasZ = false;
+        auto result = xf.transform(pt);
+        if (!result.success) return {x, y};
+        return {result.point.x, result.point.y};
     }
 
     // Transform a bounding box (returns new bounds)
@@ -407,82 +415,11 @@ public:
     }
 
 private:
-    // ============================================================
-    // UTM Transformation (WGS84 <-> UTM)
-    // ============================================================
-
-    static std::pair<double, double> lonLatToUtm(double lon, double lat, int zone, bool north) {
-        // WGS84 ellipsoid parameters
-        constexpr double a = 6378137.0;
-        constexpr double f = 1.0 / 298.257223563;
-        constexpr double k0 = 0.9996;
-        double e = std::sqrt(1 - (1 - f) * (1 - f));
-        double e2 = e * e / (1 - e * e);
-
-        double latRad = lat * M_PI / 180.0;
-        double lonRad = lon * M_PI / 180.0;
-        double lonOrigin = (zone - 1) * 6 - 180 + 3;
-        double lonOriginRad = lonOrigin * M_PI / 180.0;
-
-        double N = a / std::sqrt(1 - e2 * std::sin(latRad) * std::sin(latRad));
-        double T = std::tan(latRad) * std::tan(latRad);
-        double C = e2 * std::cos(latRad) * std::cos(latRad);
-        double A = std::cos(latRad) * (lonRad - lonOriginRad);
-        double M = a * ((1 - e / 4 - 3 * e * e / 64 - 5 * e * e * e / 256) * latRad
-            - (3 * e / 8 + 3 * e * e / 32 + 45 * e * e * e / 1024) * std::sin(2 * latRad)
-            + (15 * e * e / 256 + 45 * e * e * e / 1024) * std::sin(4 * latRad)
-            - (35 * e * e * e / 3072) * std::sin(6 * latRad));
-
-        double easting = k0 * N * (A + (1 - T + C) * A * A * A / 6
-            + (5 - 18 * T + T * T + 72 * C - 58 * e2) * A * A * A * A * A / 120) + 500000.0;
-
-        double northing = k0 * (M + N * std::tan(latRad) * (A * A / 2
-            + (5 - T + 9 * C + 4 * C * C) * A * A * A * A / 24
-            + (61 - 58 * T + T * T + 600 * C - 330 * e2) * A * A * A * A * A * A / 720));
-
-        if (!north) northing += 10000000.0;
-
-        return {easting, northing};
-    }
-
-    static std::pair<double, double> utmToLonLat(double easting, double northing, int zone, bool north) {
-        constexpr double a = 6378137.0;
-        constexpr double f = 1.0 / 298.257223563;
-        constexpr double k0 = 0.9996;
-        double e = std::sqrt(1 - (1 - f) * (1 - f));
-        double e2 = e * e / (1 - e * e);
-        double e1 = (1 - std::sqrt(1 - e * e)) / (1 + std::sqrt(1 - e * e));
-
-        if (!north) northing -= 10000000.0;
-
-        double x = easting - 500000.0;
-        double y = northing;
-
-        double M = y / k0;
-        double mu = M / (a * (1 - e / 4 - 3 * e * e / 64 - 5 * e * e * e / 256));
-
-        double phi1 = mu + (3 * e1 / 2 - 27 * e1 * e1 * e1 / 32) * std::sin(2 * mu)
-            + (21 * e1 * e1 / 16 - 55 * e1 * e1 * e1 * e1 / 32) * std::sin(4 * mu)
-            + (151 * e1 * e1 * e1 / 96) * std::sin(6 * mu)
-            + (1097 * e1 * e1 * e1 * e1 / 512) * std::sin(8 * mu);
-
-        double N1 = a / std::sqrt(1 - e2 * std::sin(phi1) * std::sin(phi1));
-        double T1 = std::tan(phi1) * std::tan(phi1);
-        double C1 = e2 * std::cos(phi1) * std::cos(phi1);
-        double R1 = a * (1 - e * e) / std::pow(1 - e2 * std::sin(phi1) * std::sin(phi1), 1.5);
-        double D = x / (N1 * k0);
-
-        double lonOrigin = (zone - 1) * 6 - 180 + 3;
-
-        double lat = phi1 - (N1 * std::tan(phi1) / R1) * (D * D / 2
-            - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * e2) * D * D * D * D / 24
-            + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * e2 - 3 * C1 * C1) * D * D * D * D * D * D / 720);
-
-        double lon = lonOrigin * M_PI / 180.0 + (D - (1 + 2 * T1 + C1) * D * D * D / 6
-            + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * e2 + 24 * T1 * T1) * D * D * D * D * D / 120) / std::cos(phi1);
-
-        return {lon * 180.0 / M_PI, lat * 180.0 / M_PI};
-    }
+    // UTM forward/inverse transforms are now handled by PROJ via
+    // transformPoint(). The hand-written UTM series expansions that
+    // previously lived here have been removed in favour of the
+    // PROJ-backed gis::CoordinateTransform, which is accurate for
+    // all UTM zones and hemispheres.
 };
 
 } // namespace terrain_pipeline

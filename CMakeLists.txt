@@ -594,6 +594,8 @@ if(BUILD_TESTS)
     # ─── Terrain Pipeline test suite (26 tests) ───────────────
     add_executable(test_terrain_pipeline
         src/core/terrain/test_terrain_pipeline.cpp
+        src/gis/crs/CRSManager.cpp
+        src/gis/crs/CoordinateTransform.cpp
     )
     set_target_properties(test_terrain_pipeline PROPERTIES AUTOMOC ON)
     target_include_directories(test_terrain_pipeline PRIVATE
@@ -603,6 +605,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/providers
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
         ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/crs
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
     )
     target_link_libraries(test_terrain_pipeline PRIVATE
@@ -610,6 +613,7 @@ if(BUILD_TESTS)
         Qt6::Gui
         Qt6::Network
         TIFF::TIFF
+        PROJ::proj
     )
     if(MSVC)
         target_compile_options(test_terrain_pipeline PRIVATE /EHa /bigobj)
