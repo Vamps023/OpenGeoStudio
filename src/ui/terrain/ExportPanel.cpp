@@ -14,6 +14,7 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QHBoxLayout>
+#include <QSignalBlocker>
 
 // ============================================================
 // Dark theme stylesheet (GitHub dark inspired, matching Electron)
@@ -330,15 +331,23 @@ void ExportPanel::setupUi() {
 
     // Imagery zoom
     m_imageryZoomCombo = new QComboBox();
-    m_imageryZoomCombo->addItems({
-        "Auto (recommended)", "10 — Low", "12 — Medium", "14 — Good",
-        "16 — High", "18 — Very High", "19 — Ultra",
-        "20 — Extreme (ArcGIS/Mapbox)", "21 — Max Detail", "22 — Micro"
+    m_imageryZoomCombo->addItem("Auto (recommended)", 0);
+    m_imageryZoomCombo->addItem("10 — Low", 10);
+    m_imageryZoomCombo->addItem("12 — Medium", 12);
+    m_imageryZoomCombo->addItem("14 — Good", 14);
+    m_imageryZoomCombo->addItem("16 — High", 16);
+    m_imageryZoomCombo->addItem("18 — Very High", 18);
+    m_imageryZoomCombo->addItem("19 — Ultra", 19);
+    connect(m_imageryZoomCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        m_store->setImageryZoomLevel(m_imageryZoomCombo->itemData(idx).toInt());
     });
-    const int zoomValues[] = {0, 10, 12, 14, 16, 18, 19, 20, 21, 22};
-    connect(m_imageryZoomCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, zoomValues](int idx) {
-        m_store->setImageryZoomLevel(zoomValues[idx]);
-    });
+    auto syncImageryZoom = [this]() {
+        const QSignalBlocker blocker(m_imageryZoomCombo);
+        const int idx = m_imageryZoomCombo->findData(m_store->exportSettings().imageryZoomLevel);
+        m_imageryZoomCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    };
+    connect(m_store, &TerrainStore::exportSettingsChanged, this, syncImageryZoom);
+    syncImageryZoom();
     formLayout->addRow("Imagery Zoom:", m_imageryZoomCombo);
 
     // Compress

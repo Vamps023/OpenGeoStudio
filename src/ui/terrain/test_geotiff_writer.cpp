@@ -11,6 +11,7 @@
 #include <cmath>
 
 #include "RasterWriter.hpp"
+#include "TerrainTypes.hpp"
 
 // Register GeoTIFF tags for reading (same as in RasterWriter.cpp)
 static const TIFFFieldInfo kReadFieldInfo[] = {
@@ -181,6 +182,13 @@ int main(int argc, char* argv[]) {
             std::cerr << "Aligned sub-extents have gaps or overlaps" << std::endl;
             ++failures;
         }
+    }
+
+    if (terrain::normalizeImageryZoom(0) != 0 ||
+        terrain::normalizeImageryZoom(19) != 19 ||
+        terrain::normalizeImageryZoom(22) != 19) {
+        std::cerr << "Imagery zoom normalization failed" << std::endl;
+        ++failures;
     }
 
     std::cerr << "\n=== Done ===" << std::endl;

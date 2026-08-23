@@ -116,7 +116,7 @@ void TerrainStore::setStadiaApiKey(const QString& key) {
 }
 
 void TerrainStore::setImageryZoomLevel(int level) {
-    m_exportSettings.imageryZoomLevel = level;
+    m_exportSettings.imageryZoomLevel = terrain::normalizeImageryZoom(level);
     emit exportSettingsChanged();
 }
 
@@ -235,6 +235,7 @@ QJsonObject TerrainStore::toJson() const {
     exp["demSource"] = m_exportSettings.demSourceStr();
     exp["heightmapResolution"] = m_exportSettings.heightmapResolution;
     exp["albedoResolution"] = m_exportSettings.albedoResolution;
+    exp["imageryZoomLevel"] = m_exportSettings.imageryZoomLevel;
     // SECURITY: Never serialize API keys to project files.
     // See ARCHITECTURE_RULES.md rule 5.
     j["exportSettings"] = exp;
@@ -271,6 +272,8 @@ void TerrainStore::fromJson(const QJsonObject& j) {
         // Resolve from environment variables at runtime instead.
         m_exportSettings.heightmapResolution = exp["heightmapResolution"].toInt(1024);
         m_exportSettings.albedoResolution = exp["albedoResolution"].toInt(1024);
+        const int imageryZoom = exp["imageryZoomLevel"].toInt(0);
+        m_exportSettings.imageryZoomLevel = terrain::normalizeImageryZoom(imageryZoom);
     }
 
     // Resolve API keys from environment variables

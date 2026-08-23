@@ -866,7 +866,7 @@ void ExportEngine::startImageryMosaic(const terrain::Tile& tile, const QString& 
 
     int zoom;
     if (settings.imageryZoomLevel > 0)
-        zoom = clampMosaicZoom(tile.bounds, qMin(settings.imageryZoomLevel, 19));
+        zoom = terrain::normalizeImageryZoom(settings.imageryZoomLevel);
     else
         zoom = autoZoomForBounds(tile.bounds, settings.albedoResolution, 19);
 

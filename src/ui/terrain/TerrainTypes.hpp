@@ -108,6 +108,10 @@ enum class CrsSource {
     Custom_EPSG     // Arbitrary EPSG code selected via CRS selector dialog
 };
 
+inline int normalizeImageryZoom(int level) {
+    return level <= 0 ? 0 : qBound(3, level, 19);
+}
+
 struct ExportSettings {
     HeightmapFormat heightmapFormat = HeightmapFormat::GeoTIFF_Float32;
     AlbedoFormat albedoFormat = AlbedoFormat::PNG;
