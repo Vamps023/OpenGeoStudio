@@ -140,6 +140,11 @@ public:
         int width, int height,
         const terrain::RasterExtent& extent);
 
+    static terrain::RasterExtent alignedSubExtent(
+        const terrain::RasterExtent& fullSource,
+        const terrain::RasterExtent& subSource,
+        const terrain::RasterExtent& fullTarget);
+
     // ============================================================
     // CRS / GeoKey helpers
     // ============================================================

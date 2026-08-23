@@ -1287,6 +1287,46 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
     if (crs == terrain::CrsSource::Project_CRS && m_store->exportSettings().projectCrsEpsg == 0) {
         crs = terrain::CrsSource::EPSG_4326;
     }
+
+    auto projectToSharedGrid = [&](int epsg) {
+        const auto& full = m_store->selectedBounds();
+        if (!full.isValid() || full.widthDeg() <= 0.0 || full.heightDeg() <= 0.0) return false;
+
+        auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
+        auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
+        if (!srcCrs || !dstCrs) return false;
+
+        gis::CoordinateTransform transform(*srcCrs, *dstCrs);
+        auto fullSw = transform.transform({full.west, full.south});
+        auto fullNe = transform.transform({full.east, full.north});
+        if (!fullSw.success || !fullNe.success) return false;
+
+        terrain::RasterExtent fullSource;
+        fullSource.west = full.west;
+        fullSource.east = full.east;
+        fullSource.south = full.south;
+        fullSource.north = full.north;
+
+        terrain::RasterExtent subSource;
+        subSource.west = west;
+        subSource.east = east;
+        subSource.south = south;
+        subSource.north = north;
+
+        terrain::RasterExtent fullTarget;
+        fullTarget.west = fullSw.point.x;
+        fullTarget.east = fullNe.point.x;
+        fullTarget.south = fullSw.point.y;
+        fullTarget.north = fullNe.point.y;
+
+        const auto aligned = RasterWriter::alignedSubExtent(fullSource, subSource, fullTarget);
+        ext.west = aligned.west;
+        ext.east = aligned.east;
+        ext.south = aligned.south;
+        ext.north = aligned.north;
+        return true;
+    };
+
     switch (crs) {
     case terrain::CrsSource::Project_CRS:
     {
@@ -1296,38 +1336,12 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
             // UTM North
             ext.utmEpsg = epsg;
             ext.crsMode = terrain::GeoCrsMode::UTM;
-            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
-            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
-            if (srcCrs && dstCrs) {
-                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                // GeoPoint.x = longitude, GeoPoint.y = latitude (after
-                // proj_normalize_for_visualization in CoordinateTransform)
-                auto sw = transform.transform({west, south});
-                auto ne = transform.transform({east, north});
-                if (sw.success && ne.success) {
-                    ext.west = sw.point.x;
-                    ext.east = ne.point.x;
-                    ext.south = sw.point.y;
-                    ext.north = ne.point.y;
-                }
-            }
+            projectToSharedGrid(epsg);
         } else if (epsg >= 32701 && epsg <= 32760) {
             // UTM South
             ext.utmEpsg = epsg;
             ext.crsMode = terrain::GeoCrsMode::UTM;
-            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
-            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
-            if (srcCrs && dstCrs) {
-                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                auto sw = transform.transform({west, south});
-                auto ne = transform.transform({east, north});
-                if (sw.success && ne.success) {
-                    ext.west = sw.point.x;
-                    ext.east = ne.point.x;
-                    ext.south = sw.point.y;
-                    ext.north = ne.point.y;
-                }
-            }
+            projectToSharedGrid(epsg);
         } else {
             // Unknown project CRS — fall back to WGS84
             ext.crsMode = terrain::GeoCrsMode::WGS84;
@@ -1375,19 +1389,7 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
             int epsg = autoCrs->code;
             ext.utmEpsg = epsg;
             ext.crsMode = terrain::GeoCrsMode::UTM;
-            auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
-            auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
-            if (srcCrs && dstCrs) {
-                gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-                auto sw = transform.transform({west, south});
-                auto ne = transform.transform({east, north});
-                if (sw.success && ne.success) {
-                    ext.west = sw.point.x;
-                    ext.east = ne.point.x;
-                    ext.south = sw.point.y;
-                    ext.north = ne.point.y;
-                }
-            }
+            projectToSharedGrid(epsg);
         } else {
             // Fallback: manual UTM zone calculation
             int zone = static_cast<int>((clon + 180.0) / 6.0) + 1;
@@ -1424,16 +1426,7 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
 
         auto srcCrs = gis::CRSManager::instance().fromEPSG(4326);
         auto dstCrs = gis::CRSManager::instance().fromEPSG(epsg);
-        if (srcCrs && dstCrs) {
-            gis::CoordinateTransform transform(*srcCrs, *dstCrs);
-            auto sw = transform.transform({west, south});
-            auto ne = transform.transform({east, north});
-            if (sw.success && ne.success) {
-                ext.west = sw.point.x;
-                ext.east = ne.point.x;
-                ext.south = sw.point.y;
-                ext.north = ne.point.y;
-
+        if (srcCrs && dstCrs && projectToSharedGrid(epsg)) {
                 // Determine the CRS mode from the destination CRS kind
                 if (dstCrs->isProjected()) {
                     if (dstCrs->code >= 32601 && dstCrs->code <= 32760) {
@@ -1452,16 +1445,8 @@ terrain::RasterExtent ExportEngine::buildRasterExtent(const terrain::Tile& tile)
                     ext.crsMode = terrain::GeoCrsMode::UTM;
                     ext.utmEpsg = epsg;
                 }
-            } else {
-                // Transform failed — fall back to WGS84
-                ext.crsMode = terrain::GeoCrsMode::WGS84;
-                ext.west = west;
-                ext.east = east;
-                ext.north = north;
-                ext.south = south;
-            }
         } else {
-            // CRS lookup failed — fall back to WGS84
+            // CRS lookup or transform failed — fall back to WGS84
             ext.crsMode = terrain::GeoCrsMode::WGS84;
             ext.west = west;
             ext.east = east;

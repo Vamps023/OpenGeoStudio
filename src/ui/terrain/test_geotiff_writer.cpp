@@ -130,6 +130,59 @@ int main(int argc, char* argv[]) {
         QFile::remove(path);
     }
 
+    int failures = 0;
+    {
+        terrain::RasterExtent source;
+        source.west = -95.3842401268794;
+        source.east = -95.3371258122979;
+        source.south = 29.728720541561756;
+        source.north = 29.76962546963223;
+
+        terrain::RasterExtent target;
+        target.west = 269388.62748665933;
+        target.east = 274039.31747320219;
+        target.south = 3291075.0061926316;
+        target.north = 3295547.4425502126;
+        target.crsMode = terrain::GeoCrsMode::UTM;
+        target.utmEpsg = 32615;
+
+        terrain::RasterExtent left = source;
+        left.east = source.west + (source.east - source.west) / 3.0;
+        terrain::RasterExtent middle = source;
+        middle.west = left.east;
+        middle.east = source.west + 2.0 * (source.east - source.west) / 3.0;
+        terrain::RasterExtent right = source;
+        right.west = middle.east;
+
+        const auto leftTarget = RasterWriter::alignedSubExtent(source, left, target);
+        const auto middleTarget = RasterWriter::alignedSubExtent(source, middle, target);
+        const auto rightTarget = RasterWriter::alignedSubExtent(source, right, target);
+
+        terrain::RasterExtent south = source;
+        south.north = source.south + (source.north - source.south) / 3.0;
+        terrain::RasterExtent center = source;
+        center.south = south.north;
+        center.north = source.south + 2.0 * (source.north - source.south) / 3.0;
+        terrain::RasterExtent north = source;
+        north.south = center.north;
+
+        const auto southTarget = RasterWriter::alignedSubExtent(source, south, target);
+        const auto centerTarget = RasterWriter::alignedSubExtent(source, center, target);
+        const auto northTarget = RasterWriter::alignedSubExtent(source, north, target);
+
+        if (std::abs(leftTarget.east - middleTarget.west) > 1e-9 ||
+            std::abs(middleTarget.east - rightTarget.west) > 1e-9 ||
+            std::abs(leftTarget.west - target.west) > 1e-9 ||
+            std::abs(rightTarget.east - target.east) > 1e-9 ||
+            std::abs(southTarget.north - centerTarget.south) > 1e-9 ||
+            std::abs(centerTarget.north - northTarget.south) > 1e-9 ||
+            std::abs(southTarget.south - target.south) > 1e-9 ||
+            std::abs(northTarget.north - target.north) > 1e-9) {
+            std::cerr << "Aligned sub-extents have gaps or overlaps" << std::endl;
+            ++failures;
+        }
+    }
+
     std::cerr << "\n=== Done ===" << std::endl;
-    return 0;
+    return failures == 0 ? 0 : 1;
 }

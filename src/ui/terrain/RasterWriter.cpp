@@ -216,6 +216,29 @@ std::array<double, 6> RasterWriter::computeGeoTransform(
     return gt;
 }
 
+terrain::RasterExtent RasterWriter::alignedSubExtent(
+    const terrain::RasterExtent& fullSource,
+    const terrain::RasterExtent& subSource,
+    const terrain::RasterExtent& fullTarget)
+{
+    terrain::RasterExtent result = fullTarget;
+    const double sourceWidth = fullSource.east - fullSource.west;
+    const double sourceHeight = fullSource.north - fullSource.south;
+    if (sourceWidth <= 0.0 || sourceHeight <= 0.0) return result;
+
+    const double targetWidth = fullTarget.east - fullTarget.west;
+    const double targetHeight = fullTarget.north - fullTarget.south;
+    result.west = fullTarget.west +
+        ((subSource.west - fullSource.west) / sourceWidth) * targetWidth;
+    result.east = fullTarget.west +
+        ((subSource.east - fullSource.west) / sourceWidth) * targetWidth;
+    result.south = fullTarget.south +
+        ((subSource.south - fullSource.south) / sourceHeight) * targetHeight;
+    result.north = fullTarget.south +
+        ((subSource.north - fullSource.south) / sourceHeight) * targetHeight;
+    return result;
+}
+
 // ============================================================
 // GeoKey directory construction
 // ============================================================
