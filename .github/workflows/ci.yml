@@ -40,7 +40,13 @@ jobs:
         with:
           version: ${{ matrix.qt-version }}
           arch: ${{ matrix.qt-arch }}
-          modules: qtwidgets qtgui qtcore concurrent
+          modules: qtwidgets qtgui qtcore qtnetwork qtopengl qtopenglwidgets qtconcurrent
+
+      - name: Install OpenGL libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libglu1-mesa-dev libegl-dev libxkbcommon-dev
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -57,7 +63,8 @@ jobs:
 
       - name: Run tests
         env:
-          QT_PLUGIN_PATH: ${{ env.Qt6_DIR }}\\plugins
+          QT_PLUGIN_PATH: ${{ runner.os == 'Windows' && format('{0}\\plugins', env.Qt6_DIR) || format('{0}/plugins', env.Qt6_DIR) }}
           OGS_SKIP_ROAD_MODEL_TESTS: '1'
+          QT_QPA_PLATFORM: offscreen
         run: |
           cd build && ctest --output-on-failure --timeout 60

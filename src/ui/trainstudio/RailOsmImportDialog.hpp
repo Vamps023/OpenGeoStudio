@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // ============================================================
 // RailOsmImportDialog — OSM import UI for Train Studio
@@ -167,14 +167,17 @@ private slots:
 
 private:
     static QString defaultTexturePath() {
-        const QString sourcePath = QStringLiteral(
-            "D:/git/OpenGeoStudio-Qt/assets/trackbed_alb.dds");
-        if (QFileInfo::exists(sourcePath)) return sourcePath;
+        // Try application-relative paths first (portable), then dev-tree path.
         const QString deployedPath = QDir(QCoreApplication::applicationDirPath())
             .absoluteFilePath(QStringLiteral("assets/trackbed_alb.dds"));
         if (QFileInfo::exists(deployedPath)) return deployedPath;
-        return QDir(QCoreApplication::applicationDirPath())
+        const QString devPath = QDir(QCoreApplication::applicationDirPath())
             .absoluteFilePath(QStringLiteral("../assets/trackbed_alb.dds"));
+        if (QFileInfo::exists(devPath)) return devPath;
+        const QString sourcePath = QStringLiteral(
+            "D:/git/OpenGeoStudio-Qt/assets/trackbed_alb.dds");
+        if (QFileInfo::exists(sourcePath)) return sourcePath;
+        return deployedPath;
     }
 
     void setupUi() {

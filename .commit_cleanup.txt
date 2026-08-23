@@ -1,0 +1,43 @@
+Production cleanup: remove dead code, fix fake features, harden build
+
+Dead code removal:
+- Remove MapToPixel.hpp (only used by tests, never in production)
+- Remove XyzTileProvider.hpp (only used by tests, never in production)
+- Remove plugin/PluginApi.hpp skeleton (header-only, never included or
+  implemented, not referenced by any source file)
+- Remove empty RoadStudioWidget::showEvent() override
+- Remove corresponding MapToPixel/XyzTileProvider test suites
+
+Fake feature fixes:
+- SettingsDialog: implement actual save/load via QSettings (was creating
+  UI controls that silently discarded all entered values)
+- TerrainPipelinePanel: load real mask PNG rasters from disk instead of
+  synthesizing 512x512 constant-value (128) placeholder masks
+- MapViewportWidget: persist last map position/zoom via QSettings instead
+  of always defaulting to hardcoded Pune, India coordinates
+- RoadStudioWidget/TrainStudioWidget: use persisted map view instead of
+  hardcoded Pune coordinates
+- RailOsmImportDialog: try application-relative asset paths before the
+  hardcoded dev-tree path
+
+Build system fixes:
+- Remove unused vcpkg dependencies: curl, libpng, gtest
+- Remove PNG::PNG linking (Qt handles PNG internally via QImage)
+- Remove plugin_api CMake target and src/plugin include directory
+- Remove non-existent include dirs (src/ui/roadstudio/widgets, editor)
+- Remove .hpp file from APP_SOURCES (MapViewportWidget.hpp)
+- Fix undefined ENABLE_LANEMAKER variable in status message
+- Fix randomization_utils.h to not require gtest (guard removed, add
+  explicit <vector>/<cstdint> includes)
+- CI: add missing Qt modules (qtnetwork, qtopengl, qtopenglwidgets)
+- CI: install OpenGL libraries on Linux
+- CI: fix QT_PLUGIN_PATH for cross-platform (was Windows-only backslash)
+- CI: add QT_QPA_PLATFORM=offscreen for headless test execution
+
+Verified: full application builds, 7/7 CTest targets pass (geometry,
+terrain pipeline, world model, CRS, world workflow, OSM pipeline,
+Houston round-trip).
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

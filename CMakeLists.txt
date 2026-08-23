@@ -262,13 +262,6 @@ endif()
 
 add_library(lanemaker::core ALIAS lanemaker)
 
-# ─── Plugin API (header-only, requires Qt) ───────────────────
-add_library(plugin_api INTERFACE)
-target_include_directories(plugin_api INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/plugin
-)
-target_link_libraries(plugin_api INTERFACE Qt6::Core)
-
 # ─── Main Application Executable ─────────────────────────────
 set(APP_SOURCES
     src/app/main.cpp
@@ -311,7 +304,6 @@ set(APP_SOURCES
 
 if(QMapLibre_FOUND)
     list(APPEND APP_SOURCES
-        src/app/MapViewportWidget.hpp
         src/app/MapViewportWidget.cpp
     )
 endif()
@@ -352,8 +344,6 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/home
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/widgets
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/roadstudio/editor
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/trainstudio
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/map
@@ -376,9 +366,7 @@ target_link_libraries(OpenGeoStudio PRIVATE
     Qt6::Network
     Qt6::Concurrent
     road_engine::core
-    plugin_api
     TIFF::TIFF
-    PNG::PNG
     PROJ::proj
 )
 
@@ -622,7 +610,6 @@ if(BUILD_TESTS)
         Qt6::Gui
         Qt6::Network
         TIFF::TIFF
-        PNG::PNG
     )
     if(MSVC)
         target_compile_options(test_terrain_pipeline PRIVATE /EHa /bigobj)
@@ -814,7 +801,7 @@ message(STATUS "  C++ Standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build Type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Generator:         ${CMAKE_GENERATOR}")
 message(STATUS "  Qt6 Found:         ${Qt6_FOUND}")
-message(STATUS "  LaneMaker:         ${ENABLE_LANEMAKER}")
+message(STATUS "  LaneMaker:         always enabled")
 message(STATUS "  MapLibre:          ${QMapLibre_FOUND}")
 message(STATUS "  Tests:             ${BUILD_TESTS}")
 if(WIN32)

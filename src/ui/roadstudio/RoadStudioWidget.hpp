@@ -25,9 +25,6 @@ public:
 
     MainWindow* laneMakerWindow() { return m_lmMainWindow; }
 
-protected:
-    void showEvent(QShowEvent* event) override;
-
 private slots:
     void onImportOsm();
 

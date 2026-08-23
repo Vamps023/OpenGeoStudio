@@ -3,6 +3,7 @@
 #include "MapViewportWidget.hpp"
 
 #include <QVBoxLayout>
+#include <QSettings>
 #include "../core/logger/Logger.hpp"
 #include <QTimer>
 
@@ -112,15 +113,21 @@ void MapViewportWidget::setupMap() {
     appLog().info("[MapViewport] Style server URL:", styleUrl);
 
     // Configure MapLibre settings with Esri imagery style.
-    // The reference Electron app centers on lat=18.52, lon=73.85 (Pune, India)
-    // at zoom 15. We replicate that here for parity.
+    // Default coordinate/zoom are persisted via QSettings so the map reopens
+    // at the user's last position. First launch falls back to a neutral
+    // world overview (lat 0, lon 0, zoom 2).
     QMapLibre::Styles styles;
     styles.emplace_back(styleUrl, "Esri World Imagery");
 
+    QSettings mapSettings;
+    const double defaultLat = mapSettings.value("map/default_lat", 0.0).toDouble();
+    const double defaultLon = mapSettings.value("map/default_lon", 0.0).toDouble();
+    const double defaultZoom = mapSettings.value("map/default_zoom", 2.0).toDouble();
+
     QMapLibre::Settings settings;
     settings.setStyles(styles);
-    settings.setDefaultCoordinate(QMapLibre::Coordinate(18.52, 73.85));
-    settings.setDefaultZoom(15.0);
+    settings.setDefaultCoordinate(QMapLibre::Coordinate(defaultLat, defaultLon));
+    settings.setDefaultZoom(defaultZoom);
 
     m_mapWidget = new QMapLibre::MapWidget(settings);
     m_mapWidget->setParent(this);
@@ -195,6 +202,14 @@ void MapViewportWidget::onMapChanged(QMapLibre::Map::MapChange change) {
             break;
         case QMapLibre::Map::MapChangeRegionDidChange:
             emit mapMoved();
+            // Persist the current view so the map reopens at the same place.
+            if (auto* m = map()) {
+                const auto coord = m->coordinate();
+                QSettings s;
+                s.setValue("map/default_lat", coord.first);
+                s.setValue("map/default_lon", coord.second);
+                s.setValue("map/default_zoom", m->zoom());
+            }
             break;
         default:
             break;

@@ -69,7 +69,7 @@ private:
     TerrainStore* m_store;
     MapViewportWidget* m_map;
 
-    double m_mapLat = 18.52, m_mapLon = 73.85, m_mapZoom = 15.0;
+    double m_mapLat = 0.0, m_mapLon = 0.0, m_mapZoom = 2.0;
 
     bool m_selecting = false;
     QPointF m_selectStart;

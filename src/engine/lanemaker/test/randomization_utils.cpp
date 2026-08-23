@@ -1,5 +1,8 @@
 #include "randomization_utils.h"
-#include <math.h>
+#include <cassert>
+#include <cmath>
+#include <set>
+#include <algorithm>
 
 int RandomIntBetween(int low, int hi)
 {

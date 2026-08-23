@@ -31,6 +31,9 @@
 #include <QJsonDocument>
 #include <QSplitter>
 
+#include <cstring>
+#include <algorithm>
+
 namespace terrain_pipeline {
 
 class TerrainPipelinePanel : public QWidget {
@@ -478,16 +481,55 @@ private slots:
             }
         }
 
-        // Check for mask files
+        // Load actual mask files from the export directory.
+        // Masks are stored as PNG rasters at <exportDir>/Masks/<name>/tile_<id>.png
+        // (see TerrainManager::exportTiles). We merge all tile PNGs for each mask
+        // name into a single representative raster so the validation suite can
+        // inspect real mask content instead of placeholder data.
         QString masksDir = config.exportDir + "/Masks";
         QDir masksDirObj(masksDir);
         if (masksDirObj.exists()) {
             for (const auto& subdir : masksDirObj.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                QDir maskSubdir(masksDir + "/" + subdir);
+                QStringList pngFilters;
+                pngFilters << "tile_*.png";
+                const auto pngFiles = maskSubdir.entryInfoList(pngFilters, QDir::Files);
+                if (pngFiles.isEmpty()) continue;
+
+                // Load the first tile to determine dimensions, then accumulate
+                // pixel data across all tiles into a single mosaic raster.
+                QImage firstImg(pngFiles.first().absoluteFilePath());
+                if (firstImg.isNull()) continue;
+                firstImg = firstImg.convertToFormat(QImage::Format_Grayscale8);
+
                 ByteRaster mask;
-                mask.width = 512;  // Default
-                mask.height = 512;
-                mask.data.resize(512 * 512, 128);  // Placeholder
+                mask.width = firstImg.width();
+                mask.height = firstImg.height();
+                mask.data.resize(mask.width * mask.height, 0);
                 mask.valid = true;
+
+                // Copy first tile's pixels
+                const uchar* src = firstImg.constBits();
+                std::memcpy(mask.data.data(), src, mask.width * mask.height);
+
+                // For additional tiles, take the maximum per-pixel value so
+                // overlapping mask regions are preserved.
+                for (int i = 1; i < pngFiles.size(); ++i) {
+                    QImage img(pngFiles[i].absoluteFilePath());
+                    if (img.isNull()) continue;
+                    img = img.convertToFormat(QImage::Format_Grayscale8);
+                    const int w = std::min(img.width(), mask.width);
+                    const int h = std::min(img.height(), mask.height);
+                    const uchar* s = img.constBits();
+                    for (int y = 0; y < h; ++y) {
+                        for (int x = 0; x < w; ++x) {
+                            const int idx = y * mask.width + x;
+                            mask.data[idx] = std::max(mask.data[idx],
+                                                      static_cast<uint8_t>(s[y * img.width() + x]));
+                        }
+                    }
+                }
+
                 masks[subdir.toLower()] = mask;
             }
         }

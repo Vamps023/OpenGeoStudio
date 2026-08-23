@@ -5,14 +5,11 @@
   "homepage": "https://github.com/nares/OpenGeoStudio",
   "license": "MIT",
   "dependencies": [
-    "curl",
     "tiff",
-    "libpng",
     "nlohmann-json",
     "spdlog",
     "boost-optional",
     "cgal",
-    "gtest",
     "cereal",
     "proj"
   ],

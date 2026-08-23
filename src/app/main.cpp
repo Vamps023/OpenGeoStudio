@@ -36,6 +36,7 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QCompleter>
+#include <QSettings>
 
 // Road engine ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â direct C++ include, no N-API bridge
 #include "road_engine.hpp"
@@ -87,20 +88,20 @@ public:
         auto* keysGroup = new QGroupBox("API Keys");
         auto* keysForm = new QFormLayout(keysGroup);
 
-        auto* openTopoKey = new QLineEdit();
-        openTopoKey->setPlaceholderText("OpenTopography API key");
-        openTopoKey->setEchoMode(QLineEdit::Password);
-        keysForm->addRow("OpenTopography:", openTopoKey);
+        m_openTopoKey = new QLineEdit();
+        m_openTopoKey->setPlaceholderText("OpenTopography API key");
+        m_openTopoKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("OpenTopography:", m_openTopoKey);
 
-        auto* mapboxKey = new QLineEdit();
-        mapboxKey->setPlaceholderText("Mapbox access token");
-        mapboxKey->setEchoMode(QLineEdit::Password);
-        keysForm->addRow("Mapbox:", mapboxKey);
+        m_mapboxKey = new QLineEdit();
+        m_mapboxKey->setPlaceholderText("Mapbox access token");
+        m_mapboxKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("Mapbox:", m_mapboxKey);
 
-        auto* maptilerKey = new QLineEdit();
-        maptilerKey->setPlaceholderText("MapTiler API key");
-        maptilerKey->setEchoMode(QLineEdit::Password);
-        keysForm->addRow("MapTiler:", maptilerKey);
+        m_maptilerKey = new QLineEdit();
+        m_maptilerKey->setPlaceholderText("MapTiler API key");
+        m_maptilerKey->setEchoMode(QLineEdit::Password);
+        keysForm->addRow("MapTiler:", m_maptilerKey);
 
         layout->addWidget(keysGroup);
 
@@ -108,15 +109,15 @@ public:
         auto* defaultsGroup = new QGroupBox("Project Defaults");
         auto* defaultsForm = new QFormLayout(defaultsGroup);
 
-        auto* defaultWorkspace = new QComboBox();
-        defaultWorkspace->addItems({"Home", "Terrain", "Road Studio", "Train Studio"});
-        defaultsForm->addRow("Default workspace:", defaultWorkspace);
+        m_defaultWorkspace = new QComboBox();
+        m_defaultWorkspace->addItems({"Home", "Terrain", "Road Studio", "Train Studio"});
+        defaultsForm->addRow("Default workspace:", m_defaultWorkspace);
 
-        auto* defaultRoadWidth = new QLineEdit("8.0");
-        defaultsForm->addRow("Default road width (m):", defaultRoadWidth);
+        m_defaultRoadWidth = new QLineEdit("8.0");
+        defaultsForm->addRow("Default road width (m):", m_defaultRoadWidth);
 
-        auto* defaultLanes = new QLineEdit("2");
-        defaultsForm->addRow("Default lane count:", defaultLanes);
+        m_defaultLanes = new QLineEdit("2");
+        defaultsForm->addRow("Default lane count:", m_defaultLanes);
 
         layout->addWidget(defaultsGroup);
 
@@ -124,11 +125,47 @@ public:
         auto* btnLayout = new QHBoxLayout();
         btnLayout->addStretch();
 
-        auto* closeBtn = new QPushButton("Close");
-        connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-        btnLayout->addWidget(closeBtn);
+        auto* saveBtn = new QPushButton("Save");
+        connect(saveBtn, &QPushButton::clicked, this, &SettingsDialog::saveAndAccept);
+        btnLayout->addWidget(saveBtn);
+
+        auto* cancelBtn = new QPushButton("Cancel");
+        connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+        btnLayout->addWidget(cancelBtn);
 
         layout->addLayout(btnLayout);
+
+        loadSettings();
+    }
+
+private slots:
+    void saveAndAccept() {
+        QSettings s;
+        s.setValue("api/opentopo_key", m_openTopoKey->text());
+        s.setValue("api/mapbox_token", m_mapboxKey->text());
+        s.setValue("api/maptiler_key", m_maptilerKey->text());
+        s.setValue("defaults/workspace", m_defaultWorkspace->currentIndex());
+        s.setValue("defaults/road_width", m_defaultRoadWidth->text());
+        s.setValue("defaults/lanes", m_defaultLanes->text());
+        accept();
+    }
+
+private:
+    QLineEdit* m_openTopoKey = nullptr;
+    QLineEdit* m_mapboxKey = nullptr;
+    QLineEdit* m_maptilerKey = nullptr;
+    QComboBox* m_defaultWorkspace = nullptr;
+    QLineEdit* m_defaultRoadWidth = nullptr;
+    QLineEdit* m_defaultLanes = nullptr;
+
+    void loadSettings() {
+        QSettings s;
+        m_openTopoKey->setText(s.value("api/opentopo_key").toString());
+        m_mapboxKey->setText(s.value("api/mapbox_token").toString());
+        m_maptilerKey->setText(s.value("api/maptiler_key").toString());
+        m_defaultWorkspace->setCurrentIndex(s.value("defaults/workspace", 0).toInt());
+        m_defaultRoadWidth->setText(s.value("defaults/road_width", "8.0").toString());
+        m_defaultLanes->setText(s.value("defaults/lanes", "2").toString());
     }
 };
 

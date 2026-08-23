@@ -9,6 +9,7 @@
 
 #include <QFrame>
 #include <QSizePolicy>
+#include <QSettings>
 
 RoadStudioWidget::RoadStudioWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx)
@@ -41,14 +42,17 @@ RoadStudioWidget::RoadStudioWidget(ApplicationContext* ctx, QWidget* parent)
     m_lmMainWindow = new MainWindow(canvasFrame);
     // Ensure road mode (in case a previous Train Studio session left rail mode active)
     m_lmMainWindow->setRailMode(false);
-    m_lmMainWindow->useSharedSatelliteView(18.52, 73.85, 15.0);
+    // Use persisted map view (defaults to world overview on first launch)
+    {
+        QSettings s;
+        const double lat = s.value("map/default_lat", 0.0).toDouble();
+        const double lon = s.value("map/default_lon", 0.0).toDouble();
+        const double zoom = s.value("map/default_zoom", 2.0).toDouble();
+        m_lmMainWindow->useSharedSatelliteView(lat, lon, zoom);
+    }
     m_lmMainWindow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     canvasLayout->addWidget(m_lmMainWindow, 1);
     layout->addWidget(canvasFrame, 1);
-}
-
-void RoadStudioWidget::showEvent(QShowEvent* event) {
-    QWidget::showEvent(event);
 }
 
 void RoadStudioWidget::onImportOsm() {

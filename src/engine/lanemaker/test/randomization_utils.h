@@ -1,7 +1,8 @@
 #pragma once
 
-#include <gtest/gtest.h>
 #include "road_profile.h"
+#include <vector>
+#include <cstdint>
 
 // Inclusive
 int RandomIntBetween(int low, int hi);
