@@ -681,6 +681,8 @@ private slots:
         } else if (ws.id == "road-studio") {
             appLog().info("Activating Road Studio: setCurrentIndex...");
             m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
+            if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow())
+                m_roadStudioWidget->laneMakerWindow()->triggerGLInitialization();
             appLog().info("Activating Road Studio: hiding docks...");
             // LaneMaker's MainWindow has its own toolbar, lane config, etc.
             m_leftDock->setVisible(false);
@@ -707,6 +709,8 @@ private slots:
             appLog().info("Activating Road Studio: done");
         } else if (ws.id == "train-studio") {
             m_centerStack->setCurrentIndex(3); // Train Studio
+            if (m_trainStudioWidget && m_trainStudioWidget->laneMakerWindow())
+                m_trainStudioWidget->laneMakerWindow()->triggerGLInitialization();
             // Train Studio: no docks (matching reference)
             m_leftDock->setVisible(false);
             m_rightDock->setVisible(false);

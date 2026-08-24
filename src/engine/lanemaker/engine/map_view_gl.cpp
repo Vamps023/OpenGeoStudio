@@ -271,8 +271,8 @@ namespace LM
         tile->worldSize = tileExtent.width();  // square tiles
 
         QString url = QString(
-            "https://mt1.google.com/vt/lyrs=s&x=%1&y=%2&z=%3")
-            .arg(x).arg(y).arg(z);
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")
+            .arg(z).arg(y).arg(x);
 
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
@@ -896,11 +896,13 @@ namespace LM
             float aspect = width() / float(height() ? height() : 1);
             float viewSize = m_camera.translation().z() * 0.6f;
             if (viewSize < 10.0f) viewSize = 10.0f;
+            const float depthRange = std::max(5000.0f,
+                std::abs(m_camera.translation().z()) * 2.0f);
             m_projection.setToIdentity();
             m_projection.ortho(
                 -viewSize * aspect, viewSize * aspect,
                 -viewSize, viewSize,
-                -5000.0f, 5000.0f
+                -depthRange, depthRange
             );
 
             glClearColor(0.09f, 0.09f, 0.11f, 1.0f);
