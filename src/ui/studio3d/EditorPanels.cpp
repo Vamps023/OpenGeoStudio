@@ -1,6 +1,8 @@
 #include "EditorPanels.hpp"
 #include "OgreWidget.hpp"
 
+#include "core/assets/ImportedModel.hpp"
+
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
@@ -13,10 +15,13 @@
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QListWidget>
 #include <QSplitter>
 #include <QPainter>
 #include <QFile>
+#include <QTextStream>
 
 // ============================================================
 // WorldOutliner
@@ -497,7 +502,7 @@ ContentBrowser::ContentBrowser(OgreWidget* ogre, QWidget* parent)
     headerLayout->setSpacing(6);
 
     m_categoryCombo = new QComboBox(this);
-    m_categoryCombo->addItems({"All", "Placeable Actors", "Meshes", "Textures"});
+    m_categoryCombo->addItems({"All", "Placeable Actors", "Meshes", "Textures/Materials"});
     m_categoryCombo->setToolTip("Filter the asset library by category");
     connect(m_categoryCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ContentBrowser::onCategoryChanged);
@@ -573,13 +578,19 @@ void ContentBrowser::addFileEntry(const QFileInfo& fi)
     const QString ext = fi.suffix().toLower();
     item->setData(Qt::UserRole, QStringLiteral("file"));
     item->setData(Qt::UserRole + 2, path);
-    if (ext == "png" || ext == "jpg" || ext == "jpeg")
+    if (ext == "ogsmat") {
+        item->setIcon(QIcon(makeSwatch(QColor(72, 109, 59), "M")));
+        item->setToolTip(QString("Material asset — double-click to apply to the selection:\n%1").arg(path));
+    } else if (ext == "png" || ext == "jpg" || ext == "jpeg") {
         item->setIcon(QIcon(path));
-    else if (ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")
+        item->setToolTip(QString("Double-click to place as a prop:\n%1").arg(path));
+    } else if (ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga") {
         item->setIcon(QIcon(makeSwatch(QColor(56, 108, 176), "T")));
-    else
+        item->setToolTip(QString("Double-click to place as a prop:\n%1").arg(path));
+    } else {
         item->setIcon(QIcon(makeSwatch(QColor(47, 79, 79), "M")));
-    item->setToolTip(QString("Double-click to place as a prop:\n%1").arg(path));
+        item->setToolTip(QString("Double-click to place as a prop:\n%1").arg(path));
+    }
 }
 
 void ContentBrowser::setAssetDirectory(const QString& path)
@@ -616,6 +627,7 @@ void ContentBrowser::refresh()
 
     QStringList filters;
     filters << "*.obj" << "*.fbx" << "*.mesh" << "*.glb" << "*.gltf"
+            << "*.stl" << "*.dae" << "*.ply" << "*.3ds" << "*.ogsmat"
             << "*.png" << "*.jpg" << "*.jpeg" << "*.tif" << "*.tiff"
             << "*.dds" << "*.tga";
     const QFileInfoList files = dir.entryInfoList(filters, QDir::Files, QDir::Name);
@@ -640,7 +652,8 @@ void ContentBrowser::applyFilter()
             if (kind != "file") visible = false;
             const QString ext = QFileInfo(item->data(Qt::UserRole + 2).toString()).suffix().toLower();
             const bool isMesh = (ext == "obj" || ext == "fbx" || ext == "mesh" ||
-                                 ext == "glb" || ext == "gltf");
+                                 ext == "glb" || ext == "gltf" || ext == "stl" ||
+                                 ext == "dae" || ext == "ply" || ext == "3ds");
             if (category == 2 && !isMesh) visible = false;
             if (category == 3 && isMesh) visible = false;
         }
@@ -673,18 +686,110 @@ void ContentBrowser::onImportClicked()
     }
 
     const QStringList files = QFileDialog::getOpenFileNames(this, "Import Assets", targetDir,
-        "Assets (*.obj *.fbx *.mesh *.glb *.gltf *.png *.jpg *.jpeg *.tif *.tiff *.dds *.tga)");
+        "Models (*.fbx *.glb *.gltf *.obj *.stl *.dae *.ply *.3ds *.mesh);;"
+        "Textures (*.png *.jpg *.jpeg *.tif *.tiff *.dds *.tga);;"
+        "All files (*)");
     if (files.isEmpty()) return;
 
+    // Import options when model files are in the batch.
+    double importScale = 0.0;   // 0 = auto-detect units on import
+    bool placeInScene = false;
+    bool anyModels = false;
+    for (const QString& f : files) {
+        if (assets::isImportableModelFile(f)) { anyModels = true; break; }
+    }
+    if (anyModels) {
+        QDialog dlg(this);
+        dlg.setWindowTitle("Import Options");
+        auto* form = new QFormLayout(&dlg);
+        auto* scaleSpin = new QDoubleSpinBox(&dlg);
+        scaleSpin->setRange(0.0001, 10000.0);
+        scaleSpin->setDecimals(4);
+        scaleSpin->setValue(1.0);
+        scaleSpin->setSingleStep(0.1);
+        form->addRow("Uniform scale:", scaleSpin);
+        auto* hint = new QLabel(
+            "Leave at 1.0 to auto-detect units (FBX in centimetres becomes metres).", &dlg);
+        hint->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+        form->addRow(QString(), hint);
+        auto* placeCheck = new QCheckBox("Place imported models in the scene", &dlg);
+        placeCheck->setChecked(true);
+        form->addRow(QString(), placeCheck);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        form->addRow(buttons);
+        if (dlg.exec() != QDialog::Accepted) return;
+        importScale = (std::abs(scaleSpin->value() - 1.0) > 1e-6) ? scaleSpin->value() : 0.0;
+        placeInScene = placeCheck->isChecked();
+    }
+
     int imported = 0;
+    int placed = 0;
     for (const QString& src : files) {
-        const QString dst = QDir(targetDir).filePath(QFileInfo(src).fileName());
-        if (QFile::exists(dst)) continue;
-        if (QFile::copy(src, dst)) imported++;
+        const QFileInfo sfi(src);
+        QString dst = QDir(targetDir).filePath(sfi.fileName());
+        if (!QFile::exists(dst)) {
+            if (QFile::copy(src, dst))
+                imported++;
+            if (sfi.suffix().toLower() == "obj")
+                copyObjSidecars(sfi, targetDir);
+        }
+        const bool isModel = assets::isImportableModelFile(dst) ||
+                             sfi.suffix().toLower() == "mesh";
+        if (placeInScene && isModel) {
+            emit assetRequested(dst, "mesh", importScale);
+            placed++;
+        }
     }
     refresh();
-    if (imported > 0)
-        m_pathLabel->setText(QString("Imported %1 file(s) → %2").arg(imported).arg(targetDir));
+    QString status = QString("Imported %1 file(s) → %2").arg(imported).arg(targetDir);
+    if (placed > 0)
+        status += QString(" · placed %1 in scene").arg(placed);
+    m_pathLabel->setText(status);
+}
+
+// Copy an OBJ's sibling .mtl and the textures it references next to the
+// copy, so the model keeps rendering after the originals move away.
+void ContentBrowser::copyObjSidecars(const QFileInfo& srcFi, const QString& targetDir)
+{
+    const QString base = srcFi.completeBaseName();
+    QString mtlPath;
+    const QFileInfoList siblings =
+        srcFi.dir().entryInfoList({"*.mtl"}, QDir::Files);
+    for (const QFileInfo& s : siblings) {
+        if (s.completeBaseName().compare(base, Qt::CaseInsensitive) == 0) {
+            mtlPath = s.absoluteFilePath();
+            break;
+        }
+    }
+    if (mtlPath.isEmpty()) return;
+
+    QFile mtl(mtlPath);
+    if (!mtl.open(QIODevice::ReadOnly)) return;
+    QTextStream in(&mtl);
+    QStringList textureRefs;
+    while (!in.atEnd()) {
+        const QString line = in.readLine().simplified();
+        if (line.startsWith("map_", Qt::CaseInsensitive) ||
+            line.startsWith("bump", Qt::CaseInsensitive) ||
+            line.startsWith("norm", Qt::CaseInsensitive)) {
+            const QStringList parts = line.split(' ', Qt::SkipEmptyParts);
+            if (parts.size() > 1)
+                textureRefs << parts.last();
+        }
+    }
+    mtl.close();
+
+    const QString mtlDst = QDir(targetDir).filePath(QFileInfo(mtlPath).fileName());
+    if (!QFile::exists(mtlDst)) QFile::copy(mtlPath, mtlDst);
+
+    for (const QString& ref : textureRefs) {
+        const QString src = srcFi.dir().filePath(ref);
+        if (!QFile::exists(src)) continue;
+        const QString dst = QDir(targetDir).filePath(QFileInfo(ref).fileName());
+        if (!QFile::exists(dst)) QFile::copy(src, dst);
+    }
 }
 
 void ContentBrowser::onItemDoubleClicked(QListWidgetItem* item)
@@ -699,8 +804,10 @@ void ContentBrowser::onItemDoubleClicked(QListWidgetItem* item)
     const QString path = item->data(Qt::UserRole + 2).toString();
     const QString ext = QFileInfo(path).suffix().toLower();
     QString type = "mesh";
-    if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
-        ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")
+    if (ext == "ogsmat")
+        type = "material";
+    else if (ext == "png" || ext == "jpg" || ext == "jpeg" ||
+             ext == "tif" || ext == "tiff" || ext == "dds" || ext == "tga")
         type = "texture";
     emit assetRequested(path, type);
 }

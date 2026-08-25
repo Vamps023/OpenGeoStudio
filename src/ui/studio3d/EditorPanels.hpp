@@ -148,12 +148,15 @@ private slots:
 signals:
     // Built-in palette entries emit type "actor" with the ActorType value
     // as a string; file entries emit "mesh"/"texture" with the file path.
-    void assetRequested(const QString& path, const QString& type);
+    // importScale > 0 overrides auto unit detection on model import.
+    void assetRequested(const QString& path, const QString& type,
+                        double importScale = 0.0);
 
 private:
     void addActorEntry(const QString& label, world::ActorType type, const QColor& color);
     void addFileEntry(const QFileInfo& fi);
     void applyFilter();
+    static void copyObjSidecars(const QFileInfo& srcFi, const QString& targetDir);
     static QPixmap makeSwatch(const QColor& color, const QString& glyph);
 
     OgreWidget* m_ogre;

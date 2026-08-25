@@ -26,19 +26,6 @@
 #include <limits>
 #include <QRegularExpression>
 
-// libtiff for GeoTIFF output
-#include <tiffio.h>
-
-#ifndef TIFFTAG_GEOPIXELSCALE
-#define TIFFTAG_GEOPIXELSCALE 33550
-#endif
-#ifndef TIFFTAG_GEOTIEPOINTS
-#define TIFFTAG_GEOTIEPOINTS 33922
-#endif
-#ifndef TIFFTAG_GEOKEYDIRECTORY
-#define TIFFTAG_GEOKEYDIRECTORY 34735
-#endif
-
 // ============================================================
 // Credential helpers — load from environment variables, never hardcoded
 // ============================================================
@@ -1179,50 +1166,6 @@ void ExportEngine::finishCopernicusDownload() {
     }
 }
 
-void ExportEngine::writeGeoTiff(const QString& path, const QImage& heightmap,
-                                  const terrain::GeoBounds& bounds) {
-    const int width = heightmap.width();
-    const int height = heightmap.height();
-
-    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
-    if (!tif) return;
-
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 16);
-    TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
-
-    double pixelScaleX = (bounds.east - bounds.west) / width;
-    double pixelScaleY = (bounds.north - bounds.south) / height;
-    double pixelScale[3] = {pixelScaleX, pixelScaleY, 0.0};
-    TIFFSetField(tif, TIFFTAG_GEOPIXELSCALE, 3, pixelScale);
-
-    double tiepoint[6] = {0.0, 0.0, 0.0, bounds.west, bounds.north, 0.0};
-    TIFFSetField(tif, TIFFTAG_GEOTIEPOINTS, 6, tiepoint);
-
-    uint16_t geoKeys[16];
-    geoKeys[0] = 1; geoKeys[1] = 1; geoKeys[2] = 0; geoKeys[3] = 3;
-    geoKeys[4] = 1024; geoKeys[5] = 0; geoKeys[6] = 1; geoKeys[7] = 2;
-    geoKeys[8] = 1025; geoKeys[9] = 0; geoKeys[10] = 1; geoKeys[11] = 1;
-    geoKeys[12] = 2048; geoKeys[13] = 0; geoKeys[14] = 1; geoKeys[15] = 4326;
-    TIFFSetField(tif, TIFFTAG_GEOKEYDIRECTORY, 16, geoKeys);
-
-    std::vector<quint16> row(width);
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            QRgba64 px = heightmap.pixelColor(x, y).rgba64();
-            row[x] = px.red();
-        }
-        TIFFWriteScanline(tif, row.data(), y, 0);
-    }
-
-    TIFFClose(tif);
-}
 // ============================================================
 // QGIS-style DEM output — uses RasterWriter for proper GeoTIFF
 // ============================================================
@@ -1848,102 +1791,3 @@ void ExportEngine::writeMergedOutputs(const QString& dir) {
                "albedo tiles:", m_tileAlbedoData.size());
 }
 
-// ============================================================
-// GeoTIFF writing using libtiff
-// ============================================================
-
-bool ExportEngine::writeGeoTiffHeightmap(const QString& path, const QImage& img,
-                                          double north, double south, double east, double west) {
-    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
-    if (!tif) return false;
-
-    int width = img.width();
-    int height = img.height();
-
-    // Set TIFF tags for grayscale 16-bit
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 16);
-    TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
-
-    // GeoTIFF tags (ModelPixelScale + ModelTiepoint)
-    // Pixel scale: degrees per pixel
-    double scaleX = (east - west) / width;
-    double scaleY = (north - south) / height;
-    double pixelScale[3] = {scaleX, scaleY, 0};
-    TIFFSetField(tif, 33550, 3, pixelScale);
-
-    // Tiepoint: upper-left corner maps to (west, north)
-    double tiepoint[6] = {0, 0, 0, west, north, 0};
-    TIFFSetField(tif, 33922, 6, tiepoint);
-
-    // GeoKey directory header
-    uint16_t geoKeyDir[4] = {1, 1, 0, 0}; // Version 1, revision 1
-    TIFFSetField(tif, 34735, 4, geoKeyDir);
-
-    // Write pixel data (16-bit grayscale from QImage)
-    QImage grayImg = img.convertToFormat(QImage::Format_Grayscale16);
-    for (int y = 0; y < height; ++y) {
-        const uint16_t* row = reinterpret_cast<const uint16_t*>(grayImg.scanLine(y));
-        TIFFWriteScanline(tif, const_cast<uint16_t*>(row), y, 0);
-    }
-
-    TIFFClose(tif);
-    return true;
-}
-
-bool ExportEngine::writeGeoTiffRgb(const QString& path, const QImage& img,
-                                    double north, double south, double east, double west) {
-    TIFF* tif = TIFFOpen(PathHelper::toTiffPath(path).toUtf8().constData(), "w");
-    if (!tif) return false;
-
-    int width = img.width();
-    int height = img.height();
-
-    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, width);
-    TIFFSetField(tif, TIFFTAG_IMAGELENGTH, height);
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
-    TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, 1);
-
-    // GeoTIFF tags
-    double scaleX = (east - west) / width;
-    double scaleY = (north - south) / height;
-    double pixelScale[3] = {scaleX, scaleY, 0};
-    TIFFSetField(tif, 33550, 3, pixelScale);
-
-    double tiepoint[6] = {0, 0, 0, west, north, 0};
-    TIFFSetField(tif, 33922, 6, tiepoint);
-
-    uint16_t geoKeyDir[4] = {1, 1, 0, 0};
-    TIFFSetField(tif, 34735, 4, geoKeyDir);
-
-    QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
-    for (int y = 0; y < height; ++y) {
-        const unsigned char* row = rgbImg.scanLine(y);
-        TIFFWriteScanline(tif, const_cast<unsigned char*>(row), y, 0);
-    }
-
-    TIFFClose(tif);
-    return true;
-}
-
-bool ExportEngine::writeR16Heightmap(const QString& path, const QImage& img) {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly)) return false;
-
-    QImage grayImg = img.convertToFormat(QImage::Format_Grayscale16);
-    for (int y = 0; y < grayImg.height(); ++y) {
-        const uint16_t* row = reinterpret_cast<const uint16_t*>(grayImg.scanLine(y));
-        file.write(reinterpret_cast<const char*>(row), grayImg.width() * sizeof(uint16_t));
-    }
-
-    file.close();
-    return true;
-}

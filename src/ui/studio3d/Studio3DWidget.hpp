@@ -86,7 +86,8 @@ private slots:
     void onGridToggled(bool visible);
 
     // Asset library placement (ContentBrowser::assetRequested)
-    void onPlaceAsset(const QString& pathOrType, const QString& type);
+    void onPlaceAsset(const QString& pathOrType, const QString& type,
+                      double importScale = 0.0);
 
     // Panel toggles
     void onToggleToolbar();
@@ -125,6 +126,10 @@ private:
                               const QString& layerId, const QString& name = QString());
     // Size/layer presets for the built-in actor palette
     void placePreset(world::ActorType type);
+    // Applies a .ogsmat to the selected actor (Content Browser flow).
+    void applyMaterialAssetToSelection(const QString& path);
+    // Writes .ogsmat files for a placed model's imported materials.
+    void generateMaterialAssets(const QString& assetPath);
 
     ApplicationContext* m_ctx;
 

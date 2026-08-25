@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QWindow>
 #include <QString>
+#include <QPoint>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QImage>
@@ -14,6 +15,7 @@
 #include "../../core/world/World.hpp"
 #include "../../core/world/UndoRedo.hpp"
 #include "../../core/world/WorldBuilder.hpp"
+#include "../../core/assets/ImportedModel.hpp"
 
 // OGRE-Next forward declarations
 namespace Ogre {
@@ -30,6 +32,10 @@ namespace Ogre {
     class Ray;
     class Vector3;
     class Mesh;
+    class TextureGpu;
+    class HlmsDatablock;
+    class HlmsPbsDatablock;
+    class Item;
     template <class T> class SharedPtr;
     using MeshPtr = SharedPtr<Mesh>;
     using String = std::string;
@@ -84,6 +90,23 @@ public:
     void updateActorVisibility(const QString& id, bool visible);
     void updateActorLayer(const QString& id, const QString& layerId);
     void renameActor(const QString& id, const QString& newName);
+    // Live material update — mutates the actor's datablocks in place,
+    // no mesh rebuild. Called by the Material tab and .ogsmat assignment.
+    void updateActorMaterial(const QString& id);
+    // Override value → imported source value → type default.
+    float effectiveRoughness(const world::Actor& a) const;
+    float effectiveMetalness(const world::Actor& a) const;
+    // True when the actor carries any explicit surface override.
+    static bool actorHasMaterialOverride(const world::Actor& a);
+    // Rebuilds an actor's render entry after its mesh asset path changed.
+    void reloadActorMesh(const QString& id);
+    // Imported source materials of a mesh asset (for .ogsmat generation).
+    QList<assets::ImportedMaterial> importedMaterials(const QString& assetPath) const
+    {
+        auto it = m_importedMaterialCache.find(assetPath);
+        return it != m_importedMaterialCache.end() ? it->second
+                                                   : QList<assets::ImportedMaterial>();
+    }
     int actorCount() const { return m_world.actorCount(); }
     bool hasTerrain() const { return m_terrainItem != nullptr && m_hasHeightmap; }
     bool hasRoads() const { return m_roadItem != nullptr; }
@@ -98,7 +121,25 @@ public:
     // ─── Selection ───
     void selectActor(const QString& id);
     void deselectAll();
+    void toggleActorSelection(const QString& id);   // Ctrl+click
+    void addActorToSelection(const QString& id);    // Shift+click
+    void selectAllActors();
     QString getSelectedActorId() const { return m_world.primarySelection(); }
+    QList<QString> selectedActorIds() const
+    {
+        return QList<QString>(m_world.selectedActorIds.begin(),
+                              m_world.selectedActorIds.end());
+    }
+
+    // ─── Undoable editor operations (drive the QUndoStack + viewport sync) ───
+    void undo();
+    void redo();
+    void deleteSelection();
+    void duplicateSelection();
+
+    // ─── Camera framing ───
+    void frameSelected();
+    void frameAll();
 
     // ─── Transform mode ───
     void setTransformMode(TransformMode mode);
@@ -169,6 +210,7 @@ signals:
     void sceneChanged();
     void worldChanged();
     void transformModeChanged(int mode);
+    void flySpeedChanged(double speed);
 
 protected:
     void exposeEvent(QExposeEvent* event) override;
@@ -193,6 +235,14 @@ private:
     // Stage 3: per-type procedural mesh + real .mesh asset loading.
     Ogre::MeshPtr loadActorMeshAsset(const QString& path);
     Ogre::MeshPtr buildProceduralActorMesh(const world::Actor& actor);
+    // Stage 4: FBX/glTF/OBJ import via Assimp — builds an OGRE mesh with
+    // per-material PBS datablocks and textures.
+    Ogre::MeshPtr importMeshAsset(const QString& path, float scaleOverride = 0.0f);
+    Ogre::String importMaterialDatablock(const assets::ImportedModel& model,
+                                         int materialIndex,
+                                         const Ogre::String& meshName,
+                                         int subMeshIndex);
+    Ogre::TextureGpu* loadAssetTexture(const QString& path, bool srgb);
     void buildBoxMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
                       float hx, float hy, float hz);
     void buildCylinderMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
@@ -204,7 +254,29 @@ private:
     void buildPlaneMesh(Ogre::ManualObject* mo, const Ogre::String& dblock,
                         float hx, float hz);
     Ogre::String actorDatablock(const world::Actor& actor);
+    // ── Material system (UE-style per-actor overrides) ──────────
+    // Per-actor surface application. Procedural meshes already use a
+    // per-actor datablock; imported meshes share one datablock per source
+    // material, so overriding clones those per actor (material instances).
+    struct ActorMaterialState {
+        std::vector<Ogre::HlmsDatablock*> bases;      // shared mesh defaults
+        std::vector<Ogre::HlmsPbsDatablock*> overrides; // per-actor clones
+    };
+    void applyActorMaterial(const world::Actor& actor, Ogre::Item* item);
+    void applyMaterialValues(Ogre::HlmsPbsDatablock* db, const world::Actor& a);
+    static void defaultSurfaceForType(world::ActorType type,
+                                      float& roughness, float& metalness);
+    void destroyActorMaterialState(const QString& id);
+    std::map<QString, ActorMaterialState> m_actorMaterialState;
+    std::map<QString, QList<assets::ImportedMaterial>> m_importedMaterialCache;
     void updateCameraFromKeys(float dt);
+    Ogre::Vector3 flyViewDirection() const;
+    void beginFlyLook();
+    void endFlyLook();
+    void applyFlyLook(int dx, int dy);
+    void frameBox(const Ogre::Vector3& mn, const Ogre::Vector3& mx);
+    void syncActorNode(const QString& id);
+    void syncRendersToWorld();
     void updateGizmo();
     void createGizmo();
     void destroyGizmo();
@@ -292,6 +364,7 @@ private:
     int m_gizmoStartY = 0;
     float m_gizmoStartValue = 0.0f;
     world::Transform m_gizmoStartTransform;
+    std::map<QString, world::Transform> m_gizmoStartTransforms;
 
     // Grid
     Ogre::ManualObject* m_gridManual = nullptr;
@@ -308,11 +381,13 @@ private:
     float m_camTargetY = 0.0f;
     float m_camTargetZ = 0.0f;
 
-    // Camera state — fly mode (WASD)
+    // Camera state — fly mode (Unreal-style: hold RMB to look + WASD/QE)
     bool m_flyMode = false;
     std::set<int> m_keysDown;
     float m_flySpeed = 100.0f;
     float m_flyBoost = 1.0f;
+    float m_flyX = 0.0f, m_flyY = 0.0f, m_flyZ = 0.0f;
+    QPoint m_lookAnchorGlobal;   // cursor is warped back here every look event
 
     // Pending scene to load after OGRE initialization
     QJsonObject m_pendingScene;

@@ -57,8 +57,9 @@ Exposed via `OGS_VERSION` compile definition. Used in:
 | `test_gpxz_download` | GPXZ elevation API tests | Requires `GPXZ_API_KEY`; skips without it |
 | `test_road_studio` | Road Studio feature tests | 388 pass (signs, markings, furniture, snapping, measurement, persistence, templates, road creation, multi-lane, lane width, cross-section, mesh generation, junctions). 4 tests catch and ignore LaneMaker SEH exceptions in test mode. |
 | `test_road_studio_ui` | Road Studio UI smoke test (headless) | 12/12 pass — tests LaneConfigWidget, profile switching, ActionManager, Preference system. Runs in 0.08s. |
+| `test_asset_import` | Assimp model import tests (3D Studio) | 42/42 pass — OBJ/STL geometry, UV flip, generated normals, unit-scale heuristic, materials + texture resolution, failure paths, .ogsmat round-trip, Actor PBR field persistence |
 
-**All 11 CTest targets pass (100%), 0 disabled, 0 skipped.**
+**All 12 CTest targets pass (100%), 0 disabled, 0 skipped.**
 
 CTest uses a generated wrapper batch script (`ogs_test_wrapper.bat`) to set
 up the PATH for Qt and QMapLibre DLLs before running each test.
@@ -72,7 +73,8 @@ up the PATH for Qt and QMapLibre DLLs before running each test.
 - **Road engine:** `src/engine/road/` (header-only, RoadV2/LaneSection model)
 - **OSM pipeline:** `src/core/osm/` (header-only, OSM → RoadV2 conversion)
 - **World model:** `src/core/world/` (World Authoring system)
-- **3D Studio:** `src/ui/studio3d/` (OGRE-Next embedded editor)
+- **Asset import:** `src/core/assets/` (Assimp-based, OGRE-free; FBX/glTF/OBJ → geometry + material data)
+- **3D Studio:** `src/ui/studio3d/` (OGRE-Next embedded editor; UE-style fly camera on hold-RMB, multi-select, undo/redo, FBX/glTF/OBJ import via Assimp)
 - **Road Studio:** `src/ui/roadstudio/` (LaneMaker-based road editor)
 - **Train Studio:** `src/ui/trainstudio/` (LaneMaker-based rail editor)
 

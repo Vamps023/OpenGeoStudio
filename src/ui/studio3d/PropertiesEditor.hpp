@@ -46,6 +46,8 @@ public:
     void clear();
     void setContext(Context ctx);
     Context currentContext() const { return m_context; }
+    // Default folder for .ogsmat save/assign (the project's Materials dir).
+    void setMaterialDir(const QString& dir) { m_materialDir = dir; }
 
 signals:
     void actorModified(const QString& id);
@@ -55,7 +57,17 @@ private slots:
     void onNameChanged();
     void onVisibilityToggled(bool visible);
     void onLayerChanged(int index);
-    void onColorChanged();
+    void onColorButtonClicked();
+    void onRoughnessChanged(int value);
+    void onMetalnessChanged(int value);
+    void onAlbedoBrowse();
+    void onAlbedoClear();
+    void onNormalBrowse();
+    void onNormalClear();
+    void onResetMaterial();
+    void onAssignMaterialAsset();
+    void onSaveMaterialAsset();
+    void onBrowseAssetPath();
     void onSunChanged();
     void onSkyChanged();
     void onTerrainChanged();
@@ -94,13 +106,24 @@ private:
 
     // Material tab
     QWidget* m_materialTab = nullptr;
-    QDoubleSpinBox *m_colorR, *m_colorG, *m_colorB = nullptr;
+    QPushButton* m_colorSwatchBtn = nullptr;
     QSlider* m_roughnessSlider = nullptr;
     QSlider* m_metalnessSlider = nullptr;
     QLabel* m_roughnessLabel = nullptr;
     QLabel* m_metalnessLabel = nullptr;
+    QLineEdit* m_albedoTexEdit = nullptr;
+    QPushButton* m_albedoBrowseBtn = nullptr;
+    QPushButton* m_albedoClearBtn = nullptr;
+    QLineEdit* m_normalTexEdit = nullptr;
+    QPushButton* m_normalBrowseBtn = nullptr;
+    QPushButton* m_normalClearBtn = nullptr;
     QLineEdit* m_assetPathEdit = nullptr;
     QPushButton* m_browseAssetBtn = nullptr;
+    QPushButton* m_resetMaterialBtn = nullptr;
+    QPushButton* m_assignMaterialBtn = nullptr;
+    QPushButton* m_saveMaterialBtn = nullptr;
+    QLabel* m_materialAssetLabel = nullptr;
+    QString m_materialDir;   // default folder for .ogsmat save/assign
 
     // World tab (lighting + terrain)
     QWidget* m_worldTab = nullptr;

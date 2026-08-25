@@ -1,8 +1,11 @@
 #include "PropertiesEditor.hpp"
 #include "OgreWidget.hpp"
 
+#include "core/assets/MaterialAsset.hpp"
+
 #include <QLineEdit>
 #include <QFileDialog>
+#include <QColorDialog>
 #include <QMessageBox>
 #include <QDir>
 #include <QFileInfo>
@@ -143,16 +146,12 @@ void PropertiesEditor::buildMaterialTab()
     form->setContentsMargins(8, 8, 8, 8);
     form->setSpacing(6);
 
+    // Base color — a swatch button opening the colour picker.
     auto* colorGroup = new QGroupBox("Base Color");
     auto* cForm = new QFormLayout(colorGroup);
-    auto* colorRow = new QHBoxLayout();
-    m_colorR = makeSpinBox(0.01f, 0, 1, 3);
-    m_colorG = makeSpinBox(0.01f, 0, 1, 3);
-    m_colorB = makeSpinBox(0.01f, 0, 1, 3);
-    colorRow->addWidget(new QLabel("R")); colorRow->addWidget(m_colorR);
-    colorRow->addWidget(new QLabel("G")); colorRow->addWidget(m_colorG);
-    colorRow->addWidget(new QLabel("B")); colorRow->addWidget(m_colorB);
-    cForm->addRow("Color:", colorRow);
+    m_colorSwatchBtn = new QPushButton("Pick Color");
+    m_colorSwatchBtn->setMinimumHeight(28);
+    cForm->addRow("Color:", m_colorSwatchBtn);
     form->addWidget(colorGroup);
 
     auto* pbrGroup = new QGroupBox("Surface");
@@ -176,6 +175,34 @@ void PropertiesEditor::buildMaterialTab()
     pForm->addRow("Metallic:", metalRow);
     form->addWidget(pbrGroup);
 
+    // Texture slots — browse for a file, clear to fall back to the
+    // mesh's own material.
+    auto* texGroup = new QGroupBox("Textures");
+    auto* tForm = new QFormLayout(texGroup);
+
+    auto makeTexRow = [this](QLineEdit*& edit, QPushButton*& browse,
+                             QPushButton*& clear) {
+        auto* row = new QHBoxLayout();
+        edit = new QLineEdit();
+        edit->setReadOnly(true);
+        edit->setPlaceholderText("(use mesh material)");
+        browse = new QPushButton("...");
+        browse->setFixedWidth(26);
+        clear = new QPushButton("X");
+        clear->setFixedWidth(26);
+        clear->setToolTip("Clear override");
+        row->addWidget(edit, 1);
+        row->addWidget(browse);
+        row->addWidget(clear);
+        return row;
+    };
+    tForm->addRow("Albedo:", makeTexRow(m_albedoTexEdit, m_albedoBrowseBtn,
+                                        m_albedoClearBtn));
+    tForm->addRow("Normal:", makeTexRow(m_normalTexEdit, m_normalBrowseBtn,
+                                        m_normalClearBtn));
+    form->addWidget(texGroup);
+
+    // Mesh asset (prop source file)
     auto* assetGroup = new QGroupBox("Mesh Asset");
     auto* aForm = new QVBoxLayout(assetGroup);
     auto* assetRow = new QHBoxLayout();
@@ -188,6 +215,23 @@ void PropertiesEditor::buildMaterialTab()
     aForm->addLayout(assetRow);
     form->addWidget(assetGroup);
 
+    // Material assets (.ogsmat) — assign / save / reset overrides
+    auto* matGroup = new QGroupBox("Material Asset");
+    auto* mForm = new QVBoxLayout(matGroup);
+    m_materialAssetLabel = new QLabel("(none)");
+    m_materialAssetLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    m_materialAssetLabel->setWordWrap(true);
+    mForm->addWidget(m_materialAssetLabel);
+    auto* matBtnRow = new QHBoxLayout();
+    m_assignMaterialBtn = new QPushButton("Assign...");
+    m_saveMaterialBtn = new QPushButton("Save As...");
+    m_resetMaterialBtn = new QPushButton("Reset");
+    matBtnRow->addWidget(m_assignMaterialBtn);
+    matBtnRow->addWidget(m_saveMaterialBtn);
+    matBtnRow->addWidget(m_resetMaterialBtn);
+    mForm->addLayout(matBtnRow);
+    form->addWidget(matGroup);
+
     form->addStretch();
     scroll->setWidget(content);
 
@@ -195,9 +239,17 @@ void PropertiesEditor::buildMaterialTab()
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(scroll);
 
-    connect(m_colorR, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &PropertiesEditor::onColorChanged);
-    connect(m_colorG, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &PropertiesEditor::onColorChanged);
-    connect(m_colorB, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &PropertiesEditor::onColorChanged);
+    connect(m_colorSwatchBtn, &QPushButton::clicked, this, &PropertiesEditor::onColorButtonClicked);
+    connect(m_roughnessSlider, &QSlider::valueChanged, this, &PropertiesEditor::onRoughnessChanged);
+    connect(m_metalnessSlider, &QSlider::valueChanged, this, &PropertiesEditor::onMetalnessChanged);
+    connect(m_albedoBrowseBtn, &QPushButton::clicked, this, &PropertiesEditor::onAlbedoBrowse);
+    connect(m_albedoClearBtn, &QPushButton::clicked, this, &PropertiesEditor::onAlbedoClear);
+    connect(m_normalBrowseBtn, &QPushButton::clicked, this, &PropertiesEditor::onNormalBrowse);
+    connect(m_normalClearBtn, &QPushButton::clicked, this, &PropertiesEditor::onNormalClear);
+    connect(m_browseAssetBtn, &QPushButton::clicked, this, &PropertiesEditor::onBrowseAssetPath);
+    connect(m_assignMaterialBtn, &QPushButton::clicked, this, &PropertiesEditor::onAssignMaterialAsset);
+    connect(m_saveMaterialBtn, &QPushButton::clicked, this, &PropertiesEditor::onSaveMaterialAsset);
+    connect(m_resetMaterialBtn, &QPushButton::clicked, this, &PropertiesEditor::onResetMaterial);
 }
 
 void PropertiesEditor::buildWorldTab()
@@ -470,10 +522,35 @@ void PropertiesEditor::refreshMaterialTab()
     if (!a) return;
 
     m_updating = true;
-    m_colorR->setValue(a->colorR);
-    m_colorG->setValue(a->colorG);
-    m_colorB->setValue(a->colorB);
+
+    // Swatch shows the effective colour: the actor's own when overridden,
+    // otherwise a neutral preview (imported materials keep their own look
+    // until the user overrides them).
+    const QColor color = QColor::fromRgbF(
+        qBound(0.0, double(a->colorR), 1.0),
+        qBound(0.0, double(a->colorG), 1.0),
+        qBound(0.0, double(a->colorB), 1.0));
+    m_colorSwatchBtn->setStyleSheet(
+        QString("QPushButton { background: %1; border: 1px solid #3a3a3a; }")
+            .arg(color.name()));
+
+    m_roughnessSlider->setValue(int(m_ogre->effectiveRoughness(*a) * 100.0f + 0.5f));
+    m_metalnessSlider->setValue(int(m_ogre->effectiveMetalness(*a) * 100.0f + 0.5f));
+    m_roughnessLabel->setText(QString::number(m_ogre->effectiveRoughness(*a), 'f', 2));
+    m_metalnessLabel->setText(QString::number(m_ogre->effectiveMetalness(*a), 'f', 2));
+
+    m_albedoTexEdit->setText(a->albedoTexturePath);
+    m_albedoTexEdit->setPlaceholderText(a->assetPath.isEmpty()
+        ? "(no texture)" : "(use mesh material)");
+    m_normalTexEdit->setText(a->normalTexturePath);
+    m_normalTexEdit->setPlaceholderText(a->assetPath.isEmpty()
+        ? "(no texture)" : "(use mesh material)");
+
     m_assetPathEdit->setText(a->assetPath);
+    m_materialAssetLabel->setText(a->materialPath.isEmpty()
+        ? QStringLiteral("(no material asset assigned)")
+        : a->materialPath);
+
     m_updating = false;
 }
 
@@ -537,15 +614,218 @@ void PropertiesEditor::onLayerChanged(int index)
     emit actorModified(m_currentActorId);
 }
 
-void PropertiesEditor::onColorChanged()
+void PropertiesEditor::onColorButtonClicked()
 {
     if (m_updating || m_currentActorId.isEmpty()) return;
     world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
     if (!a) return;
-    a->colorR = float(m_colorR->value());
-    a->colorG = float(m_colorG->value());
-    a->colorB = float(m_colorB->value());
+
+    const QColor initial = QColor::fromRgbF(
+        qBound(0.0, double(a->colorR), 1.0),
+        qBound(0.0, double(a->colorG), 1.0),
+        qBound(0.0, double(a->colorB), 1.0));
+    const QColor picked = QColorDialog::getColor(initial, this, "Base Color");
+    if (!picked.isValid()) return;
+
+    a->colorR = float(picked.redF());
+    a->colorG = float(picked.greenF());
+    a->colorB = float(picked.blueF());
+    a->metadata["matOverride"] = "1";
     a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onRoughnessChanged(int value)
+{
+    if (m_updating || m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    a->roughness = value / 100.0f;
+    a->touch();
+    m_roughnessLabel->setText(QString::number(a->roughness, 'f', 2));
+    m_ogre->updateActorMaterial(m_currentActorId);
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onMetalnessChanged(int value)
+{
+    if (m_updating || m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    a->metalness = value / 100.0f;
+    a->touch();
+    m_metalnessLabel->setText(QString::number(a->metalness, 'f', 2));
+    m_ogre->updateActorMaterial(m_currentActorId);
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onAlbedoBrowse()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    const QString path = QFileDialog::getOpenFileName(this, "Albedo Texture",
+        QString(), "Images (*.png *.jpg *.jpeg *.tif *.tiff *.dds *.tga *.bmp)");
+    if (path.isEmpty()) return;
+    a->albedoTexturePath = path;
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onAlbedoClear()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    a->albedoTexturePath.clear();
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onNormalBrowse()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    const QString path = QFileDialog::getOpenFileName(this, "Normal Texture",
+        QString(), "Images (*.png *.jpg *.jpeg *.dds *.tga *.bmp)");
+    if (path.isEmpty()) return;
+    a->normalTexturePath = path;
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onNormalClear()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    a->normalTexturePath.clear();
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onResetMaterial()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    a->roughness = -1.0f;
+    a->metalness = -1.0f;
+    a->albedoTexturePath.clear();
+    a->normalTexturePath.clear();
+    a->metadata.remove("matOverride");
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onAssignMaterialAsset()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    const QString path = QFileDialog::getOpenFileName(this, "Assign Material Asset",
+        m_materialDir, "Material Assets (*.ogsmat);;All files (*)");
+    if (path.isEmpty()) return;
+
+    assets::MaterialAsset mat = assets::MaterialAsset::loadFromFile(path);
+    if (mat.name.isEmpty()) {
+        QMessageBox::warning(this, "Assign Material",
+            "Could not read the selected .ogsmat file.");
+        return;
+    }
+    a->colorR = mat.baseColorR;
+    a->colorG = mat.baseColorG;
+    a->colorB = mat.baseColorB;
+    a->roughness = mat.roughness;
+    a->metalness = mat.metalness;
+    a->albedoTexturePath = mat.resolveTexture(path, mat.albedoTexture);
+    a->normalTexturePath = mat.resolveTexture(path, mat.normalTexture);
+    a->materialPath = path;
+    a->metadata["matOverride"] = "1";
+    a->touch();
+    m_ogre->updateActorMaterial(m_currentActorId);
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onSaveMaterialAsset()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+
+    assets::MaterialAsset mat;
+    // Prefer the mesh's imported source material as the starting point so
+    // assets saved straight from an import carry its textures along.
+    if (!a->assetPath.isEmpty()) {
+        const QList<assets::ImportedMaterial> imported =
+            m_ogre->importedMaterials(a->assetPath);
+        if (!imported.isEmpty() && !OgreWidget::actorHasMaterialOverride(*a)) {
+            const auto& src = imported.first();
+            mat.baseColorR = src.baseColorR;
+            mat.baseColorG = src.baseColorG;
+            mat.baseColorB = src.baseColorB;
+            mat.roughness = src.roughness;
+            mat.metalness = src.metalness;
+            mat.albedoTexture = src.albedoTexture;
+            mat.normalTexture = src.normalTexture;
+        }
+    }
+    if (mat.name.isEmpty()) {
+        mat.baseColorR = a->colorR;
+        mat.baseColorG = a->colorG;
+        mat.baseColorB = a->colorB;
+        mat.roughness = m_ogre->effectiveRoughness(*a);
+        mat.metalness = m_ogre->effectiveMetalness(*a);
+        mat.albedoTexture = a->albedoTexturePath;
+        mat.normalTexture = a->normalTexturePath;
+    }
+
+    QString suggested = m_materialDir;
+    if (suggested.isEmpty()) suggested = QDir::homePath();
+    suggested = QDir(suggested).filePath(
+        (a->name.isEmpty() ? QStringLiteral("Material") : a->name) + ".ogsmat");
+    const QString path = QFileDialog::getSaveFileName(this, "Save Material Asset",
+        suggested, "Material Assets (*.ogsmat)");
+    if (path.isEmpty()) return;
+
+    mat.name = QFileInfo(path).completeBaseName();
+    if (!mat.saveToFile(path)) {
+        QMessageBox::warning(this, "Save Material", "Could not write the .ogsmat file.");
+        return;
+    }
+    a->materialPath = path;
+    a->touch();
+    refreshMaterialTab();
+    emit actorModified(m_currentActorId);
+}
+
+void PropertiesEditor::onBrowseAssetPath()
+{
+    if (m_currentActorId.isEmpty()) return;
+    world::Actor* a = m_ogre->world()->findActor(m_currentActorId);
+    if (!a) return;
+    const QString path = QFileDialog::getOpenFileName(this, "Mesh Asset",
+        a->assetPath.isEmpty() ? QString() : QFileInfo(a->assetPath).absolutePath(),
+        "Models (*.fbx *.glb *.gltf *.obj *.stl *.dae *.ply *.3ds *.mesh);;All files (*)");
+    if (path.isEmpty()) return;
+    a->assetPath = path;
+    a->touch();
+    m_ogre->reloadActorMesh(m_currentActorId);
+    refreshMaterialTab();
     emit actorModified(m_currentActorId);
 }
 

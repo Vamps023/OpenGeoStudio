@@ -5,7 +5,10 @@
 #include "NPanel.hpp"
 
 #include "core/ApplicationContext.hpp"
+#include "core/assets/ImportedModel.hpp"
+#include "core/assets/MaterialAsset.hpp"
 
+#include <QRegularExpression>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -170,6 +173,9 @@ void Studio3DWidget::setupUI()
         m_outliner->refresh();
         m_propertiesEditor->setActor(id);
     });
+    connect(m_ogreWidget, &OgreWidget::flySpeedChanged, this, [this](double speed) {
+        setStatus(QString("Fly speed: %1 m/s").arg(speed, 0, 'f', 1));
+    });
 
     // Wire PropertiesEditor World tab buttons
     connect(m_propertiesEditor->m_loadTerrainBtn, &QPushButton::clicked, this, &Studio3DWidget::onLoadTerrain);
@@ -209,12 +215,33 @@ void Studio3DWidget::setupMenuBar()
 
     // Edit
     auto* editMenu = mb->addMenu("Edit");
-    editMenu->addAction("Clear All Objects", this, &Studio3DWidget::onClearObjects);
+    editMenu->addAction("Undo", this, [this]() {
+        m_ogreWidget->undo(); m_outliner->refresh(); refreshStats();
+    }, QKeySequence::Undo);
+    editMenu->addAction("Redo", this, [this]() {
+        m_ogreWidget->redo(); m_outliner->refresh(); refreshStats();
+    }, QKeySequence::Redo);
+    editMenu->addSeparator();
+    editMenu->addAction("Duplicate (Ctrl+D)", this, [this]() {
+        m_ogreWidget->duplicateSelection(); m_outliner->refresh(); refreshStats();
+    });
+    editMenu->addAction("Delete Selected", this, [this]() {
+        m_ogreWidget->deleteSelection(); m_outliner->refresh(); refreshStats();
+    });
+    editMenu->addSeparator();
+    editMenu->addAction("Select All", this, [this]() {
+        m_ogreWidget->selectAllActors(); m_outliner->refresh();
+    }, QKeySequence::SelectAll);
+    editMenu->addAction("Deselect All", this, [this]() {
+        m_ogreWidget->deselectAll(); m_outliner->refresh();
+    });
     editMenu->addSeparator();
     auto* snapAct = editMenu->addAction("Toggle Snap", this, &Studio3DWidget::onSnapToggled);
     snapAct->setCheckable(true);
     auto* gridAct = editMenu->addAction("Toggle Grid", this, &Studio3DWidget::onGridToggled);
     gridAct->setCheckable(true);
+    editMenu->addSeparator();
+    editMenu->addAction("Clear All Objects", this, &Studio3DWidget::onClearObjects);
 
     // View
     auto* viewMenu = mb->addMenu("View");
@@ -225,6 +252,8 @@ void Studio3DWidget::setupMenuBar()
     viewMenu->addAction("Toggle Properties", this, &Studio3DWidget::onToggleProperties);
     viewMenu->addAction("Toggle Bottom Panel", this, &Studio3DWidget::onToggleBottom);
     viewMenu->addSeparator();
+    viewMenu->addAction("Frame Selected (F)", this, [this]() { m_ogreWidget->frameSelected(); }, QKeySequence("F"));
+    viewMenu->addAction("Frame All (Home)", this, [this]() { m_ogreWidget->frameAll(); }, QKeySequence("Home"));
     viewMenu->addAction("Reset Camera", this, [this]() { m_ogreWidget->resetCamera(); });
 
     // Add
@@ -251,16 +280,29 @@ void Studio3DWidget::setupMenuBar()
     auto* helpMenu = mb->addMenu("Help");
     helpMenu->addAction("Controls...", this, [this]() {
         QMessageBox::information(this, "3D Studio Controls",
+            "Viewport (Unreal-style)\n"
             "LMB: Select / Gizmo drag\n"
-            "RMB: Orbit camera\n"
+            "Ctrl+LMB: Toggle selection\n"
+            "Shift+LMB: Add to selection\n"
+            "RMB (hold): Fly camera — mouse look\n"
+            "  W/S: forward/back  A/D: strafe\n"
+            "  Q/E: down/up  Shift: boost  Ctrl: slow\n"
+            "  Wheel (while RMB): fly speed\n"
+            "RMB drag (tap): Orbit camera\n"
             "MMB: Pan camera\n"
             "Wheel: Zoom\n\n"
+            "Editing\n"
             "Q: Select tool\n"
             "W: Move tool\n"
             "E: Rotate tool\n"
             "R: Scale tool\n"
             "F: Frame selected\n"
-            "Del: Delete selected\n\n"
+            "Home: Frame all\n"
+            "Ctrl+D: Duplicate\n"
+            "Del: Delete selected\n"
+            "Esc: Deselect\n"
+            "Ctrl+Z / Ctrl+Y: Undo / Redo\n\n"
+            "UI\n"
             "T: Toggle toolbar\n"
             "N: Toggle N-panel\n"
             "Ctrl+S: Save scene\n"
@@ -413,7 +455,7 @@ void Studio3DWidget::setupStatusBar()
     sb->addWidget(m_statusLabel);
 
     auto* hintLabel = new QLabel(
-        "LMB Select · RMB Orbit · MMB Pan · Wheel Zoom · Q/W/E/R Tools · F Frame · T Toolbar · N Panel · Del Delete");
+        "LMB Select · RMB Fly/Orbit · MMB Pan · Wheel Zoom · WASD Fly (RMB held) · Q/W/E/R Tools · F Frame · Home All · Ctrl+Z Undo · Ctrl+D Dup · Del Delete");
     hintLabel->setStyleSheet("QLabel { color: #707070; font-size: 10px; }");
     sb->addPermanentWidget(hintLabel);
 
@@ -482,7 +524,8 @@ void Studio3DWidget::placePreset(world::ActorType type)
     }
 }
 
-void Studio3DWidget::onPlaceAsset(const QString& pathOrType, const QString& type)
+void Studio3DWidget::onPlaceAsset(const QString& pathOrType, const QString& type,
+                                  double importScale)
 {
     if (type == "actor") {
         const auto actorType = static_cast<world::ActorType>(pathOrType.toInt());
@@ -502,13 +545,105 @@ void Studio3DWidget::onPlaceAsset(const QString& pathOrType, const QString& type
         }
     }
 
+    // Material assets apply to the current selection instead of placing
+    // a new actor.
+    if (type == "material") {
+        applyMaterialAssetToSelection(pathOrType);
+        return;
+    }
+
     const QFileInfo fi(pathOrType);
     if (!fi.exists()) return;
-    const QString id = placeActorAtFocus(world::ActorType::Prop, 4, 4, 4, "default",
+    // Imported models arrive already converted to metres — placing them at
+    // unit scale keeps their authored size instead of the 4 m prop default.
+    const bool importable = assets::isImportableModelFile(fi.absoluteFilePath());
+    const float s = importable ? 1.0f : 4.0f;
+    const QString id = placeActorAtFocus(world::ActorType::Prop, s, s, s, "default",
                                          fi.completeBaseName());
-    if (world::Actor* a = m_ogreWidget->world()->findActor(id))
+    if (world::Actor* a = m_ogreWidget->world()->findActor(id)) {
         a->assetPath = fi.absoluteFilePath();
+        if (importable && importScale > 0.0)
+            a->metadata["importScale"] = QString::number(importScale);
+    }
+    if (importable)
+        generateMaterialAssets(fi.absoluteFilePath());
     appendLog(QString("Placed %1 asset: %2").arg(type, fi.fileName()));
+}
+
+// Applies a .ogsmat material asset to the selected actor (live).
+void Studio3DWidget::applyMaterialAssetToSelection(const QString& path)
+{
+    const QString selId = m_ogreWidget->getSelectedActorId();
+    if (selId.isEmpty()) {
+        setStatus("Select an actor first, then double-click a material asset");
+        QMessageBox::information(this, "Apply Material",
+            "Select an actor in the viewport or outliner first, then double-click "
+            "the material asset to apply it.");
+        return;
+    }
+    world::Actor* a = m_ogreWidget->world()->findActor(selId);
+    if (!a) return;
+
+    assets::MaterialAsset mat = assets::MaterialAsset::loadFromFile(path);
+    if (mat.name.isEmpty()) {
+        QMessageBox::warning(this, "Apply Material",
+            "Could not read the selected .ogsmat file.");
+        return;
+    }
+    a->colorR = mat.baseColorR;
+    a->colorG = mat.baseColorG;
+    a->colorB = mat.baseColorB;
+    a->roughness = mat.roughness;
+    a->metalness = mat.metalness;
+    a->albedoTexturePath = mat.resolveTexture(path, mat.albedoTexture);
+    a->normalTexturePath = mat.resolveTexture(path, mat.normalTexture);
+    a->materialPath = path;
+    a->metadata["matOverride"] = "1";
+    a->touch();
+    m_ogreWidget->updateActorMaterial(selId);
+    m_propertiesEditor->setActor(selId);
+    appendLog(QString("Applied material '%1' to %2").arg(mat.name, a->name));
+    setStatus(QString("Applied material: %1").arg(mat.name));
+}
+
+// Writes one .ogsmat per imported source material so placed FBX/glTF/OBJ
+// models expose their materials as reusable assets. Skips Assimp's
+// synthetic DefaultMaterial and files that already exist.
+void Studio3DWidget::generateMaterialAssets(const QString& assetPath)
+{
+    if (!m_ctx || !m_ctx->projects().hasProject()) return;
+    const QList<assets::ImportedMaterial> mats =
+        m_ogreWidget->importedMaterials(assetPath);
+    if (mats.isEmpty()) return;
+
+    const QString outDir = QDir(m_ctx->projects().current().basePath).filePath("Assets");
+    const QString base = QFileInfo(assetPath).completeBaseName();
+    int written = 0;
+    for (const auto& src : mats) {
+        if (src.name.compare("DefaultMaterial", Qt::CaseInsensitive) == 0)
+            continue;
+        assets::MaterialAsset mat;
+        mat.name = src.name.isEmpty() ? base : src.name;
+        mat.baseColorR = src.baseColorR;
+        mat.baseColorG = src.baseColorG;
+        mat.baseColorB = src.baseColorB;
+        mat.roughness = src.roughness;
+        mat.metalness = src.metalness;
+        mat.albedoTexture = src.albedoTexture;
+        mat.normalTexture = src.normalTexture;
+
+        QString safeName = mat.name;
+        safeName.replace(QRegularExpression("[^A-Za-z0-9_\\- ]"), "_");
+        const QString outPath = QDir(outDir).filePath(
+            QString("%1_%2.ogsmat").arg(base, safeName));
+        if (QFile::exists(outPath)) continue;
+        if (mat.saveToFile(outPath)) written++;
+    }
+    if (written > 0) {
+        appendLog(QString("Generated %1 material asset(s) in %2").arg(written).arg(outDir));
+        if (m_contentBrowser)
+            m_contentBrowser->refresh();
+    }
 }
 
 QString Studio3DWidget::findHeightmapInProject()
@@ -955,6 +1090,9 @@ void Studio3DWidget::loadMissingProjectAssets()
 void Studio3DWidget::onProjectOpened()
 {
     if (!m_ctx || !m_ctx->projects().hasProject()) return;
+    // Default location for material assets (save/assign dialogs).
+    m_propertiesEditor->setMaterialDir(
+        QDir(m_ctx->projects().current().basePath).filePath("Assets"));
     if (m_sceneAutoLoaded) {
         QTimer::singleShot(100, this, [this]() { loadMissingProjectAssets(); });
         return;

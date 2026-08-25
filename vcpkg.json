@@ -11,7 +11,8 @@
     "boost-optional",
     "cgal",
     "cereal",
-    "proj"
+    "proj",
+    "assimp"
   ],
   "builtin-baseline": "2f1d605400c8727cc00c15797aba796c88ccd523"
 }

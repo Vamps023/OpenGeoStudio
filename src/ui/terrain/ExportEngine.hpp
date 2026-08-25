@@ -41,8 +41,6 @@ private:
     void loadLocalImageryForTile(const terrain::Tile& tile, const QString& outputPath);
     void writeManifest(const QString& dir);
     void writeMergedOutputs(const QString& dir);
-    void writeGeoTiff(const QString& path, const QImage& heightmap,
-                      const terrain::GeoBounds& bounds);
     void processNextTile();
 
     // ─── Slippy-tile mosaic download ───
@@ -109,12 +107,6 @@ private:
     // Build RasterExtent from tile bounds and CRS settings
     terrain::RasterExtent buildRasterExtent(const terrain::Tile& tile) const;
 
-    // GeoTIFF writing using libtiff (legacy, kept for compatibility)
-    bool writeGeoTiffHeightmap(const QString& path, const QImage& img,
-                               double north, double south, double east, double west);
-    bool writeGeoTiffRgb(const QString& path, const QImage& img,
-                         double north, double south, double east, double west);
-    bool writeR16Heightmap(const QString& path, const QImage& img);
 
     TerrainStore* m_store;
     QNetworkAccessManager* m_network;

@@ -176,6 +176,15 @@ struct Actor {
     // Color (for procedural objects without mesh)
     float colorR = 0.8f, colorG = 0.8f, colorB = 0.8f, colorA = 1.0f;
 
+    // PBR surface overrides — negative = unset (fall back to the type
+    // default or, for imported meshes, the source material's value)
+    float roughness = -1.0f;
+    float metalness = -1.0f;
+
+    // Texture overrides (absolute paths); empty = no override
+    QString albedoTexturePath;
+    QString normalTexturePath;
+
     // Metadata — arbitrary key-value pairs
     QMap<QString, QString> metadata;
 
@@ -212,6 +221,10 @@ struct Actor {
         j["materialPath"] = materialPath;
         j["colorR"] = colorR; j["colorG"] = colorG;
         j["colorB"] = colorB; j["colorA"] = colorA;
+        j["roughness"] = roughness;
+        j["metalness"] = metalness;
+        j["albedoTexturePath"] = albedoTexturePath;
+        j["normalTexturePath"] = normalTexturePath;
 
         QJsonObject meta;
         for (auto it = metadata.begin(); it != metadata.end(); ++it)
@@ -244,6 +257,10 @@ struct Actor {
         a.colorG = float(j["colorG"].toDouble(0.8));
         a.colorB = float(j["colorB"].toDouble(0.8));
         a.colorA = float(j["colorA"].toDouble(1.0));
+        a.roughness = float(j["roughness"].toDouble(-1.0));
+        a.metalness = float(j["metalness"].toDouble(-1.0));
+        a.albedoTexturePath = j["albedoTexturePath"].toString();
+        a.normalTexturePath = j["normalTexturePath"].toString();
 
         QJsonObject meta = j["metadata"].toObject();
         for (auto it = meta.begin(); it != meta.end(); ++it)

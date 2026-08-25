@@ -5,6 +5,8 @@
 
 #include <QApplication>
 #include <QMouseEvent>
+#include <QKeyEvent>
+#include <QCursor>
 #include <QTimer>
 #include <QDir>
 #include <QFile>
@@ -12,6 +14,7 @@
 #include <QImage>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QUuid>
 #include <algorithm>
 #include <limits>
 #include "../terrain/DemDecoder.hpp"
@@ -33,6 +36,7 @@
 #include "OgreArchiveManager.h"
 #include "Compositor/OgreCompositorManager2.h"
 #include "OgreItem.h"
+#include "OgreSubItem.h"
 #include "OgreMesh2.h"
 #include "OgreMeshManager2.h"
 #include "OgreLight.h"
@@ -933,6 +937,7 @@ void OgreWidget::removeActor(const QString& id)
             m_sceneManager->destroyItem(it->second.item);
         m_actorRenders.erase(it);
     }
+    destroyActorMaterialState(id);
     m_world.removeActor(id);
     m_world.selectedActorIds.remove(id);
     emit actorRemoved(id);
@@ -1002,6 +1007,62 @@ void OgreWidget::renameActor(const QString& id, const QString& newName)
 // Actor rendering — Stage 3: per-type procedural meshes + real .mesh assets
 // ============================================================
 
+// Per-type surface defaults. An actor's own values pass through when set;
+// unset (negative) fields fall back to these.
+void OgreWidget::defaultSurfaceForType(world::ActorType type,
+                                       float& roughness, float& metalness)
+{
+    float defRough = 0.6f, defMetal = 0.0f;
+    switch (type) {
+    case world::ActorType::Building:
+        defRough = 0.55f; break;
+    case world::ActorType::Tree:
+    case world::ActorType::Vegetation:
+    case world::ActorType::Grass:
+        defRough = 0.85f; break;
+    case world::ActorType::Rock:
+        defRough = 0.90f; break;
+    case world::ActorType::Water:
+    case world::ActorType::River:
+    case world::ActorType::Lake:
+        defRough = 0.08f; break;
+    case world::ActorType::Prop:
+        defRough = 0.45f; defMetal = 0.25f; break;
+    default:
+        break;
+    }
+    if (roughness < 0.0f) roughness = defRough;
+    if (metalness < 0.0f) metalness = defMetal;
+}
+
+bool OgreWidget::actorHasMaterialOverride(const world::Actor& a)
+{
+    return a.roughness >= 0.0f || a.metalness >= 0.0f ||
+           !a.albedoTexturePath.isEmpty() || !a.normalTexturePath.isEmpty() ||
+           a.metadata.value("matOverride") == "1";
+}
+
+// Writes the actor's full surface state (color + resolved PBR values +
+// optional textures) into a datablock. Used for procedural actors, whose
+// datablock is already per-actor.
+void OgreWidget::applyMaterialValues(Ogre::HlmsPbsDatablock* db,
+                                     const world::Actor& a)
+{
+    float roughness = a.roughness, metalness = a.metalness;
+    defaultSurfaceForType(a.type, roughness, metalness);
+    db->setDiffuse(Ogre::Vector3(a.colorR, a.colorG, a.colorB));
+    db->setRoughness(roughness);
+    db->setMetalness(metalness);
+    if (!a.albedoTexturePath.isEmpty()) {
+        if (Ogre::TextureGpu* tex = loadAssetTexture(a.albedoTexturePath, true))
+            db->setTexture(Ogre::PBSM_DIFFUSE, tex);
+    }
+    if (!a.normalTexturePath.isEmpty()) {
+        if (Ogre::TextureGpu* tex = loadAssetTexture(a.normalTexturePath, false))
+            db->setTexture(Ogre::PBSM_NORMAL, tex);
+    }
+}
+
 Ogre::String OgreWidget::actorDatablock(const world::Actor& actor)
 {
     Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
@@ -1013,31 +1074,153 @@ Ogre::String OgreWidget::actorDatablock(const world::Actor& actor)
             Ogre::IdString(dblockName), dblockName,
             Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
     }
-    Ogre::HlmsPbsDatablock* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
-    datablock->setDiffuse(Ogre::Vector3(actor.colorR, actor.colorG, actor.colorB));
-
-    float roughness = 0.6f, metalness = 0.0f;
-    switch (actor.type) {
-    case world::ActorType::Building:
-        roughness = 0.55f; break;
-    case world::ActorType::Tree:
-    case world::ActorType::Vegetation:
-    case world::ActorType::Grass:
-        roughness = 0.85f; break;
-    case world::ActorType::Rock:
-        roughness = 0.90f; break;
-    case world::ActorType::Water:
-    case world::ActorType::River:
-    case world::ActorType::Lake:
-        roughness = 0.08f; break;
-    case world::ActorType::Prop:
-        roughness = 0.45f; metalness = 0.25f; break;
-    default:
-        break;
-    }
-    datablock->setRoughness(roughness);
-    datablock->setMetalness(metalness);
+    applyMaterialValues(static_cast<Ogre::HlmsPbsDatablock*>(dbBase), actor);
     return dblockName;
+}
+
+// Applies the actor's material state to an existing item — live, no rebuild.
+void OgreWidget::applyActorMaterial(const world::Actor& actor, Ogre::Item* item)
+{
+    if (!m_root || !item) return;
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
+    const size_t subCount = item->getNumSubItems();
+    if (subCount == 0) return;
+
+    // Procedural actors: the per-actor datablock is already assigned to all
+    // sub-items via the mesh's material names — just refresh its values.
+    if (actor.assetPath.isEmpty()) {
+        if (Ogre::HlmsDatablock* db =
+                hlmsPbs->getDatablock(Ogre::IdString("ActorDatablock_" + actor.id.toStdString()))) {
+            applyMaterialValues(static_cast<Ogre::HlmsPbsDatablock*>(db), actor);
+        }
+        return;
+    }
+
+    // Imported meshes share one datablock per source material across every
+    // instance. An override clones those blocks once for this actor
+    // (material instance) and points the sub-items at the clones; clearing
+    // all overrides points them back at the shared defaults.
+    ActorMaterialState& state = m_actorMaterialState[actor.id];
+    if (state.overrides.size() != subCount || state.bases.size() != subCount) {
+        state.bases.assign(subCount, nullptr);
+        state.overrides.assign(subCount, nullptr);
+        for (size_t i = 0; i < subCount; ++i)
+            state.bases[i] = item->getSubItem(i)->getDatablock();
+    }
+
+    const bool overrideAll = actorHasMaterialOverride(actor);
+    for (size_t i = 0; i < subCount; ++i) {
+        Ogre::SubItem* subItem = item->getSubItem(i);
+        Ogre::HlmsPbsDatablock* target = nullptr;
+
+        if (overrideAll) {
+            if (!state.overrides[i]) {
+                Ogre::String cloneName = "ActorMatOverride_" + actor.id.toStdString() +
+                    "_" + Ogre::StringConverter::toString(i);
+                Ogre::HlmsDatablock* clone = state.bases[i]
+                    ? state.bases[i]->clone(cloneName) : nullptr;
+                state.overrides[i] = static_cast<Ogre::HlmsPbsDatablock*>(clone);
+            }
+            target = state.overrides[i];
+        } else {
+            // Back to the shared defaults; drop the clones if any.
+            if (state.overrides[i]) {
+                Ogre::String cloneName = "ActorMatOverride_" + actor.id.toStdString() +
+                    "_" + Ogre::StringConverter::toString(i);
+                try { hlmsPbs->destroyDatablock(Ogre::IdString(cloneName)); }
+                catch (const std::exception&) {}
+                state.overrides[i] = nullptr;
+            }
+            target = static_cast<Ogre::HlmsPbsDatablock*>(state.bases[i]);
+        }
+
+        if (target) {
+            if (overrideAll) {
+                // Start from the imported values, then apply only the
+                // fields the actor actually overrides.
+                if (actor.metadata.value("matOverride") == "1")
+                    target->setDiffuse(Ogre::Vector3(actor.colorR, actor.colorG,
+                                                     actor.colorB));
+                if (actor.roughness >= 0.0f)
+                    target->setRoughness(actor.roughness);
+                if (actor.metalness >= 0.0f)
+                    target->setMetalness(actor.metalness);
+                if (!actor.albedoTexturePath.isEmpty()) {
+                    if (Ogre::TextureGpu* tex =
+                            loadAssetTexture(actor.albedoTexturePath, true))
+                        target->setTexture(Ogre::PBSM_DIFFUSE, tex);
+                }
+                if (!actor.normalTexturePath.isEmpty()) {
+                    if (Ogre::TextureGpu* tex =
+                            loadAssetTexture(actor.normalTexturePath, false))
+                        target->setTexture(Ogre::PBSM_NORMAL, tex);
+                }
+            }
+            if (subItem->getDatablock() != static_cast<Ogre::HlmsDatablock*>(target))
+                subItem->setDatablock(target);
+        }
+    }
+}
+
+void OgreWidget::destroyActorMaterialState(const QString& id)
+{
+    auto it = m_actorMaterialState.find(id);
+    if (it == m_actorMaterialState.end()) return;
+    Ogre::Hlms* hlmsPbs = m_root ? m_root->getHlmsManager()->getHlms(Ogre::HLMS_PBS)
+                                 : nullptr;
+    for (size_t i = 0; i < it->second.overrides.size(); ++i) {
+        if (it->second.overrides[i] && hlmsPbs) {
+            try {
+                hlmsPbs->destroyDatablock(Ogre::IdString(
+                    "ActorMatOverride_" + id.toStdString() + "_" +
+                    Ogre::StringConverter::toString(i)));
+            } catch (const std::exception&) {}
+        }
+    }
+    m_actorMaterialState.erase(it);
+}
+
+void OgreWidget::updateActorMaterial(const QString& id)
+{
+    const world::Actor* a = m_world.findActor(id);
+    auto it = m_actorRenders.find(id);
+    if (!a || it == m_actorRenders.end() || !it->second.item) return;
+    applyActorMaterial(*a, it->second.item);
+}
+
+float OgreWidget::effectiveRoughness(const world::Actor& a) const
+{
+    if (a.roughness >= 0.0f) return a.roughness;
+    if (!a.assetPath.isEmpty()) {
+        const QList<assets::ImportedMaterial> mats = importedMaterials(a.assetPath);
+        if (!mats.isEmpty()) return mats.first().roughness;
+    }
+    float r = -1.0f, m = -1.0f;
+    defaultSurfaceForType(a.type, r, m);
+    return r;
+}
+
+float OgreWidget::effectiveMetalness(const world::Actor& a) const
+{
+    if (a.metalness >= 0.0f) return a.metalness;
+    if (!a.assetPath.isEmpty()) {
+        const QList<assets::ImportedMaterial> mats = importedMaterials(a.assetPath);
+        if (!mats.isEmpty()) return mats.first().metalness;
+    }
+    float r = -1.0f, m = -1.0f;
+    defaultSurfaceForType(a.type, r, m);
+    return m;
+}
+
+void OgreWidget::reloadActorMesh(const QString& id)
+{
+    world::Actor* a = m_world.findActor(id);
+    if (!a) return;
+    // Drop cached per-actor material clones — the new mesh may have a
+    // different submesh/material layout.
+    destroyActorMaterialState(id);
+    rebuildActor(*a);
 }
 
 void OgreWidget::buildBoxMesh(Ogre::ManualObject* mo, const Ogre::String& db,
@@ -1221,6 +1404,128 @@ Ogre::MeshPtr OgreWidget::loadActorMeshAsset(const QString& path)
     }
 }
 
+// ── Stage 4: Assimp import (FBX / glTF / OBJ / …) ──────────────
+// Converts an imported model into an OGRE mesh. Materials become PBS
+// datablocks with base colour, roughness, metalness and any albedo /
+// normal textures, one per source material.
+
+Ogre::TextureGpu* OgreWidget::loadAssetTexture(const QString& path, bool srgb)
+{
+    if (!m_root || !QFile::exists(path)) return nullptr;
+    const QFileInfo fi(path);
+    const Ogre::String dir = fi.absolutePath().toStdString();
+    const Ogre::String name = fi.fileName().toStdString();
+
+    Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+    if (!rgm.resourceGroupExists("AssetTextures"))
+        rgm.createResourceGroup("AssetTextures");
+    if (!rgm.resourceLocationExists(dir, "AssetTextures")) {
+        rgm.addResourceLocation(dir, "FileSystem", "AssetTextures", false, false);
+        try {
+            rgm.initialiseResourceGroup("AssetTextures", false);
+        } catch (const std::exception& e) {
+            appLog().warn("Asset texture location init failed: {}", e.what());
+        }
+    }
+
+    Ogre::TextureGpuManager* texMgr = m_root->getRenderSystem()->getTextureGpuManager();
+    return texMgr->createOrRetrieveTexture(
+        name, Ogre::GpuPageOutStrategy::Discard,
+        srgb ? uint32_t(Ogre::TextureFlags::PrefersLoadingFromFileAsSRGB) : 0u,
+        Ogre::TextureTypes::Type2D, "AssetTextures");
+}
+
+Ogre::String OgreWidget::importMaterialDatablock(const assets::ImportedModel& model,
+                                                 int materialIndex,
+                                                 const Ogre::String& meshName,
+                                                 int subMeshIndex)
+{
+    Ogre::HlmsManager* hlmsManager = m_root->getHlmsManager();
+    Ogre::Hlms* hlmsPbs = hlmsManager->getHlms(Ogre::HLMS_PBS);
+    Ogre::String dblockName = "ImportedMat_" + meshName + "_" +
+                              Ogre::StringConverter::toString(subMeshIndex);
+    if (hlmsPbs->getDatablock(Ogre::IdString(dblockName)))
+        return dblockName;
+
+    Ogre::HlmsDatablock* dbBase = hlmsPbs->createDatablock(
+        Ogre::IdString(dblockName), dblockName,
+        Ogre::HlmsMacroblock(), Ogre::HlmsBlendblock(), Ogre::HlmsParamVec());
+    auto* datablock = static_cast<Ogre::HlmsPbsDatablock*>(dbBase);
+
+    const assets::ImportedMaterial* mat = nullptr;
+    if (materialIndex >= 0 && materialIndex < model.materials.size())
+        mat = &model.materials[materialIndex];
+
+    if (mat) {
+        datablock->setDiffuse(Ogre::Vector3(mat->baseColorR, mat->baseColorG,
+                                            mat->baseColorB));
+        datablock->setRoughness(mat->roughness);
+        datablock->setMetalness(mat->metalness);
+        if (!mat->albedoTexture.isEmpty()) {
+            if (Ogre::TextureGpu* tex = loadAssetTexture(mat->albedoTexture, true))
+                datablock->setTexture(Ogre::PBSM_DIFFUSE, tex);
+        }
+        if (!mat->normalTexture.isEmpty()) {
+            if (Ogre::TextureGpu* tex = loadAssetTexture(mat->normalTexture, false))
+                datablock->setTexture(Ogre::PBSM_NORMAL, tex);
+        }
+    } else {
+        datablock->setDiffuse(Ogre::Vector3(0.8f, 0.8f, 0.8f));
+    }
+    return dblockName;
+}
+
+Ogre::MeshPtr OgreWidget::importMeshAsset(const QString& path, float scaleOverride)
+{
+    if (!m_initialized || !m_sceneManager || !m_root)
+        return Ogre::MeshPtr();
+
+    assets::ImportedModel model = assets::importModel(path, scaleOverride);
+    if (!model.success) {
+        appLog().warn("Model import failed for '{}': {}", path,
+                      model.errorMessage);
+        return Ogre::MeshPtr();
+    }
+
+    Ogre::String meshName = "AssetMesh_" + path.toStdString() + "@" +
+        Ogre::StringConverter::toString(model.appliedScale);
+    Ogre::MeshManager& meshMgr = Ogre::MeshManager::getSingleton();
+    if (Ogre::MeshPtr existing = meshMgr.getByName(meshName))
+        return existing;
+    // Keep the imported material list around so .ogsmat assets can be
+    // generated from it after placement.
+    m_importedMaterialCache[path] = model.materials;
+
+    Ogre::ManualObject* manual = m_sceneManager->createManualObject();
+    for (int i = 0; i < model.subMeshes.size(); ++i) {
+        const assets::ImportedSubMesh& sm = model.subMeshes[i];
+        Ogre::String dblockName = importMaterialDatablock(model, sm.materialIndex,
+                                                          meshName, i);
+        manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
+
+        const size_t vertCount = sm.positions.size() / 3;
+        const bool hasNormals = sm.normals.size() == vertCount * 3;
+        const bool hasUV = sm.uvs.size() == vertCount * 2;
+        for (size_t v = 0; v < vertCount; ++v) {
+            manual->position(sm.positions[v * 3], sm.positions[v * 3 + 1],
+                             sm.positions[v * 3 + 2]);
+            if (hasNormals)
+                manual->normal(sm.normals[v * 3], sm.normals[v * 3 + 1],
+                               sm.normals[v * 3 + 2]);
+            if (hasUV)
+                manual->textureCoord(sm.uvs[v * 2], sm.uvs[v * 2 + 1]);
+        }
+        for (const uint32_t idx : sm.indices)
+            manual->index(idx);
+        manual->end();
+    }
+
+    Ogre::MeshPtr mesh = manual->convertToMesh(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m_sceneManager->destroyManualObject(manual);
+    return mesh;
+}
+
 Ogre::MeshPtr OgreWidget::buildProceduralActorMesh(const world::Actor& actor)
 {
     Ogre::String dblockName = actorDatablock(actor);
@@ -1374,9 +1679,18 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
 
     // Stage 3: prefer a real .mesh asset when assetPath is set, otherwise
     // build a procedural mesh appropriate to the actor type.
+    // Stage 4: FBX/glTF/OBJ and friends go through the Assimp importer.
     Ogre::MeshPtr mesh;
     if (!actor.assetPath.isEmpty()) {
-        mesh = loadActorMeshAsset(actor.assetPath);
+        if (assets::isImportableModelFile(actor.assetPath)) {
+            bool scaleOk = false;
+            const float metaScale =
+                actor.metadata.value("importScale").toFloat(&scaleOk);
+            mesh = importMeshAsset(actor.assetPath,
+                                   scaleOk && metaScale > 0.0f ? metaScale : 0.0f);
+        } else {
+            mesh = loadActorMeshAsset(actor.assetPath);
+        }
         if (!mesh) {
             appLog().warn("Falling back to procedural mesh for actor '{}' (asset '{}')",
                           actor.name, actor.assetPath);
@@ -1407,6 +1721,10 @@ void OgreWidget::rebuildActor(const world::Actor& actor)
     node->setScale(Ogre::Vector3(actor.transform.scaleX, actor.transform.scaleY, actor.transform.scaleZ));
     node->setVisible(actor.visible && isLayerVisible(actor.layerId));
 
+    // Restore any per-actor material overrides (clones for imported meshes,
+    // value refresh for the procedural per-actor datablock).
+    applyActorMaterial(actor, item);
+
     ActorRenderEntry entry;
     entry.actorId = actor.id;
     entry.item = item;
@@ -1423,6 +1741,7 @@ void OgreWidget::clearActorRenderables()
         }
         if (pair.second.item)
             m_sceneManager->destroyItem(pair.second.item);
+        destroyActorMaterialState(pair.first);
     }
     m_actorRenders.clear();
 }
@@ -1610,6 +1929,157 @@ void OgreWidget::deselectAll()
     m_world.clearSelection();
     updateGizmo();
     emit actorSelected(QString());
+}
+
+void OgreWidget::toggleActorSelection(const QString& id)
+{
+    if (m_world.isSelected(id))
+        m_world.removeFromSelection(id);
+    else
+        m_world.addToSelection(id);
+    updateGizmo();
+    emit actorSelected(m_world.primarySelection());
+}
+
+void OgreWidget::addActorToSelection(const QString& id)
+{
+    m_world.addToSelection(id);
+    updateGizmo();
+    emit actorSelected(m_world.primarySelection());
+}
+
+void OgreWidget::selectAllActors()
+{
+    m_world.selectAll();
+    updateGizmo();
+    emit actorSelected(m_world.primarySelection());
+    emit sceneChanged();
+}
+
+// ============================================================
+// Undoable editor operations
+// ============================================================
+
+// Bring the render side back in line with the world model after any
+// undo/redo: destroy entries for removed actors, rebuild entries for
+// restored ones, refresh transforms and visibility for the rest.
+void OgreWidget::syncRendersToWorld()
+{
+    if (!m_initialized || !m_sceneManager) return;
+
+    for (auto it = m_actorRenders.begin(); it != m_actorRenders.end();) {
+        if (!m_world.findActor(it->first)) {
+            if (it->second.node) {
+                it->second.node->detachObject(it->second.item);
+                m_sceneManager->destroySceneNode(it->second.node);
+            }
+            if (it->second.item)
+                m_sceneManager->destroyItem(it->second.item);
+            destroyActorMaterialState(it->first);
+            it = m_actorRenders.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& actor : m_world.actors) {
+        if (m_actorRenders.count(actor.id))
+            syncActorNode(actor.id);
+        else
+            rebuildActor(actor);
+    }
+}
+
+void OgreWidget::syncActorNode(const QString& id)
+{
+    const world::Actor* a = m_world.findActor(id);
+    auto it = m_actorRenders.find(id);
+    if (!a || it == m_actorRenders.end() || !it->second.node) return;
+
+    const auto& t = a->transform;
+    it->second.node->setPosition(Ogre::Vector3(t.posX, t.posY, t.posZ));
+    Ogre::Quaternion q = Ogre::Quaternion(Ogre::Radian(Ogre::Degree(t.rotZ)),
+                                          Ogre::Vector3::UNIT_Z)
+                       * Ogre::Quaternion(Ogre::Radian(Ogre::Degree(t.rotX)),
+                                          Ogre::Vector3::UNIT_X)
+                       * Ogre::Quaternion(Ogre::Radian(Ogre::Degree(t.rotY)),
+                                          Ogre::Vector3::UNIT_Y);
+    it->second.node->setOrientation(q);
+    it->second.node->setScale(Ogre::Vector3(t.scaleX, t.scaleY, t.scaleZ));
+    it->second.node->setVisible(a->visible && isLayerVisible(a->layerId));
+}
+
+void OgreWidget::undo()
+{
+    if (!m_undoStack.canUndo()) return;
+    m_undoStack.undo();
+    syncRendersToWorld();
+    updateGizmo();
+    emit actorSelected(m_world.primarySelection());
+    emit sceneChanged();
+}
+
+void OgreWidget::redo()
+{
+    if (!m_undoStack.canRedo()) return;
+    m_undoStack.redo();
+    syncRendersToWorld();
+    updateGizmo();
+    emit actorSelected(m_world.primarySelection());
+    emit sceneChanged();
+}
+
+void OgreWidget::deleteSelection()
+{
+    if (m_world.selectedActorIds.isEmpty()) return;
+
+    // One RemoveActorCommand per selected actor inside a single undo macro.
+    const QList<QString> ids(m_world.selectedActorIds.begin(),
+                             m_world.selectedActorIds.end());
+    m_undoStack.beginMacro(ids.size() == 1 ? "Delete Actor" : "Delete Actors");
+    for (const QString& id : ids)
+        m_undoStack.push(new world::RemoveActorCommand(&m_world, id));
+    m_undoStack.endMacro();
+
+    syncRendersToWorld();
+    updateGizmo();
+    for (const QString& id : ids)
+        emit actorRemoved(id);
+    emit sceneChanged();
+}
+
+void OgreWidget::duplicateSelection()
+{
+    if (m_world.selectedActorIds.isEmpty()) return;
+
+    const QList<QString> ids(m_world.selectedActorIds.begin(),
+                             m_world.selectedActorIds.end());
+    QList<QString> newIds;
+
+    m_undoStack.beginMacro("Duplicate Actors");
+    for (const QString& id : ids) {
+        const world::Actor* src = m_world.findActor(id);
+        if (!src) continue;
+        world::Actor copy = *src;
+        copy.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        copy.name = src->name + " Copy";
+        copy.transform.posX += 2.0f;
+        copy.transform.posZ += 2.0f;
+        m_undoStack.push(new world::AddActorCommand(&m_world, copy));
+        newIds.append(copy.id);
+    }
+    m_undoStack.endMacro();
+
+    syncRendersToWorld();
+
+    // Select the duplicates so the user can keep moving them.
+    m_world.clearSelection();
+    for (const QString& id : newIds)
+        m_world.select(id);
+    updateGizmo();
+    for (const QString& id : newIds)
+        emit actorAdded(id);
+    emit actorSelected(m_world.primarySelection());
+    emit sceneChanged();
 }
 
 // ============================================================
@@ -2014,6 +2484,13 @@ void OgreWidget::beginGizmoDrag(GizmoAxis axis, int screenX, int screenY)
     m_gizmoStartY = screenY;
     m_gizmoStartTransform = a->transform;
 
+    // Snapshot every selected actor so a drag transforms the whole selection.
+    m_gizmoStartTransforms.clear();
+    for (const auto& id : m_world.selectedActorIds) {
+        if (world::Actor* sa = m_world.findActor(id))
+            m_gizmoStartTransforms[id] = sa->transform;
+    }
+
     // For move/scale we record the initial ray-plane hit so drags are
     // measured relative to it. For rotate we record the initial angle
     // between the cursor and the axis origin on the gizmo plane.
@@ -2081,7 +2558,7 @@ void OgreWidget::applyGizmoDrag(int screenX, int screenY)
         Ogre::Vector3 u, v;
         if (m_activeGizmoAxis == GizmoAxis::X) { u = Ogre::Vector3::UNIT_Y; v = Ogre::Vector3::UNIT_Z; }
         else if (m_activeGizmoAxis == GizmoAxis::Y) { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Z; }
-        else                                        { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Y; }
+        else                            { u = Ogre::Vector3::UNIT_X; v = Ogre::Vector3::UNIT_Y; }
         float ang = atan2f(delta.dotProduct(v), delta.dotProduct(u));
         float deltaAng = ang - m_gizmoStartValue;
         if (m_snapEnabled) {
@@ -2094,21 +2571,54 @@ void OgreWidget::applyGizmoDrag(int screenX, int screenY)
         else                                        t.rotZ = m_gizmoStartTransform.rotZ + deg;
     }
 
-    // Update the actor's transform in the world model directly during the
-    // drag for live feedback; the final undo command is pushed on release.
-    a->transform = t;
-    a->touch();
-    auto it = m_actorRenders.find(selId);
-    if (it != m_actorRenders.end() && it->second.node) {
-        it->second.node->setPosition(Ogre::Vector3(t.posX, t.posY, t.posZ));
-        Ogre::Radian ry(Ogre::Degree(t.rotY));
-        Ogre::Radian rx(Ogre::Degree(t.rotX));
-        Ogre::Radian rz(Ogre::Degree(t.rotZ));
-        Ogre::Quaternion q = Ogre::Quaternion(rz, Ogre::Vector3::UNIT_Z)
-                           * Ogre::Quaternion(rx, Ogre::Vector3::UNIT_X)
-                           * Ogre::Quaternion(ry, Ogre::Vector3::UNIT_Y);
-        it->second.node->setOrientation(q);
-        it->second.node->setScale(Ogre::Vector3(t.scaleX, t.scaleY, t.scaleZ));
+    // Derive the drag delta from the primary actor's change and apply it to
+    // the whole selection — live feedback comes from writing the world model
+    // directly; the undo commands are pushed on release.
+    const auto axisIndex = [this]() -> int {
+        switch (m_activeGizmoAxis) {
+        case GizmoAxis::X: return 0;
+        case GizmoAxis::Y: return 1;
+        default:           return 2;
+        }
+    }();
+    const auto component = [](const world::Transform& tr, int axis,
+                              bool pos) -> float {
+        if (pos)  return axis == 0 ? tr.posX : (axis == 1 ? tr.posY : tr.posZ);
+        return axis == 0 ? tr.scaleX : (axis == 1 ? tr.scaleY : tr.scaleZ);
+    };
+
+    for (const auto& [id, startT] : m_gizmoStartTransforms) {
+        world::Actor* sa = m_world.findActor(id);
+        if (!sa) continue;
+        world::Transform nt = startT;
+        if (m_transformMode == TransformMode::Move) {
+            const float d = component(t, axisIndex, true)
+                          - component(m_gizmoStartTransform, axisIndex, true);
+            if (axisIndex == 0) nt.posX += d;
+            else if (axisIndex == 1) nt.posY += d;
+            else                    nt.posZ += d;
+        } else if (m_transformMode == TransformMode::Scale) {
+            const float startS = std::max(0.001f,
+                component(m_gizmoStartTransform, axisIndex, false));
+            const float factor = component(t, axisIndex, false) / startS;
+            const float s = std::max(0.05f,
+                component(startT, axisIndex, false) * factor);
+            if (axisIndex == 0) nt.scaleX = s;
+            else if (axisIndex == 1) nt.scaleY = s;
+            else                    nt.scaleZ = s;
+        } else if (m_transformMode == TransformMode::Rotate) {
+            const float d = [&]() {
+                if (axisIndex == 0) return t.rotX - m_gizmoStartTransform.rotX;
+                if (axisIndex == 1) return t.rotY - m_gizmoStartTransform.rotY;
+                return t.rotZ - m_gizmoStartTransform.rotZ;
+            }();
+            if (axisIndex == 0) nt.rotX += d;
+            else if (axisIndex == 1) nt.rotY += d;
+            else                    nt.rotZ += d;
+        }
+        sa->transform = nt;
+        sa->touch();
+        syncActorNode(id);
     }
     updateGizmo();
     emit actorTransformed(selId);
@@ -2118,29 +2628,26 @@ void OgreWidget::endGizmoDrag()
 {
     if (!m_gizmoDragging) return;
     m_gizmoDragging = false;
-    QString selId = m_world.primarySelection();
     m_activeGizmoAxis = GizmoAxis::None;
 
-    if (selId.isEmpty()) return;
-    world::Actor* a = m_world.findActor(selId);
-    if (!a) return;
-
-    // Push a single undoable command capturing the full transform delta.
-    // We revert the live edit first so redo() applies the new transform.
-    world::Transform newT = a->transform;
-    a->transform = m_gizmoStartTransform;
-    a->touch();
-    auto it = m_actorRenders.find(selId);
-    if (it != m_actorRenders.end() && it->second.node) {
-        const auto& t = m_gizmoStartTransform;
-        it->second.node->setPosition(Ogre::Vector3(t.posX, t.posY, t.posZ));
-        Ogre::Radian ry(Ogre::Degree(t.rotY));
-        it->second.node->setOrientation(Ogre::Quaternion(ry, Ogre::Vector3::UNIT_Y));
-        it->second.node->setScale(Ogre::Vector3(t.scaleX, t.scaleY, t.scaleZ));
+    // One TransformActorCommand per selected actor inside a single macro.
+    // QUndoStack::push replays redo() immediately, which lands the actors on
+    // their post-drag transforms; syncRendersToWorld refreshes the nodes.
+    if (!m_gizmoStartTransforms.empty()) {
+        m_undoStack.beginMacro("Transform Actors");
+        for (const auto& [id, startT] : m_gizmoStartTransforms) {
+            const world::Actor* sa = m_world.findActor(id);
+            if (sa && !(sa->transform == startT))
+                m_undoStack.push(new world::TransformActorCommand(
+                    &m_world, id, startT, sa->transform));
+        }
+        m_undoStack.endMacro();
     }
-    m_undoStack.push(new world::TransformActorCommand(
-        &m_world, selId, m_gizmoStartTransform, newT));
+    m_gizmoStartTransforms.clear();
+
+    syncRendersToWorld();
     updateGizmo();
+    emit sceneChanged();
 }
 
 // ============================================================
@@ -2304,6 +2811,17 @@ bool OgreWidget::loadWorld(const QString& path)
 
 void OgreWidget::resetCamera()
 {
+    // While flying (RMB held) the camera is placed at the free-fly position
+    // and oriented by yaw/pitch — the orbit sphere must not fight it.
+    if (m_flyMode) {
+        if (m_camera) {
+            m_camera->setPosition(Ogre::Vector3(m_flyX, m_flyY, m_flyZ));
+            m_camera->setDirection(flyViewDirection());
+        }
+        updateGizmo();
+        return;
+    }
+
     if (m_camDist == 0) {
         m_camYaw = 0.0f;
         m_camPitch = -30.0f;
@@ -2358,29 +2876,180 @@ void OgreWidget::panCamera(float dx, float dy)
     resetCamera();
 }
 
+// Direction the fly camera looks along, matching the orbit camera's
+// yaw/pitch convention so entering/leaving flight is seamless.
+Ogre::Vector3 OgreWidget::flyViewDirection() const
+{
+    const float yawRad = Ogre::Degree(m_camYaw).valueRadians();
+    const float pitchRad = Ogre::Degree(m_camPitch).valueRadians();
+    return Ogre::Vector3(-cos(pitchRad) * sin(yawRad),
+                         sin(pitchRad),
+                         -cos(pitchRad) * cos(yawRad));
+}
+
+// Entering flight: capture the orbit camera's current position, hide the
+// cursor and anchor it at the viewport centre so unlimited mouse-look works.
+void OgreWidget::beginFlyLook()
+{
+    if (m_flyMode || !m_camera) return;
+
+    const float yawRad = Ogre::Degree(m_camYaw).valueRadians();
+    const float pitchRad = Ogre::Degree(m_camPitch).valueRadians();
+    m_flyX = m_camTargetX + m_camDist * cos(pitchRad) * sin(yawRad);
+    m_flyY = m_camTargetY + m_camDist * sin(-pitchRad);
+    m_flyZ = m_camTargetZ + m_camDist * cos(pitchRad) * cos(yawRad);
+
+    m_flyMode = true;
+    setCursor(Qt::BlankCursor);
+    m_lookAnchorGlobal = mapToGlobal(QPoint(width() / 2, height() / 2));
+    QCursor::setPos(m_lookAnchorGlobal);
+}
+
+// Leaving flight: re-anchor the orbit target along the current view
+// direction so orbit mode resumes from exactly where flight ended.
+void OgreWidget::endFlyLook()
+{
+    if (!m_flyMode) return;
+    m_flyMode = false;
+    setCursor(Qt::ArrowCursor);
+
+    const Ogre::Vector3 dir = flyViewDirection();
+    m_camTargetX = m_flyX + dir.x * m_camDist;
+    m_camTargetY = m_flyY + dir.y * m_camDist;
+    m_camTargetZ = m_flyZ + dir.z * m_camDist;
+    resetCamera();
+}
+
+void OgreWidget::applyFlyLook(int dx, int dy)
+{
+    const float sens = 0.22f;
+    // Mouse right (dx>0) turns the view right; mouse up (dy<0) pitches up.
+    m_camYaw -= dx * sens;
+    m_camPitch -= dy * sens;
+    m_camPitch = Ogre::Math::Clamp(m_camPitch, -89.0f, 89.0f);
+    resetCamera();
+}
+
 void OgreWidget::updateCameraFromKeys(float dt)
 {
-    if (!m_flyMode || m_keysDown.empty()) return;
+    if (!m_flyMode || !m_camera) return;
 
-    float speed = m_flySpeed * m_flyBoost * dt;
-    Ogre::Vector3 forward = m_camera->getDirection();
-    Ogre::Vector3 right = m_camera->getRight();
-    Ogre::Vector3 up = Ogre::Vector3::UNIT_Y;
+    // Unreal-style modifiers: Shift boosts, Ctrl slows.
+    float boost = 1.0f;
+    if (m_keysDown.count(Qt::Key_Shift)) boost = 4.0f;
+    else if (m_keysDown.count(Qt::Key_Control)) boost = 0.25f;
+
+    const float speed = m_flySpeed * boost * dt;
+    const Ogre::Vector3 forward = flyViewDirection();
+    Ogre::Vector3 right = forward.crossProduct(Ogre::Vector3::UNIT_Y);
+    if (right.squaredLength() < 1e-6f) right = Ogre::Vector3::UNIT_X;
+    right.normalise();
+
     Ogre::Vector3 move = Ogre::Vector3::ZERO;
-
-    if (m_keysDown.count(Qt::Key_W)) move += forward * speed;
-    if (m_keysDown.count(Qt::Key_S)) move -= forward * speed;
-    if (m_keysDown.count(Qt::Key_A)) move -= right * speed;
-    if (m_keysDown.count(Qt::Key_D)) move += right * speed;
-    if (m_keysDown.count(Qt::Key_Q)) move -= up * speed;
-    if (m_keysDown.count(Qt::Key_E)) move += up * speed;
+    if (m_keysDown.count(Qt::Key_W)) move += forward;
+    if (m_keysDown.count(Qt::Key_S)) move -= forward;
+    if (m_keysDown.count(Qt::Key_D)) move += right;
+    if (m_keysDown.count(Qt::Key_A)) move -= right;
+    if (m_keysDown.count(Qt::Key_E)) move += Ogre::Vector3::UNIT_Y;
+    if (m_keysDown.count(Qt::Key_Q)) move -= Ogre::Vector3::UNIT_Y;
 
     if (move != Ogre::Vector3::ZERO) {
-        m_camera->move(move);
-        m_camTargetX = m_camera->getPosition().x;
-        m_camTargetY = m_camera->getPosition().y;
-        m_camTargetZ = m_camera->getPosition().z;
+        move.normalise();
+        move *= speed;
+        m_flyX += move.x;
+        m_flyY += move.y;
+        m_flyZ += move.z;
+        resetCamera();
     }
+}
+
+// Frame a world-space box: put the orbit target at its centre and pull the
+// camera back far enough to see the whole thing.
+void OgreWidget::frameBox(const Ogre::Vector3& mn, const Ogre::Vector3& mx)
+{
+    const Ogre::Vector3 centre = (mn + mx) * 0.5f;
+    const float radius = std::max(1.0f, (mx - mn).length() * 0.5f);
+    m_camTargetX = centre.x;
+    m_camTargetY = centre.y;
+    m_camTargetZ = centre.z;
+    m_camDist = Ogre::Math::Clamp(radius * 2.2f, 12.0f, 10000.0f);
+    if (m_flyMode) {
+        // Keep flying from the new vantage point: park the fly position on
+        // the sphere the orbit camera would occupy.
+        endFlyLook();
+        beginFlyLook();
+    } else {
+        resetCamera();
+    }
+}
+
+void OgreWidget::frameSelected()
+{
+    if (m_world.selectedActorIds.isEmpty()) { frameAll(); return; }
+
+    const Ogre::Vector3 big = Ogre::Vector3(std::numeric_limits<float>::max());
+    Ogre::Vector3 mn = big, mx = -big;
+    bool any = false;
+    for (const auto& id : m_world.selectedActorIds) {
+        const world::Actor* a = m_world.findActor(id);
+        if (!a) continue;
+        auto it = m_actorRenders.find(id);
+        if (it != m_actorRenders.end() && it->second.item) {
+            const Ogre::Aabb aabb = it->second.item->getWorldAabb();
+            mn.makeFloor(aabb.getMinimum());
+            mx.makeCeil(aabb.getMaximum());
+        } else {
+            Ogre::Vector3 c(a->transform.posX, a->transform.posY, a->transform.posZ);
+            Ogre::Vector3 h(a->transform.scaleX * 0.5f, a->transform.scaleY * 0.5f,
+                            a->transform.scaleZ * 0.5f);
+            mn.makeFloor(c - h);
+            mx.makeCeil(c + h);
+        }
+        any = true;
+    }
+    if (any) frameBox(mn, mx);
+}
+
+void OgreWidget::frameAll()
+{
+    const Ogre::Vector3 big = Ogre::Vector3(std::numeric_limits<float>::max());
+    Ogre::Vector3 mn = big, mx = -big;
+    bool any = false;
+    for (const auto& actor : m_world.actors) {
+        if (!actor.visible) continue;
+        auto it = m_actorRenders.find(actor.id);
+        if (it != m_actorRenders.end() && it->second.item) {
+            const Ogre::Aabb aabb = it->second.item->getWorldAabb();
+            mn.makeFloor(aabb.getMinimum());
+            mx.makeCeil(aabb.getMaximum());
+        } else {
+            Ogre::Vector3 c(actor.transform.posX, actor.transform.posY,
+                            actor.transform.posZ);
+            Ogre::Vector3 h(actor.transform.scaleX * 0.5f,
+                            actor.transform.scaleY * 0.5f,
+                            actor.transform.scaleZ * 0.5f);
+            mn.makeFloor(c - h);
+            mx.makeCeil(c + h);
+        }
+        any = true;
+    }
+    if (!any) {
+        if (m_hasHeightmap) {
+            m_camTargetX = 0;
+            m_camTargetY = m_heightScale * 0.3f;
+            m_camTargetZ = 0;
+            m_camDist = Ogre::Math::Clamp(m_terrainSize * 0.9f, 12.0f, 10000.0f);
+            resetCamera();
+        }
+        return;
+    }
+    // Grow the box by the terrain extent so the ground stays in view.
+    if (m_hasHeightmap) {
+        mn.makeFloor(Ogre::Vector3(-m_terrainSize * 0.5f, 0, -m_terrainSize * 0.5f));
+        mx.makeCeil(Ogre::Vector3(m_terrainSize * 0.5f, m_heightScale,
+                                  m_terrainSize * 0.5f));
+    }
+    frameBox(mn, mx);
 }
 
 // ============================================================
@@ -2389,6 +3058,10 @@ void OgreWidget::updateCameraFromKeys(float dt)
 
 void OgreWidget::mousePressEvent(QMouseEvent* event)
 {
+    // While flying (RMB held), clicks belong to the camera — no picking.
+    if (m_flyMode && event->button() == Qt::LeftButton)
+        return;
+
     if (event->button() == Qt::LeftButton) {
         m_leftDown = true;
         m_lastMouseX = event->x();
@@ -2404,10 +3077,17 @@ void OgreWidget::mousePressEvent(QMouseEvent* event)
             }
         }
 
-        // Otherwise try to pick an actor.
+        // Otherwise try to pick an actor. Ctrl toggles, Shift adds,
+        // plain click replaces the selection.
         QString pickedId = pickActor(event->x(), event->y());
         if (!pickedId.isEmpty()) {
-            selectActor(pickedId);
+            if (event->modifiers() & Qt::ControlModifier) {
+                toggleActorSelection(pickedId);
+            } else if (event->modifiers() & Qt::ShiftModifier) {
+                addActorToSelection(pickedId);
+            } else {
+                selectActor(pickedId);
+            }
             // If the newly selected actor has a gizmo, allow starting a drag
             // immediately on the same press (common editor behaviour).
             if (m_transformMode != TransformMode::None) {
@@ -2416,12 +3096,16 @@ void OgreWidget::mousePressEvent(QMouseEvent* event)
                     beginGizmoDrag(axis, event->x(), event->y());
             }
         } else {
-            deselectAll();
+            if (!(event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
+                deselectAll();
         }
     } else if (event->button() == Qt::RightButton) {
         m_rightDown = true;
         m_lastMouseX = event->x();
         m_lastMouseY = event->y();
+        // Unreal-style: RMB enters fly/look mode for as long as it is held.
+        if (m_gizmoDragging) endGizmoDrag();
+        beginFlyLook();
     } else if (event->button() == Qt::MiddleButton) {
         m_middleDown = true;
         m_lastMouseX = event->x();
@@ -2431,6 +3115,16 @@ void OgreWidget::mousePressEvent(QMouseEvent* event)
 
 void OgreWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_flyMode) {
+        // Unreal-style mouse look: measure against the anchor point, then
+        // warp the cursor back so drags never hit a screen edge.
+        const QPoint g = event->globalPosition().toPoint();
+        applyFlyLook(g.x() - m_lookAnchorGlobal.x(),
+                     g.y() - m_lookAnchorGlobal.y());
+        QCursor::setPos(m_lookAnchorGlobal);
+        return;
+    }
+
     int dx = event->x() - m_lastMouseX;
     int dy = event->y() - m_lastMouseY;
 
@@ -2459,6 +3153,7 @@ void OgreWidget::mouseReleaseEvent(QMouseEvent* event)
         m_leftDown = false;
     } else if (event->button() == Qt::RightButton) {
         m_rightDown = false;
+        endFlyLook();
     } else if (event->button() == Qt::MiddleButton) {
         m_middleDown = false;
     }
@@ -2466,6 +3161,13 @@ void OgreWidget::mouseReleaseEvent(QMouseEvent* event)
 
 void OgreWidget::wheelEvent(QWheelEvent* event)
 {
+    if (m_flyMode) {
+        // Unreal-style: the wheel adjusts fly speed while RMB is held.
+        const float step = event->angleDelta().y() > 0 ? 1.25f : 0.8f;
+        m_flySpeed = Ogre::Math::Clamp(m_flySpeed * step, 1.0f, 20000.0f);
+        emit flySpeedChanged(m_flySpeed);
+        return;
+    }
     float delta = -event->angleDelta().y() * 0.5f;
     zoomCamera(delta);
 }
@@ -2475,21 +3177,15 @@ void OgreWidget::keyPressEvent(QKeyEvent* event)
     m_keysDown.insert(event->key());
 
     if (event->key() == Qt::Key_F) {
-        // Frame selected actor
-        QString selId = m_world.primarySelection();
-        if (!selId.isEmpty()) {
-            world::Actor* a = m_world.findActor(selId);
-            if (a) {
-                m_camTargetX = a->transform.posX;
-                m_camTargetY = a->transform.posY;
-                m_camTargetZ = a->transform.posZ;
-                m_camDist = 100;
-                resetCamera();
-            }
-        }
+        frameSelected();
     }
 
-    // Transform mode shortcuts
+    if (event->key() == Qt::Key_Home) {
+        frameAll();
+    }
+
+    // Transform mode shortcuts — suppressed while flying so W/A/S/D/Q/E
+    // drive the camera, exactly like UE.
     if (event->key() == Qt::Key_Q && !m_flyMode)
         setTransformMode(TransformMode::None);
     if (event->key() == Qt::Key_W && !m_flyMode)
@@ -2499,11 +3195,19 @@ void OgreWidget::keyPressEvent(QKeyEvent* event)
     if (event->key() == Qt::Key_R && !m_flyMode)
         setTransformMode(TransformMode::Scale);
 
-    // Delete key removes selected actor
+    // Delete removes the whole selection (undoable).
     if (event->key() == Qt::Key_Delete) {
-        QString selId = m_world.primarySelection();
-        if (!selId.isEmpty())
-            removeActor(selId);
+        deleteSelection();
+    }
+
+    if (event->key() == Qt::Key_Escape) {
+        deselectAll();
+    }
+
+    // Ctrl+D duplicates the selection.
+    if (event->key() == Qt::Key_D &&
+        (event->modifiers() & Qt::ControlModifier)) {
+        duplicateSelection();
     }
 }
 
@@ -2515,6 +3219,9 @@ void OgreWidget::keyReleaseEvent(QKeyEvent* event)
 void OgreWidget::focusOutEvent(QFocusEvent* event)
 {
     Q_UNUSED(event);
+    // Losing focus mid-flight (alt-tab, dialog) must restore the cursor and
+    // cleanly hand the camera back to orbit mode.
+    if (m_flyMode) endFlyLook();
     m_keysDown.clear();
     m_leftDown = m_rightDown = m_middleDown = false;
 }
@@ -2635,6 +3342,8 @@ void OgreWidget::shutdownOgre()
     destroyLighting();
     destroyGizmo();
     destroyGrid();
+    m_actorMaterialState.clear();
+    m_importedMaterialCache.clear();
     if (m_root) {
         delete m_root;
         m_root = nullptr;

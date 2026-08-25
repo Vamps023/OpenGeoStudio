@@ -88,6 +88,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(TIFF REQUIRED)
 find_package(PNG REQUIRED)
 find_package(PROJ CONFIG REQUIRED)
+find_package(assimp CONFIG REQUIRED)
 
 set(ROAD_ENGINE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/road/geometry.hpp
@@ -270,6 +271,9 @@ set(APP_SOURCES
     src/core/events/EventBus.cpp
     src/core/project/ProjectManager.cpp
     src/core/workspace/WorkspaceManager.cpp
+    # Core - model import (Assimp: FBX/glTF/OBJ → geometry data)
+    src/core/assets/ImportedModel.cpp
+    src/core/assets/MaterialAsset.cpp
     # UI - Home
     src/ui/home/HomeWidget.cpp
     # UI - Road Studio (LaneMaker's MainWindow is used directly)
@@ -352,6 +356,7 @@ target_include_directories(OpenGeoStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/terrain/masks
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/world
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/osm
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/assets
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gis
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/crs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gis/ui
@@ -368,6 +373,7 @@ target_link_libraries(OpenGeoStudio PRIVATE
     road_engine::core
     TIFF::TIFF
     PROJ::proj
+    assimp::assimp
 )
 
 # Single source of truth for application version
@@ -529,6 +535,14 @@ if(WIN32)
             "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/share/proj"
             "$<TARGET_FILE_DIR:OpenGeoStudio>/proj"
         COMMENT "Copying PROJ DLL and proj.db to deploy directory..."
+    )
+
+    # Copy Assimp DLL (model import: FBX/glTF/OBJ) to deploy folder
+    add_custom_command(TARGET OpenGeoStudio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:assimp::assimp>"
+            "$<TARGET_FILE_DIR:OpenGeoStudio>"
+        COMMENT "Copying Assimp DLL to deploy directory..."
     )
 
     # Also set up proj.db in the build directory for CTest tests
@@ -703,6 +717,28 @@ if(BUILD_TESTS)
         target_compile_options(test_world_workflow PRIVATE /EHa /bigobj)
     endif()
 
+    # ─── Asset import test suite (Assimp: FBX/glTF/OBJ) ──────
+    add_executable(test_asset_import
+        src/core/assets/test_asset_import.cpp
+        src/core/assets/ImportedModel.cpp
+        src/core/assets/MaterialAsset.cpp
+    )
+    set_target_properties(test_asset_import PROPERTIES AUTOMOC ON)
+    target_include_directories(test_asset_import PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/core/logger
+    )
+    target_link_libraries(test_asset_import PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        assimp::assimp
+    )
+    if(MSVC)
+        target_compile_options(test_asset_import PRIVATE /EHa /bigobj)
+    endif()
+
     # ─── OSM Pipeline test suite ─────────────────────────────
     add_executable(test_osm_pipeline
         src/core/osm/test_osm_pipeline.cpp
@@ -823,12 +859,14 @@ if(BUILD_TESTS)
     add_test(NAME test_osm_pipeline      COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_osm_pipeline>)
     add_test(NAME test_houston_roundtrip COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_houston_roundtrip>)
     add_test(NAME test_road_studio       COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_road_studio>)
+    add_test(NAME test_asset_import      COMMAND "${CMAKE_BINARY_DIR}/ogs_test_wrapper.bat" $<TARGET_FILE:test_asset_import>)
 
     # Apply common environment to all tests
     foreach(t_test IN ITEMS
         test_gpxz_download test_geotiff_writer test_terrain_pipeline
         test_world_model test_crs_system test_world_workflow
-        test_osm_pipeline test_houston_roundtrip test_road_studio)
+        test_osm_pipeline test_houston_roundtrip test_road_studio
+        test_asset_import)
         set_tests_properties(${t_test} PROPERTIES
             ENVIRONMENT "${OGS_TEST_ENV}")
     endforeach()
