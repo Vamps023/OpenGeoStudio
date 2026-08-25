@@ -17,6 +17,7 @@
 #include "cross_section_extender.h"
 #include "id_generator.h"
 #include "Geometries/Line.h"
+#include "map_view_gl.h"
 
 #ifdef CHECK
 #undef CHECK
@@ -1775,6 +1776,23 @@ void test_sidecar_persistence_roundtrip()
     furnReg->clearPlaced();
 }
 
+void test_satellite_no_data_detection()
+{
+    QImage placeholder(256, 256, QImage::Format_RGB32);
+    placeholder.fill(QColor(205, 205, 205));
+    CHECK(LM::MapViewGL::IsSatelliteNoDataTile(placeholder),
+          "Esri gray no-data tile is detected");
+
+    QImage imagery(256, 256, QImage::Format_RGB32);
+    for (int y = 0; y < imagery.height(); ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(imagery.scanLine(y));
+        for (int x = 0; x < imagery.width(); ++x)
+            line[x] = qRgb((x * 3) % 256, (y * 5) % 256, (x + y) % 256);
+    }
+    CHECK(!LM::MapViewGL::IsSatelliteNoDataTile(imagery),
+          "Detailed satellite imagery is retained");
+}
+
 int main()
 {
     std::cerr << "=== Road Studio Feature Test Suite ===" << std::endl;
@@ -1807,6 +1825,7 @@ int main()
         test_sign_reverse_adjustment();
         test_marking_reverse_adjustment();
         test_sidecar_persistence_roundtrip();
+        test_satellite_no_data_detection();
 
         // Road model tests — these create and destroy Road objects
         // which use spdlog and IDGenerator. The road destructor may

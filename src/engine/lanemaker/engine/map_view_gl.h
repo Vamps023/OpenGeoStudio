@@ -56,6 +56,7 @@ namespace LM
 		void SetMapZoom(double zoom);
 		void ClearMapBackground();
 		void UpdateMapTiles(); // called on pan/zoom to load visible tiles
+        static bool IsSatelliteNoDataTile(const QImage& image);
 
 		// permanent objects only
 		void UpdateObject(unsigned int objectID, uint8_t flag);
@@ -220,6 +221,7 @@ namespace LM
         void initTexturedShader();
         void drawMapBackground();
         void requestTile(int z, int x, int y);
+        void requestTileImage(MapTile* tile, int sourceZ, int sourceX, int sourceY);
         void pruneInvisibleTiles();
         void compositeMapImage();
         static void latLonToTile(double lat, double lon, int z, int& tx, int& ty);

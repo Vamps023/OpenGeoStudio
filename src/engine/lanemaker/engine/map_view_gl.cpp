@@ -114,6 +114,33 @@ namespace LM
         return earthCircumference * std::cos(lat * M_PI / 180.0) / (std::pow(2.0, z) * 256.0);
     }
 
+    bool MapViewGL::IsSatelliteNoDataTile(const QImage& image)
+    {
+        if (image.isNull()) return true;
+        const QImage rgb = image.convertToFormat(QImage::Format_RGB32);
+        double sum = 0.0;
+        double sumSquares = 0.0;
+        double chroma = 0.0;
+        int count = 0;
+        for (int y = 0; y < rgb.height(); y += 8) {
+            const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+            for (int x = 0; x < rgb.width(); x += 8) {
+                const int r = qRed(line[x]);
+                const int g = qGreen(line[x]);
+                const int b = qBlue(line[x]);
+                const double luminance = (r + g + b) / 3.0;
+                sum += luminance;
+                sumSquares += luminance * luminance;
+                chroma += std::max({r, g, b}) - std::min({r, g, b});
+                ++count;
+            }
+        }
+        if (count == 0) return true;
+        const double mean = sum / count;
+        const double variance = std::max(0.0, sumSquares / count - mean * mean);
+        return mean > 170.0 && std::sqrt(variance) < 12.0 && chroma / count < 3.0;
+    }
+
     void MapViewGL::SetMapCenter(double lat, double lon)
     {
         m_mapCenterLat = std::clamp(lat, -85.05112878, 85.05112878);
@@ -269,43 +296,65 @@ namespace LM
         tile->worldY = tileExtent.centerY() - centerMerc.y;
         tile->worldSize = tileExtent.width();  // square tiles
 
-        QString url = QString(
-            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")
-            .arg(z).arg(y).arg(x);
+        MapTile* rawPtr = tile.get();
+        m_mapTiles.push_back(std::move(tile));
+        requestTileImage(rawPtr, z, x, y);
+    }
 
+    void MapViewGL::requestTileImage(MapTile* tile, int sourceZ, int sourceX, int sourceY)
+    {
+        if (!m_tileNam || !tile) return;
+        const QString url = QString(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/%1/%2/%3")
+            .arg(sourceZ).arg(sourceY).arg(sourceX);
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio/1.0");
-
         auto* reply = m_tileNam->get(request);
-        MapTile* rawPtr = tile.get();
 
-        connect(reply, &QNetworkReply::finished, this, [this, rawPtr, reply]() {
+        connect(reply, &QNetworkReply::finished, this,
+                [this, tile, sourceZ, sourceX, sourceY, reply]() {
             bool tileExists = false;
-            for (auto& t : m_mapTiles) {
-                if (t.get() == rawPtr) { tileExists = true; break; }
+            for (auto& current : m_mapTiles) {
+                if (current.get() == tile) { tileExists = true; break; }
             }
-            if (tileExists) {
-                if (reply->error() == QNetworkReply::NoError) {
-                    QByteArray data = reply->readAll();
-                    QImage img;
-                    if (img.loadFromData(data))
-                        rawPtr->image = img.convertToFormat(QImage::Format_RGB32);
-                    else
-                        spdlog::warn("Satellite tile decode failed: z={} x={} y={}",
-                                     rawPtr->z, rawPtr->x, rawPtr->y);
-                } else {
-                    spdlog::warn("Satellite tile request failed: z={} x={} y={} error={}",
-                                 rawPtr->z, rawPtr->x, rawPtr->y,
-                                 reply->errorString().toStdString());
-                }
-                rawPtr->loading = false;
-                m_mapCompositeDirty = true;
-                update();
+            if (!tileExists) {
+                reply->deleteLater();
+                return;
             }
-            reply->deleteLater();
-        });
 
-        m_mapTiles.push_back(std::move(tile));
+            QImage image;
+            if (reply->error() == QNetworkReply::NoError)
+                image.loadFromData(reply->readAll());
+            const bool needsFallback = image.isNull() || IsSatelliteNoDataTile(image);
+            reply->deleteLater();
+
+            if (needsFallback && sourceZ > 2) {
+                requestTileImage(tile, sourceZ - 1, sourceX / 2, sourceY / 2);
+                return;
+            }
+
+            if (!needsFallback) {
+                const int delta = tile->z - sourceZ;
+                if (delta > 0) {
+                    const int factor = 1 << delta;
+                    const int localX = tile->x - sourceX * factor;
+                    const int localY = tile->y - sourceY * factor;
+                    const int x0 = localX * image.width() / factor;
+                    const int y0 = localY * image.height() / factor;
+                    const int x1 = (localX + 1) * image.width() / factor;
+                    const int y1 = (localY + 1) * image.height() / factor;
+                    image = image.copy(x0, y0, x1 - x0, y1 - y0)
+                        .scaled(256, 256, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                }
+                tile->image = image.convertToFormat(QImage::Format_RGB32);
+            } else {
+                spdlog::warn("No satellite imagery available: z={} x={} y={}",
+                             tile->z, tile->x, tile->y);
+            }
+            tile->loading = false;
+            m_mapCompositeDirty = true;
+            update();
+        });
     }
 
     void MapViewGL::pruneInvisibleTiles()
