@@ -41,12 +41,12 @@ TrainStudioWidget::TrainStudioWidget(QWidget* parent)
     // Switch LaneMaker into rail mode: rail profile catalog,
     // rail cross-section visual, rail terminology.
     m_lmMainWindow->setRailMode(true);
-    // Use persisted map view (defaults to world overview on first launch)
+    // Use persisted map view (defaults to a land-based satellite view on first launch)
     {
         QSettings s;
-        const double lat = s.value("map/default_lat", 0.0).toDouble();
-        const double lon = s.value("map/default_lon", 0.0).toDouble();
-        const double zoom = s.value("map/default_zoom", 2.0).toDouble();
+        const double lat = s.value("map/default_lat", 18.52).toDouble();
+        const double lon = s.value("map/default_lon", 73.85).toDouble();
+        const double zoom = s.value("map/default_zoom", 15.0).toDouble();
         m_lmMainWindow->useSharedSatelliteView(lat, lon, zoom);
     }
     m_lmMainWindow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

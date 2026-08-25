@@ -42,12 +42,12 @@ RoadStudioWidget::RoadStudioWidget(ApplicationContext* ctx, QWidget* parent)
     m_lmMainWindow = new MainWindow(canvasFrame);
     // Ensure road mode (in case a previous Train Studio session left rail mode active)
     m_lmMainWindow->setRailMode(false);
-    // Use persisted map view (defaults to world overview on first launch)
+    // Use persisted map view (defaults to a land-based satellite view on first launch)
     {
         QSettings s;
-        const double lat = s.value("map/default_lat", 0.0).toDouble();
-        const double lon = s.value("map/default_lon", 0.0).toDouble();
-        const double zoom = s.value("map/default_zoom", 2.0).toDouble();
+        const double lat = s.value("map/default_lat", 18.52).toDouble();
+        const double lon = s.value("map/default_lon", 73.85).toDouble();
+        const double zoom = s.value("map/default_zoom", 15.0).toDouble();
         m_lmMainWindow->useSharedSatelliteView(lat, lon, zoom);
     }
     m_lmMainWindow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

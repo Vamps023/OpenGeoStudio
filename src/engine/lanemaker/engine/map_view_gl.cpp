@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "MapSubsystem.hpp"
 
@@ -72,6 +73,7 @@ namespace LM
             // Top-down: camera directly above XY ground plane, looking straight down -Z.
             m_camera.setTranslation(0, 0, 1000);
             m_camera.setRotation(0, QVector3D(1, 0, 0));
+            SetMapZoom(m_requestedMapZoom);
         }
         else
         {
@@ -106,18 +108,23 @@ namespace LM
         lat = 180.0 / M_PI * std::atan(0.5 * (std::exp(r) - std::exp(-r)));
     }
 
-    double MapViewGL::metersPerPixel(double lat, int z)
+    double MapViewGL::metersPerPixel(double lat, double z)
     {
         const double earthCircumference = 40075016.686;
         return earthCircumference * std::cos(lat * M_PI / 180.0) / (std::pow(2.0, z) * 256.0);
     }
 
     void MapViewGL::SetMapCenter(double lat, double lon)
-    {        m_mapCenterLat = lat;
-        m_mapCenterLon = lon;
+    {
+        m_mapCenterLat = std::clamp(lat, -85.05112878, 85.05112878);
+        m_mapCenterLon = std::clamp(lon, -180.0, 180.0);
+        m_mapTiles.clear();
+        m_mapTexture.reset();
+        m_mapCompositeImage = QImage();
+        m_mapCompositeDirty = true;
         m_mapEnabled = true;
         if (!m_tileNam) m_tileNam = new QNetworkAccessManager(this);
-        m_lastCameraZ = -1; // force tile update on next paint
+        m_lastCameraZ = -1;
         update();
     }
 
@@ -130,8 +137,7 @@ namespace LM
         if (height() <= 0) return;
         // MapViewGL derives its slippy-map zoom from the visible vertical
         // extent. Set camera height so it matches MapLibre's zoom level.
-        const double mpp = metersPerPixel(m_mapCenterLat,
-                                          int(std::round(m_requestedMapZoom)));
+        const double mpp = metersPerPixel(m_mapCenterLat, m_requestedMapZoom);
         const float viewportHeight = float(height());
         const float cameraHeight = float(mpp * viewportHeight / 1.2);
         auto translation = m_camera.translation();
@@ -185,19 +191,13 @@ namespace LM
             centerMerc.y + worldTop
         );
 
-        // Convert to lat/lon for tile selection
-        map::CoordinateTransform toLatLon(map::CRSId::EPSG_3857, map::CRSId::EPSG_4326);
-        auto lonLatExtent = toLatLon.transform(mercExtent);
-
-        // Calculate zoom level using TileMatrixSet
-        static map::TileMatrixSet tms;
-        int newZoom = tms.zoomLevelForExtent(lonLatExtent, width(), height(), 2, 19);
+        const int newZoom = std::clamp(
+            static_cast<int>(std::round(m_requestedMapZoom)), 2, 19);
 
         if (newZoom != m_mapZoom) {
             m_mapTiles.clear();
             m_mapZoom = newZoom;
             m_mapCompositeDirty = true;
-            m_mapTexture.reset();
         }
 
         // Use TileMatrix for proper tile range calculation
@@ -224,7 +224,6 @@ namespace LM
             }
             m_mapTiles.clear();
             m_mapCompositeDirty = true;
-            m_mapTexture.reset();
         }
 
         for (int ty = tileRange.startRow; ty <= tileRange.endRow; ty++) {
@@ -285,15 +284,23 @@ namespace LM
             for (auto& t : m_mapTiles) {
                 if (t.get() == rawPtr) { tileExists = true; break; }
             }
-            if (reply->error() == QNetworkReply::NoError && tileExists) {
-                QByteArray data = reply->readAll();
-                QImage img;
-                if (img.loadFromData(data)) {
-                    rawPtr->image = img.convertToFormat(QImage::Format_RGB32);
-                    rawPtr->loading = false;
-                    m_mapCompositeDirty = true;
-                    update();
+            if (tileExists) {
+                if (reply->error() == QNetworkReply::NoError) {
+                    QByteArray data = reply->readAll();
+                    QImage img;
+                    if (img.loadFromData(data))
+                        rawPtr->image = img.convertToFormat(QImage::Format_RGB32);
+                    else
+                        spdlog::warn("Satellite tile decode failed: z={} x={} y={}",
+                                     rawPtr->z, rawPtr->x, rawPtr->y);
+                } else {
+                    spdlog::warn("Satellite tile request failed: z={} x={} y={} error={}",
+                                 rawPtr->z, rawPtr->x, rawPtr->y,
+                                 reply->errorString().toStdString());
                 }
+                rawPtr->loading = false;
+                m_mapCompositeDirty = true;
+                update();
             }
             reply->deleteLater();
         });
@@ -398,54 +405,45 @@ namespace LM
     {
         if (m_mapTiles.empty()) return;
 
-        double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
+        int minTileX = std::numeric_limits<int>::max();
+        int minTileY = std::numeric_limits<int>::max();
+        int maxTileX = std::numeric_limits<int>::min();
+        int maxTileY = std::numeric_limits<int>::min();
         int tilesWithImage = 0;
+        double minX = 1e18, minY = 1e18, maxX = -1e18, maxY = -1e18;
         for (auto& tile : m_mapTiles) {
-            if (tile->image.isNull() || tile->loading) continue;
-            tilesWithImage++;
-            double half = tile->worldSize * 0.5;
+            minTileX = std::min(minTileX, tile->x);
+            minTileY = std::min(minTileY, tile->y);
+            maxTileX = std::max(maxTileX, tile->x);
+            maxTileY = std::max(maxTileY, tile->y);
+            const double half = tile->worldSize * 0.5;
             minX = std::min(minX, tile->worldX - half);
             minY = std::min(minY, tile->worldY - half);
             maxX = std::max(maxX, tile->worldX + half);
             maxY = std::max(maxY, tile->worldY + half);
+            if (!tile->image.isNull()) ++tilesWithImage;
         }
         if (tilesWithImage == 0) return;
 
-        // Create composite image at tile resolution (256px per tile)
-        double worldWidth = maxX - minX;
-        double worldHeight = maxY - minY;
-        double tileSizeWorld = m_mapTiles[0]->worldSize;
-        int tilesX = std::max(1, (int)std::ceil(worldWidth / tileSizeWorld));
-        int tilesY = std::max(1, (int)std::ceil(worldHeight / tileSizeWorld));
-        int imgW = tilesX * 256;
-        int imgH = tilesY * 256;
-
-        // Cap composite image size to avoid excessive memory
-        const int MAX_COMPOSITE = 4096;
-        if (imgW > MAX_COMPOSITE) imgW = MAX_COMPOSITE;
-        if (imgH > MAX_COMPOSITE) imgH = MAX_COMPOSITE;
+        const int tilesX = maxTileX - minTileX + 1;
+        const int tilesY = maxTileY - minTileY + 1;
+        const int imgW = std::min(tilesX * 256, 4096);
+        const int imgH = std::min(tilesY * 256, 4096);
 
         m_mapCompositeImage = QImage(imgW, imgH, QImage::Format_RGB32);
-        m_mapCompositeImage.fill(QColor(13, 17, 23)); // dark background
+        m_mapCompositeImage.fill(QColor(13, 17, 23));
 
         QPainter painter(&m_mapCompositeImage);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-
         for (auto& tile : m_mapTiles) {
-            if (tile->image.isNull() || tile->loading) continue;
-
-            // Map tile world position to composite image pixels
-            double half = tile->worldSize * 0.5;
-            double tileMinX = tile->worldX - half;
-            double tileMinY = tile->worldY - half; // bottom in world coords
-            // In world coords, +Y = north = up. In image coords, +Y = down.
-            // So we need to flip Y.
-            int dstX = (int)((tileMinX - minX) / worldWidth * imgW);
-            int dstY = (int)((maxY - (tile->worldY + half)) / worldHeight * imgH); // flip Y
-            int dstW = (int)(tile->worldSize / worldWidth * imgW);
-            int dstH = (int)(tile->worldSize / worldHeight * imgH);
-
-            painter.drawImage(QRect(dstX, dstY, dstW, dstH), tile->image);
+            if (tile->image.isNull()) continue;
+            const int col = tile->x - minTileX;
+            const int row = tile->y - minTileY;
+            const int x0 = qRound(static_cast<double>(col) * imgW / tilesX);
+            const int y0 = qRound(static_cast<double>(row) * imgH / tilesY);
+            const int x1 = qRound(static_cast<double>(col + 1) * imgW / tilesX);
+            const int y1 = qRound(static_cast<double>(row + 1) * imgH / tilesY);
+            painter.drawImage(QRect(x0, y0, x1 - x0, y1 - y0), tile->image);
         }
         painter.end();
 
@@ -458,24 +456,25 @@ namespace LM
 
     void MapViewGL::drawMapBackground()
     {
-        if (!m_mapEnabled || m_mapTiles.empty()) return;
+        if (!m_mapEnabled) return;
 
         bool hasImages = false;
+        bool allFinished = !m_mapTiles.empty();
         for (auto& tile : m_mapTiles) {
-            if (!tile->image.isNull() && !tile->loading) { hasImages = true; break; }
+            if (!tile->image.isNull()) hasImages = true;
+            if (tile->loading) allFinished = false;
         }
-        if (!hasImages) return;
 
         initTexturedShader();
 
-        if (m_mapCompositeDirty) {
+        if (m_mapCompositeDirty && hasImages && (allFinished || !m_mapTexture)) {
             compositeMapImage();
-            if (m_mapCompositeImage.isNull()) return;
-
-            m_mapTexture = std::make_unique<QOpenGLTexture>(m_mapCompositeImage);
-            m_mapTexture->setMinificationFilter(QOpenGLTexture::Linear);
-            m_mapTexture->setMagnificationFilter(QOpenGLTexture::Linear);
-            m_mapTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+            if (!m_mapCompositeImage.isNull()) {
+                m_mapTexture = std::make_unique<QOpenGLTexture>(m_mapCompositeImage);
+                m_mapTexture->setMinificationFilter(QOpenGLTexture::Linear);
+                m_mapTexture->setMagnificationFilter(QOpenGLTexture::Linear);
+                m_mapTexture->setWrapMode(QOpenGLTexture::ClampToEdge);
+            }
         }
 
         if (!m_mapTexture) return;
@@ -1185,16 +1184,7 @@ namespace LM
         }
         else if (m_viewMode == ViewMode::TopDown2D)
         {
-            // In 2D orthographic mode, zoom = move camera Z.
-            // Scroll up (dir=1) should zoom IN = decrease Z = smaller view size.
-            // Use proportional zoom step for smooth zoom at any scale.
-            float curZ = m_camera.translation().z();
-            float newZ = curZ * (1.0f - dir * 0.15f);
-            if (newZ < 20.0f) newZ = 20.0f;    // max zoom in
-            if (newZ > 50000.0f) newZ = 50000.0f; // max zoom out (city/region level)
-            m_camera.setTranslation(m_camera.translation().x(),
-                                    m_camera.translation().y(),
-                                    newZ);
+            SetMapZoom(m_requestedMapZoom + dir * 0.5);
             ActionManager::Instance()->Record(m_camera);
         }
         else
@@ -1424,11 +1414,7 @@ namespace LM
     {
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            float curZ = m_camera.translation().z();
-            float newZ = curZ * 0.85f;
-            if (newZ < 20.0f) newZ = 20.0f;
-            m_camera.setTranslation(m_camera.translation().x(),
-                                    m_camera.translation().y(), newZ);
+            SetMapZoom(m_requestedMapZoom + 1.0);
         }
         else
         {
@@ -1444,11 +1430,7 @@ namespace LM
     {
         if (m_viewMode == ViewMode::TopDown2D)
         {
-            float curZ = m_camera.translation().z();
-            float newZ = curZ * 1.15f;
-            if (newZ > 50000.0f) newZ = 50000.0f;
-            m_camera.setTranslation(m_camera.translation().x(),
-                                    m_camera.translation().y(), newZ);
+            SetMapZoom(m_requestedMapZoom - 1.0);
         }
         else
         {

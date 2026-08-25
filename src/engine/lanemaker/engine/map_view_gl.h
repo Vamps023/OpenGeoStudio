@@ -224,7 +224,7 @@ namespace LM
         void compositeMapImage();
         static void latLonToTile(double lat, double lon, int z, int& tx, int& ty);
         static void tileToLatLon(int tx, int ty, int z, double& lat, double& lon);
-        static double metersPerPixel(double lat, int z);
+        static double metersPerPixel(double lat, double z);
 	};
 
 	extern MapViewGL* g_mapViewGL;

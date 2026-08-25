@@ -39,6 +39,7 @@
 #include <QCompleter>
 #include <QSettings>
 #include <QImageReader>
+#include <cmath>
 
 // Road engine ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â direct C++ include, no N-API bridge
 #include "road_engine.hpp"
@@ -875,6 +876,19 @@ private slots:
             bounds.west = proj.bounds.minLon;
             bounds.east = proj.bounds.maxLon;
             m_ctx->terrain().setBounds(bounds);
+        }
+
+        const auto& mapBounds = m_ctx->terrain().selectedBounds();
+        if (mapBounds.isValid()) {
+            const double centerLat = (mapBounds.south + mapBounds.north) * 0.5;
+            const double centerLon = (mapBounds.west + mapBounds.east) * 0.5;
+            const double span = std::max(mapBounds.widthDeg(), mapBounds.heightDeg());
+            const double zoom = qBound(2.0,
+                std::floor(std::log2(360.0 / std::max(span, 1e-9))) + 1.0, 18.0);
+            if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow())
+                m_roadStudioWidget->laneMakerWindow()->useSharedSatelliteView(centerLat, centerLon, zoom);
+            if (m_trainStudioWidget && m_trainStudioWidget->laneMakerWindow())
+                m_trainStudioWidget->laneMakerWindow()->useSharedSatelliteView(centerLat, centerLon, zoom);
         }
     }
 
