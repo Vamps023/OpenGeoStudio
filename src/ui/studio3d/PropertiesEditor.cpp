@@ -534,8 +534,8 @@ void PropertiesEditor::refreshMaterialTab()
         qBound(0.0, double(a->colorG), 1.0),
         qBound(0.0, double(a->colorB), 1.0));
     m_colorSwatchBtn->setStyleSheet(
-        QString("QPushButton { background: %1; border: 1px solid #3a3a3a; }")
-            .arg(color.name()));
+        QString("QPushButton { background: %1; border: 1px solid %2; }")
+            .arg(color.name(), ogs::theme::c::Border));
 
     m_roughnessSlider->setValue(int(m_ogre->effectiveRoughness(*a) * 100.0f + 0.5f));
     m_metalnessSlider->setValue(int(m_ogre->effectiveMetalness(*a) * 100.0f + 0.5f));

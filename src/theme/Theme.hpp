@@ -190,7 +190,26 @@ inline QString appStylesheet()
         "QTabBar::tab:hover:!selected { background: #21262d; }"
 
         // Tool buttons (small)
-        "QToolButton { padding: 4px 8px; border-radius: 4px; }");
+        "QToolButton { padding: 4px 8px; border-radius: 4px; }"
+
+        // Tree / table views
+        "QTreeWidget, QTreeView { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: 12px; }"
+        "QTreeWidget::item, QTreeView::item { padding: 3px 6px; }"
+        "QTreeWidget::item:selected, QTreeView::item:selected { background: rgba(6,182,212,0.15); color: #06b6d4; }"
+        "QHeaderView::section { background: #161b22; color: #7d8590; border: none; border-bottom: 1px solid #30363d; padding: 4px 6px; font-size: 11px; }"
+
+        // Text editors
+        "QTextEdit, QPlainTextEdit { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; selection-background-color: rgba(6,182,212,0.3); }"
+
+        // Sliders
+        "QSlider::groove:horizontal { background: #21262d; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #06b6d4; width: 12px; margin: -4px 0; border-radius: 6px; }"
+        "QSlider::handle:horizontal:hover { background: #22d3ee; }"
+
+        // Splitters
+        "QSplitter::handle { background: #30363d; }"
+        "QSplitter::handle:horizontal { width: 1px; }"
+        "QSplitter::handle:vertical { height: 1px; }");
 }
 
 // ─── Token resolution ────────────────────────────────────────

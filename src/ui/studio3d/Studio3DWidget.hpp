@@ -107,7 +107,6 @@ private:
     void setupToolBar();
     void setupDockPanels();
     void setupStatusBar();
-    void applyBlenderStyle();
 
     void appendLog(const QString& msg);
     void setStatus(const QString& text);
