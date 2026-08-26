@@ -52,10 +52,12 @@
 
 #include "geometry.hpp"
 #include "lane_network.hpp"
+#include "vertical_profile.hpp"
 #include "road_mark_generator.hpp"
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace geo {
@@ -183,6 +185,16 @@ struct RoadMesh {
 //
 struct MeshGenParams {
     double zHeight = 0.0;           // Z height for flat roads
+                                   // ─── Vertical design (optional) ───
+    // When `profile` is set, vertex Z comes from the designed elevation
+    // instead of the flat zHeight:
+    //     z(s, offset) = profile->elevationAt(s) − offset · crossfallAt(s)
+    // Conventions (must match across all modules):
+    //   - SamplePoint::laneOffset is RIGHT-positive (right of travel dir)
+    //   - Superelevation slope is positive = LEFT edge higher
+    // Non-owning; caller must keep them alive for the generate call.
+    const VerticalProfile* profile = nullptr;
+    const Superelevation* superelevation = nullptr;
     double uvScale = 1.0;           // UV scale factor (1m = 1 UV unit)
     bool generateNormals = true;    // compute normals (always (0,0,1) for flat)
     bool generateMarkings = true;   // also generate marking mesh
@@ -200,6 +212,14 @@ struct MeshGenParams {
 // of a lane. Uses the boundary samples from LaneNetwork.
 //
 namespace detail {
+
+// Surface Z at station s and lateral offset x (right-positive), per the
+// MeshGenParams vertical-design convention. Flat fallback when no profile.
+inline double surfaceZ(const MeshGenParams& p, double s, double lateralOffset) {
+    if (!p.profile) return p.zHeight;
+    const double slope = p.superelevation ? p.superelevation->crossfallAt(s) : 0.0;
+    return p.profile->elevationAt(s) - lateralOffset * slope;
+}
 
 inline MeshSection generateLaneStrip(
     const LaneCenterline& centerline,
@@ -310,7 +330,6 @@ inline MeshSection generateLaneStrip(
 
     // Generate vertices: alternating inner, outer
     Vec3 upNormal(0, 0, 1);
-    double z = params.zHeight;
 
     for (int i = 0; i < numSamples; i++) {
         const SamplePoint& inner = (*innerBoundary)[i];
@@ -318,7 +337,8 @@ inline MeshSection generateLaneStrip(
 
         // Inner vertex
         MeshVertex vInner;
-        vInner.position = Point3D(inner.position.x, inner.position.y, z);
+        vInner.position = Point3D(inner.position.x, inner.position.y,
+                                  surfaceZ(params, inner.s, inner.laneOffset));
         vInner.normal = upNormal;
         // UV: U = s, V = lateral offset (inner edge)
         vInner.uv = Vec2(inner.s * params.uvScale, inner.laneOffset * params.uvScale);
@@ -326,7 +346,8 @@ inline MeshSection generateLaneStrip(
 
         // Outer vertex
         MeshVertex vOuter;
-        vOuter.position = Point3D(outer.position.x, outer.position.y, z);
+        vOuter.position = Point3D(outer.position.x, outer.position.y,
+                                  surfaceZ(params, outer.s, outer.laneOffset));
         vOuter.normal = upNormal;
         // UV: U = s, V = lateral offset (outer edge)
         vOuter.uv = Vec2(outer.s * params.uvScale, outer.laneOffset * params.uvScale);
@@ -407,11 +428,12 @@ inline MeshSection generateSolidMarkingMesh(
     if (mark.numSamples() < 2) return section;
 
     double halfWidth = mark.style.width / 2.0;
-    double z = params.zHeight + params.markingElevation;
     Vec3 upNormal(0, 0, 1);
 
     for (int i = 0; i < mark.numSamples(); i++) {
         const SamplePoint& sp = mark.samples[i];
+        const double z = surfaceZ(params, sp.s, sp.laneOffset)
+                       + params.markingElevation;
 
         // Compute perpendicular direction from heading
         // Normal = (−sin(heading), cos(heading)) = left
@@ -487,7 +509,6 @@ inline MeshSection generateDashedMarkingMesh(
     if (dashSegments.empty()) return section;
 
     double halfWidth = mark.style.width / 2.0;
-    double z = params.zHeight + params.markingElevation;
     Vec3 upNormal(0, 0, 1);
 
     // Compute cumulative distances along the polyline
@@ -499,12 +520,15 @@ inline MeshSection generateDashedMarkingMesh(
         cumDist[i] = cumDist[i - 1] + std::hypot(dx, dy);
     }
 
-    // Helper: interpolate position and heading at a given distance along the polyline
-    auto interpAt = [&](double dist) -> std::pair<Point2D, double> {
-        if (dist <= 0.0) return {mark.samples[0].position, mark.samples[0].heading};
-        if (dist >= cumDist.back()) {
-            return {mark.samples.back().position, mark.samples.back().heading};
-        }
+    // Helper: interpolate position, heading, station and lateral offset
+    // at a given distance along the polyline
+    auto interpAt = [&](double dist) -> std::tuple<Point2D, double, double, double> {
+        if (dist <= 0.0)
+            return {mark.samples[0].position, mark.samples[0].heading,
+                    mark.samples[0].s, mark.samples[0].laneOffset};
+        if (dist >= cumDist.back())
+            return {mark.samples.back().position, mark.samples.back().heading,
+                    mark.samples.back().s, mark.samples.back().laneOffset};
         // Binary search for the segment
         int lo = 0, hi = mark.numSamples() - 1;
         while (lo < hi - 1) {
@@ -519,7 +543,9 @@ inline MeshSection generateDashedMarkingMesh(
             mark.samples[lo].position.y * (1 - t) + mark.samples[hi].position.y * t
         );
         double heading = mark.samples[lo].heading * (1 - t) + mark.samples[hi].heading * t;
-        return {pos, heading};
+        double s       = mark.samples[lo].s * (1 - t) + mark.samples[hi].s * t;
+        double offset  = mark.samples[lo].laneOffset * (1 - t) + mark.samples[hi].laneOffset * t;
+        return {pos, heading, s, offset};
     };
 
     // For each dash, generate a quad (4 vertices, 2 triangles)
@@ -530,8 +556,8 @@ inline MeshSection generateDashedMarkingMesh(
         if (dashEnd - dashStart < params.dashEpsilon) continue;
 
         // Interpolate position and heading at dash start and end
-        auto [startPos, startHeading] = interpAt(dashStart);
-        auto [endPos, endHeading] = interpAt(dashEnd);
+        auto [startPos, startHeading, startS, startOff] = interpAt(dashStart);
+        auto [endPos, endHeading, endS, endOff] = interpAt(dashEnd);
 
         // Compute normals at start and end
         double snx = -std::sin(startHeading);
@@ -539,33 +565,36 @@ inline MeshSection generateDashedMarkingMesh(
         double enx = -std::sin(endHeading);
         double eny = std::cos(endHeading);
 
+        const double zStart = surfaceZ(params, startS, startOff) + params.markingElevation;
+        const double zEnd   = surfaceZ(params, endS,   endOff)   + params.markingElevation;
+
         uint32_t baseVertex = static_cast<uint32_t>(section.vertices.size());
 
         // 4 vertices: start-left, start-right, end-left, end-right
         MeshVertex vSL;
         vSL.position = Point3D(startPos.x + snx * halfWidth,
-                               startPos.y + sny * halfWidth, z);
+                               startPos.y + sny * halfWidth, zStart);
         vSL.normal = upNormal;
         vSL.uv = Vec2(dashStart * params.uvScale, 0.0);
         section.vertices.push_back(vSL);
 
         MeshVertex vSR;
         vSR.position = Point3D(startPos.x - snx * halfWidth,
-                               startPos.y - sny * halfWidth, z);
+                               startPos.y - sny * halfWidth, zStart);
         vSR.normal = upNormal;
         vSR.uv = Vec2(dashStart * params.uvScale, 1.0);
         section.vertices.push_back(vSR);
 
         MeshVertex vEL;
         vEL.position = Point3D(endPos.x + enx * halfWidth,
-                               endPos.y + eny * halfWidth, z);
+                               endPos.y + eny * halfWidth, zEnd);
         vEL.normal = upNormal;
         vEL.uv = Vec2(dashEnd * params.uvScale, 0.0);
         section.vertices.push_back(vEL);
 
         MeshVertex vER;
         vER.position = Point3D(endPos.x - enx * halfWidth,
-                               endPos.y - eny * halfWidth, z);
+                               endPos.y - eny * halfWidth, zEnd);
         vER.normal = upNormal;
         vER.uv = Vec2(dashEnd * params.uvScale, 1.0);
         section.vertices.push_back(vER);
@@ -725,8 +754,12 @@ inline RoadMesh generateMeshFromCenterline(
     if (centerline.size() < 2) return mesh;
 
     double halfWidth = roadWidth / 2.0;
-    double z = params.zHeight;
     Vec3 upNormal(0, 0, 1);
+    // NOTE: offsets in this function run along the LEFT normal, while
+    // surfaceZ() takes right-positive offsets — hence the negation.
+    auto elevAt = [&](double s, double leftOffset) {
+        return surfaceZ(params, s, -leftOffset);
+    };
 
     // ── Step 1: Compute normals at each point ──
     // Normal = perpendicular to tangent (left = 90° CCW)
@@ -777,7 +810,8 @@ inline RoadMesh generateMeshFromCenterline(
             Point2D innerPt = { centerline[i].x + normals[i].x * innerOffset,
                                 centerline[i].y + normals[i].y * innerOffset };
             MeshVertex vInner;
-            vInner.position = Point3D(innerPt.x, innerPt.y, z);
+            vInner.position = Point3D(innerPt.x, innerPt.y,
+                                      elevAt(cumDist[i], innerOffset));
             vInner.normal = upNormal;
             vInner.uv = Vec2(cumDist[i], innerOffset + halfWidth);
             asphalt.vertices.push_back(vInner);
@@ -786,7 +820,8 @@ inline RoadMesh generateMeshFromCenterline(
             Point2D outerPt = { centerline[i].x + normals[i].x * outerOffset,
                                 centerline[i].y + normals[i].y * outerOffset };
             MeshVertex vOuter;
-            vOuter.position = Point3D(outerPt.x, outerPt.y, z);
+            vOuter.position = Point3D(outerPt.x, outerPt.y,
+                                      elevAt(cumDist[i], outerOffset));
             vOuter.normal = upNormal;
             vOuter.uv = Vec2(cumDist[i], outerOffset + halfWidth);
             asphalt.vertices.push_back(vOuter);
@@ -813,7 +848,6 @@ inline RoadMesh generateMeshFromCenterline(
     if (params.generateMarkings) {
         double markWidth = 0.15;  // 15cm road edge marking
         double markHalf = markWidth / 2.0;
-        double markZ = z + params.markingElevation;
         MeshSection& marking = mesh.getOrCreateSection(MaterialType::WhiteMarking);
 
         // Left edge and right edge
@@ -828,13 +862,17 @@ inline RoadMesh generateMeshFromCenterline(
                                     centerline[i].y + normals[i].y * (edgeOffset - markHalf) };
 
                 MeshVertex vL;
-                vL.position = Point3D(leftPt.x, leftPt.y, markZ);
+                vL.position = Point3D(leftPt.x, leftPt.y,
+                                      elevAt(cumDist[i], edgeOffset + markHalf)
+                                      + params.markingElevation);
                 vL.normal = upNormal;
                 vL.uv = Vec2(cumDist[i], 0.0);
                 marking.vertices.push_back(vL);
 
                 MeshVertex vR;
-                vR.position = Point3D(rightPt.x, rightPt.y, markZ);
+                vR.position = Point3D(rightPt.x, rightPt.y,
+                                      elevAt(cumDist[i], edgeOffset - markHalf)
+                                      + params.markingElevation);
                 vR.normal = upNormal;
                 vR.uv = Vec2(cumDist[i], 1.0);
                 marking.vertices.push_back(vR);

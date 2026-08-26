@@ -36,6 +36,7 @@
 #include "geometry_segment.hpp"
 #include "lane_engine.hpp"
 #include "st_coords.hpp"
+#include "vertical_profile.hpp"
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +58,21 @@ private:
     // ─── Lane ownership (empty for Phase 1) ───
     std::vector<LaneSection> laneSections_;
 
+    // ─── Vertical design (optional; empty = flat/terrain-driven) ───
+public:
+    VerticalProfile elevationProfile;
+    Superelevation  superelevation;
+
+    bool hasElevation() const { return !elevationProfile.empty(); }
+
+    // Elevation [m] at station s — designed profile when present, else 0.
+    double elevationAt(double s) const { return elevationProfile.elevationAt(s); }
+    // Grade dz/ds [m/m] at station s.
+    double gradeAt(double s) const { return elevationProfile.gradeAt(s); }
+    // Cross slope fraction at station s (0 when no superelevation defined).
+    double crossfallAt(double s) const { return superelevation.crossfallAt(s); }
+
+private:
     // ─── Legacy-compatible metadata ───
 public:
     std::string id;
@@ -93,6 +109,8 @@ public:
     // Deep-clone copy constructor: clones every segment via clone()
     RoadV2(const RoadV2& other)
         : laneSections_(other.laneSections_),
+          elevationProfile(other.elevationProfile),
+          superelevation(other.superelevation),
           id(other.id),
           name(other.name),
           color(other.color),
@@ -122,6 +140,8 @@ public:
         // Copy all fields
         segments_ = std::move(newSegs);
         laneSections_ = other.laneSections_;
+        elevationProfile = other.elevationProfile;
+        superelevation = other.superelevation;
         id = other.id;
         name = other.name;
         color = other.color;

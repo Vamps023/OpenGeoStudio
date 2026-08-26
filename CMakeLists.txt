@@ -267,6 +267,7 @@ add_library(lanemaker::core ALIAS lanemaker)
 set(APP_SOURCES
     src/app/main.cpp
     src/app/AppMainWindow.hpp
+    src/app/AppMainWindow.cpp
     src/app/SettingsDialog.hpp
     src/app/CommandPalette.hpp
     # Theme (single source of truth for UI colors/styles)

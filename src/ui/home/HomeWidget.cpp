@@ -35,14 +35,25 @@ void HomeWidget::setupUi() {
 
     // Welcome header
     namespace th = ogs::theme;
+    auto* heroRow = new QHBoxLayout();
     m_welcomeLabel = new QLabel("OpenGeoStudio");
     m_welcomeLabel->setStyleSheet(
-        QStringLiteral("font-size: 28px; font-weight: bold; color: %1;").arg(th::c::Text));
-    mainLayout->addWidget(m_welcomeLabel);
+        QStringLiteral("font-size: 32px; font-weight: 600; color: %1;").arg(th::c::Text));
+    heroRow->addWidget(m_welcomeLabel);
+
+    // Version pill badge
+    auto* versionBadge = new QLabel("v" OGS_VERSION);
+    versionBadge->setStyleSheet(
+        QStringLiteral("background: %1; color: %2; border-radius: 9px;"
+                       " padding: 3px 10px; font-size: 11px; font-weight: bold;")
+            .arg(th::c::BgOverlay, th::c::Accent));
+    heroRow->addWidget(versionBadge);
+    heroRow->addStretch();
+    mainLayout->addLayout(heroRow);
 
     auto* subtitle = new QLabel("Native C++/Qt 6 desktop application for terrain and road design");
     subtitle->setStyleSheet(
-        QStringLiteral("font-size: 14px; color: %1;").arg(th::c::TextMuted));
+        QStringLiteral("font-size: 14px; color: %1; margin-top: -12px;").arg(th::c::TextMuted));
     mainLayout->addWidget(subtitle);
 
     // Template cards
@@ -52,29 +63,33 @@ void HomeWidget::setupUi() {
 
     // Template cards
     const QString cardStyle = QStringLiteral(
-        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: %1; color: %2; border: 2px solid %3; border-radius: 8px; }"
-        "QPushButton:hover { background-color: %4; border: 2px solid %5; }")
+        "QPushButton { text-align: left; padding: 18px; font-size: 13px; "
+        "background-color: %1; color: %2; border: 1px solid %3; border-radius: 10px; }"
+        "QPushButton:hover { background-color: %4; border: 1px solid %5; color: %2; }"
+        "QPushButton:pressed { background-color: %1; }")
             .arg(th::c::BgSurface, th::c::Text, th::c::Border,
                  th::c::BgActive, th::c::Accent);
 
     // Terrain template
-    auto* terrainCard = new QPushButton("Terrain\n\nMap area selection\nDEM / heightmaps\nSatellite imagery");
-    terrainCard->setFixedSize(220, 140);
+    auto* terrainCard = new QPushButton(
+        "🗺  Terrain\n\nMap area selection\nDEM / heightmaps\nSatellite imagery");
+    terrainCard->setFixedSize(240, 160);
     terrainCard->setStyleSheet(cardStyle);
     connect(terrainCard, &QPushButton::clicked, this, &HomeWidget::onCreateTerrain);
     tmplLayout->addWidget(terrainCard);
 
     // Road Studio template
-    auto* roadCard = new QPushButton("Road Studio\n\nRoad network design\nLaneMaker integration\nC++ geometry engine");
-    roadCard->setFixedSize(220, 140);
+    auto* roadCard = new QPushButton(
+        "🛣  Road Studio\n\nRoad network design\nLaneMaker integration\nC++ geometry engine");
+    roadCard->setFixedSize(240, 160);
     roadCard->setStyleSheet(cardStyle);
     connect(roadCard, &QPushButton::clicked, this, &HomeWidget::onCreateRoadStudio);
     tmplLayout->addWidget(roadCard);
 
     // Train Studio template
-    auto* trainCard = new QPushButton("Train Studio\n\nRailway design\nOSM import\nTrack editing");
-    trainCard->setFixedSize(220, 140);
+    auto* trainCard = new QPushButton(
+        "🚆  Train Studio\n\nRailway design\nOSM import\nTrack editing");
+    trainCard->setFixedSize(240, 160);
     trainCard->setStyleSheet(cardStyle);
     connect(trainCard, &QPushButton::clicked, this, [this]() { emit newProjectRequested("train-studio"); });
     tmplLayout->addWidget(trainCard);

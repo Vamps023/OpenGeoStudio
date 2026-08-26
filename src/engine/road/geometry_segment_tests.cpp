@@ -8661,3 +8661,142 @@ TEST_CASE("LM Connection: last segment tangent matches end direction") {
         CHECK(dot > 0.9);
     }
 }
+
+
+// ═════════════════════════════════════════════════════════
+// VerticalProfile / Superelevation / RoadV2 vertical design
+// ═════════════════════════════════════════════════════════
+
+#include "vertical_profile.hpp"
+#include "road_v2.hpp"
+
+using geo::VerticalProfile;
+using geo::Superelevation;
+using geo::RoadV2;
+
+TEST_CASE("VerticalProfile: empty profile is flat zero") {
+    VerticalProfile p;
+    CHECK(p.empty());
+    CHECK(p.elevationAt(1234.0) == doctest::Approx(0.0));
+    CHECK(p.gradeAt(10.0) == doctest::Approx(0.0));
+}
+
+TEST_CASE("VerticalProfile: two points reproduce constant grade") {
+    VerticalProfile p;
+    p.addPoint(0, 100);
+    p.addPoint(100, 104);
+    CHECK(p.elevationAt(0)   == doctest::Approx(100.0));
+    CHECK(p.elevationAt(50)  == doctest::Approx(102.0));
+    CHECK(p.elevationAt(100) == doctest::Approx(104.0));
+    CHECK(p.gradeAt(50) == doctest::Approx(0.04));
+}
+
+TEST_CASE("VerticalProfile: interpolates through all control points") {
+    VerticalProfile p;
+    p.addPoint(0,   22.4);
+    p.addPoint(100, 23.1);
+    p.addPoint(200, 25.7);
+    p.addPoint(300, 27.2);
+    CHECK(p.elevationAt(0)   == doctest::Approx(22.4));
+    CHECK(p.elevationAt(100) == doctest::Approx(23.1));
+    CHECK(p.elevationAt(200) == doctest::Approx(25.7));
+    CHECK(p.elevationAt(300) == doctest::Approx(27.2));
+}
+
+TEST_CASE("VerticalProfile: no overshoot between knots (monotone method)") {
+    VerticalProfile p;
+    p.addPoint(0,   22.4);
+    p.addPoint(100, 23.1);
+    p.addPoint(200, 25.7);
+    p.addPoint(300, 27.2);
+    const auto& pts = p.points();
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        const double lo = std::min(pts[i].z, pts[i+1].z);
+        const double hi = std::max(pts[i].z, pts[i+1].z);
+        for (int k = 1; k < 8; ++k) {
+            const double z = p.elevationAt(pts[i].s + (pts[i+1].s - pts[i].s) * k / 8.0);
+            CHECK(z >= lo - 1e-9);
+            CHECK(z <= hi + 1e-9);
+        }
+    }
+}
+
+TEST_CASE("VerticalProfile: smooth crest, tangent zero at local maximum") {
+    VerticalProfile p;
+    p.addPoint(0,   0);
+    p.addPoint(100, 10);
+    p.addPoint(200, 0);
+    CHECK(p.gradeAt(100) == doctest::Approx(0.0).epsilon(0.001));
+    CHECK(p.elevationAt(150) < 10.0 + 1e-9);
+    CHECK(p.elevationAt(150) > 0.0);
+}
+
+TEST_CASE("VerticalProfile: clamps outside station range") {
+    VerticalProfile p;
+    p.addPoint(100, 22.4);
+    p.addPoint(300, 27.2);
+    CHECK(p.elevationAt(-50)  == doctest::Approx(22.4));
+    CHECK(p.elevationAt(500)  == doctest::Approx(27.2));
+    CHECK(p.startS() == doctest::Approx(100.0));
+    CHECK(p.endS()   == doctest::Approx(300.0));
+}
+
+TEST_CASE("VerticalProfile: unsorted insertion stays sorted, duplicate station first wins") {
+    VerticalProfile p;
+    p.addPoint(200, 20);
+    p.addPoint(0,   10);
+    p.addPoint(100, 15);
+    p.addPoint(100, 99); // duplicate station — ignored
+    REQUIRE(p.size() == 3);
+    CHECK(p.points()[0].s == doctest::Approx(0.0));
+    CHECK(p.points()[1].s == doctest::Approx(100.0));
+    CHECK(p.points()[1].z == doctest::Approx(15.0));
+    CHECK(p.points()[2].s == doctest::Approx(200.0));
+}
+
+TEST_CASE("Superelevation: piecewise-linear crossfall with clamping") {
+    Superelevation se;
+    CHECK(se.crossfallAt(50) == doctest::Approx(0.0)); // empty -> 0
+    se.addPoint(0,   0.02);
+    se.addPoint(200, -0.02);
+    CHECK(se.crossfallAt(0)   == doctest::Approx(0.02));
+    CHECK(se.crossfallAt(100) == doctest::Approx(0.0));
+    CHECK(se.crossfallAt(200) == doctest::Approx(-0.02));
+    CHECK(se.crossfallAt(-10) == doctest::Approx(0.02));   // clamp low
+    CHECK(se.crossfallAt(999) == doctest::Approx(-0.02));  // clamp high
+}
+
+TEST_CASE("validateGrade: flags excessive grade, passes gentle profile") {
+    VerticalProfile steep;
+    steep.addPoint(0, 0);
+    steep.addPoint(100, 12); // 12% average
+    auto issues = geo::validateGrade(steep, 0.08);
+    CHECK_FALSE(issues.empty());
+
+    VerticalProfile gentle;
+    gentle.addPoint(0, 0);
+    gentle.addPoint(400, 8); // 2%
+    CHECK(geo::validateGrade(gentle, 0.08).empty());
+}
+
+TEST_CASE("RoadV2: vertical design survives deep copy and move") {
+    RoadV2 a;
+    a.id = "r1";
+    a.elevationProfile.addPoint(0, 22.4);
+    a.elevationProfile.addPoint(300, 27.2);
+    a.superelevation.addPoint(0, 0.02);
+    a.superelevation.addPoint(200, -0.02);
+
+    RoadV2 b = a; // copy ctor
+    CHECK(b.hasElevation());
+    CHECK(b.elevationAt(150) == doctest::Approx(a.elevationAt(150)).epsilon(1e-9));
+    CHECK(b.crossfallAt(100) == doctest::Approx(a.crossfallAt(100)));
+
+    RoadV2 c;
+    c = a; // copy assign
+    CHECK(c.elevationProfile.size() == 2);
+    CHECK(c.gradeAt(150) == doctest::Approx(a.gradeAt(150)));
+
+    a.superelevation.clear();
+    CHECK(b.superelevation.crossfallAt(100) == doctest::Approx(0.0)); // independent
+}
