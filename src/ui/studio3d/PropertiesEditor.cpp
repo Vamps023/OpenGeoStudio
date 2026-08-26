@@ -1,5 +1,7 @@
 #include "PropertiesEditor.hpp"
 #include "OgreWidget.hpp"
+#include "../theme/Theme.hpp"
+
 
 #include "core/assets/MaterialAsset.hpp"
 
@@ -219,7 +221,8 @@ void PropertiesEditor::buildMaterialTab()
     auto* matGroup = new QGroupBox("Material Asset");
     auto* mForm = new QVBoxLayout(matGroup);
     m_materialAssetLabel = new QLabel("(none)");
-    m_materialAssetLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    m_materialAssetLabel->setStyleSheet(
+        ogs::theme::resolveTokens("QLabel { color: %TextMuted%; font-size: 10px; }"));
     m_materialAssetLabel->setWordWrap(true);
     mForm->addWidget(m_materialAssetLabel);
     auto* matBtnRow = new QHBoxLayout();

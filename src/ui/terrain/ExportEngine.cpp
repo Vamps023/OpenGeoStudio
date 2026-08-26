@@ -122,6 +122,56 @@ ExportEngine::ExportEngine(TerrainStore* store, QObject* parent)
     m_network = new QNetworkAccessManager(this);
 }
 
+// ============================================================
+// Progress + cancellation helpers
+// ============================================================
+
+QNetworkReply* ExportEngine::trackedGet(const QNetworkRequest& request) {
+    QNetworkReply* reply = m_network->get(request);
+    m_activeReplies.insert(reply);
+    connect(reply, &QObject::destroyed, this, [this, reply]() {
+        m_activeReplies.remove(reply);
+    });
+    return reply;
+}
+
+void ExportEngine::cancel() {
+    if (m_cancelRequested.exchange(true))
+        return;   // already cancelled
+    for (QNetworkReply* r : m_activeReplies)
+        r->abort();
+    m_activeReplies.clear();
+    emit finished(false, QStringLiteral("Export cancelled."));
+}
+
+void ExportEngine::reportTileStage(double fracInTile, const QString& stage) {
+    if (m_totalTiles <= 0)
+        return;
+    if (fracInTile > m_tileFrac)
+        m_tileFrac = fracInTile;
+    const double base = 100.0 * m_completedTiles / m_totalTiles;
+    const double span = 100.0 / m_totalTiles;
+    emit progress(qBound(0, static_cast<int>(base + span * m_tileFrac), 99), stage);
+}
+
+void ExportEngine::demPhaseDone(const QString& tileId) {
+    m_demDownloaded = true;
+    reportTileStage(0.45, QString("Tile %1: heightmap written").arg(tileId));
+    if (m_imageryDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
+void ExportEngine::imageryPhaseDone(const QString& tileId) {
+    m_imageryDownloaded = true;
+    reportTileStage(0.9, QString("Tile %1: imagery written").arg(tileId));
+    if (m_demDownloaded) {
+        m_completedTiles++;
+        processNextTile();
+    }
+}
+
 void ExportEngine::exportToDirectory(const QString& dir) {
     m_exportDir = dir;
 
@@ -137,6 +187,10 @@ void ExportEngine::exportToDirectory(const QString& dir) {
         }
     }
 
+    m_log.info("Exporting", m_totalTiles, "tile(s) to", dir);
+
+    m_cancelRequested = false;
+    m_tileFrac = 0.0;
     m_totalTiles = m_pendingTiles.size();
     m_completedTiles = 0;
 
@@ -154,7 +208,10 @@ void ExportEngine::exportToDirectory(const QString& dir) {
 }
 
 void ExportEngine::processNextTile() {
+    if (isCancelled())
+        return;
     if (m_pendingTiles.isEmpty()) {
+        emit progress(99, "Writing merged outputs...");
         writeMergedOutputs(m_exportDir);
         writeManifest(m_exportDir);
         emit progress(100, "Export complete!");
@@ -165,6 +222,7 @@ void ExportEngine::processNextTile() {
     m_currentTile = m_pendingTiles.takeFirst();
     m_demDownloaded = false;
     m_imageryDownloaded = false;
+    m_tileFrac = 0.0;
 
     int percent = static_cast<int>(100.0 * m_completedTiles / m_totalTiles);
     emit progress(percent, QString("Exporting tile %1/%2: %3")
@@ -276,7 +334,7 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
         }
     }
 
-    QNetworkReply* reply = m_network->get(request);
+    QNetworkReply* reply = trackedGet(request);
     // Set a 60-second timeout for DEM downloads
     QTimer::singleShot(60000, reply, [reply]() {
         if (reply->isRunning()) {
@@ -285,6 +343,8 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
+        if (isCancelled())
+            return;
         QByteArray data = reply->readAll();
         int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
@@ -383,11 +443,7 @@ void ExportEngine::downloadDemForTile(const terrain::Tile& tile, const QString& 
             m_log.info("DEM output written for tile", tile.id());
 
             m_tileDemData[tile.id()] = std::move(demTile.elevations);
-            m_demDownloaded = true;
-            if (m_imageryDownloaded) {
-                m_completedTiles++;
-                processNextTile();
-            }
+            demPhaseDone(tile.id());
         } catch (const std::exception& e) {
             m_log.error("DEM processing exception for tile", tile.id(), ":", e.what());
             emit finished(false, QString("DEM processing crashed for tile %1: %2")
@@ -455,11 +511,7 @@ void ExportEngine::loadLocalDemForTile(const terrain::Tile& tile, const QString&
     }
 
     m_tileDemData[tile.id()] = std::move(demTile.elevations);
-    m_demDownloaded = true;
-    if (m_imageryDownloaded) {
-        m_completedTiles++;
-        processNextTile();
-    }
+    demPhaseDone(tile.id());
 }
 
 void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QString& outputPath) {
@@ -490,11 +542,7 @@ void ExportEngine::loadLocalImageryForTile(const terrain::Tile& tile, const QStr
     }
 
     m_tileAlbedoData[tile.id()] = scaled;
-    m_imageryDownloaded = true;
-    if (m_demDownloaded) {
-        m_completedTiles++;
-        processNextTile();
-    }
+    imageryPhaseDone(tile.id());
 }
 
 void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QString& outputPath) {
@@ -529,12 +577,14 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
         request.setRawHeader("Authorization", gladAuth);
     }
 
-    QNetworkReply* reply = m_network->get(request);
+    QNetworkReply* reply = trackedGet(request);
     QTimer::singleShot(60000, reply, [reply]() {
         if (reply->isRunning()) reply->abort();
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outputPath, tile]() {
         reply->deleteLater();
+        if (isCancelled())
+            return;
         QByteArray data = reply->readAll();
         int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
@@ -573,11 +623,7 @@ void ExportEngine::downloadImageryForTile(const terrain::Tile& tile, const QStri
             }
 
             m_tileAlbedoData[tile.id()] = img;
-            m_imageryDownloaded = true;
-            if (m_demDownloaded) {
-                m_completedTiles++;
-                processNextTile();
-            }
+            imageryPhaseDone(tile.id());
         } catch (const std::exception& e) {
             m_log.error("Imagery processing exception for tile", tile.id(), ":", e.what());
             emit finished(false, QString("Imagery processing crashed for tile %1: %2")
@@ -780,12 +826,14 @@ void ExportEngine::fetchMosaicSubTile(MosaicState& mosaic, int ix, int iy,
     const qint64 key = static_cast<qint64>(iy) * mosaic.nx + ix;
     const bool isDem = mosaic.isDem;
 
-    QNetworkReply* reply = m_network->get(request);
+    QNetworkReply* reply = trackedGet(request);
     QTimer::singleShot(60000, reply, [reply]() {
         if (reply->isRunning()) reply->abort();
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, key, isDem]() {
         reply->deleteLater();
+        if (isCancelled())
+            return;
         MosaicState& mosaic = isDem ? m_demMosaic : m_imgMosaic;
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
@@ -951,11 +999,7 @@ void ExportEngine::finishDemMosaic() {
     m_log.info("DEM mosaic written for tile", m.tile.id(), "->", m.outputPath);
 
     m_tileDemData[m.tile.id()] = std::move(out);
-    m_demDownloaded = true;
-    if (m_imageryDownloaded) {
-        m_completedTiles++;
-        processNextTile();
-    }
+    demPhaseDone(m.tile.id());
 }
 
 void ExportEngine::finishImageryMosaic() {
@@ -1012,11 +1056,7 @@ void ExportEngine::finishImageryMosaic() {
     m_log.info("Imagery mosaic written for tile", m.tile.id(), "->", m.outputPath);
 
     m_tileAlbedoData[m.tile.id()] = out;
-    m_imageryDownloaded = true;
-    if (m_demDownloaded) {
-        m_completedTiles++;
-        processNextTile();
-    }
+    imageryPhaseDone(m.tile.id());
 }
 
 // ============================================================
@@ -1072,13 +1112,15 @@ void ExportEngine::fetchCopernicusCell(int cellLat, int cellLon) {
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "OpenGeoStudio-Qt/1.0");
-    QNetworkReply* reply = m_network->get(request);
+    QNetworkReply* reply = trackedGet(request);
     // A cell is ~47 MB — give it more headroom than slippy tiles
     QTimer::singleShot(180000, reply, [reply]() {
         if (reply->isRunning()) reply->abort();
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, cellLat, cellLon]() {
         reply->deleteLater();
+        if (isCancelled())
+            return;
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray data = reply->readAll();
 
@@ -1159,11 +1201,7 @@ void ExportEngine::finishCopernicusDownload() {
     m_log.info("Copernicus DEM written for tile", tile.id(), "->", m_copFetch.outputPath);
 
     m_tileDemData[tile.id()] = std::move(out.elevations);
-    m_demDownloaded = true;
-    if (m_imageryDownloaded) {
-        m_completedTiles++;
-        processNextTile();
-    }
+    demPhaseDone(tile.id());
 }
 
 // ============================================================

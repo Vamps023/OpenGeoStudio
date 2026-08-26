@@ -28,6 +28,8 @@
 #include <algorithm>
 
 #include "../../core/logger/Logger.hpp"
+#include "../../theme/Theme.hpp"
+
 
 struct GeocodingResult {
     QString displayName;
@@ -51,10 +53,12 @@ public:
         m_input = new QLineEdit();
         m_input->setPlaceholderText("🔍  Search for a location...");
         m_input->setStyleSheet(
-            "QLineEdit { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-            "padding: 8px 12px; color: #e6edf3; font-size: 13px; }"
-            "QLineEdit:focus { border-color: #1f6feb; }"
-            "QLineEdit::placeholder { color: #484f58; }");
+            QStringLiteral("QLineEdit { background: %1; border: 1px solid %2; border-radius: 6px;"
+            "padding: 8px 12px; color: %3; font-size: 13px; }"
+            "QLineEdit:focus { border-color: %4; }"
+            "QLineEdit::placeholder { color: %5; }")
+                .arg(ogs::theme::c::BgSurface, ogs::theme::c::Border, ogs::theme::c::Text,
+                     ogs::theme::c::Accent, ogs::theme::c::TextFaint));
         m_input->setClearButtonEnabled(true);
         m_input->setMinimumHeight(34);
 
@@ -66,11 +70,14 @@ public:
         m_dropdown->setMaximumHeight(180);
         m_dropdown->setMinimumWidth(300);
         m_dropdown->setStyleSheet(
-            "QListWidget { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-            "color: #e6edf3; font-size: 12px; outline: none; padding: 4px; }"
-            "QListWidget::item { padding: 8px 10px; border-bottom: 1px solid #21262d; }"
-            "QListWidget::item:selected { background: #1f6feb; color: #ffffff; }"
-            "QListWidget::item:hover { background: #21262d; }");
+            ogs::theme::resolveTokens(QStringLiteral("QListWidget { background: %1; border: 1px solid %2; border-radius: 6px;"
+            "color: %3; font-size: 12px; outline: none; padding: 4px; }"
+            "QListWidget::item { padding: 8px 10px; border-bottom: 1px solid %4; }"
+            "QListWidget::item:selected { background: %5; color: %OnAccent%; }"
+            "QListWidget::item:hover { background: %6; }")
+                .arg(ogs::theme::c::BgSurface, ogs::theme::c::Border, ogs::theme::c::Text,
+                     ogs::theme::c::BorderSub, ogs::theme::c::Accent, ogs::theme::c::BgOverlay)));
+
         m_dropdown->hide();
 
         m_network = new QNetworkAccessManager(this);
@@ -166,7 +173,7 @@ private:
         if (m_results.isEmpty()) {
             auto* item = new QListWidgetItem("No results found");
             item->setFlags(item->flags() & ~Qt::ItemIsSelectable & ~Qt::ItemIsEnabled);
-            item->setForeground(QColor("#7d8590"));
+            item->setForeground(ogs::theme::c::qMuted());
             m_dropdown->addItem(item);
         } else {
             for (const auto& r : m_results) {

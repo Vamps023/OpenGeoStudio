@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR BSD-3-Clause
 
 #include <QtWidgets>
+#include "../../../theme/Theme.hpp"
 #include <QStackedLayout>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -200,10 +201,9 @@ public:
         headerButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         headerButton->setText(title);
         headerButton->setCursor(Qt::PointingHandCursor);
-        headerButton->setStyleSheet(
-            "QToolButton { background: transparent; border: none; font-size: 11px;"
-            " font-weight: bold; color: #e6edf3; padding: 4px 2px; text-align: left; }"
-            "QToolButton:hover { color: #79c0ff; }");
+        headerButton->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QToolButton { background: transparent; border: none; font-size: 11px;"
+            " font-weight: bold; color: %Text%; padding: 4px 2px; text-align: left; }"
+            "QToolButton:hover { color: %Accent%; }")));
 
         m_content = new QWidget(this);
         m_contentLayout = new QVBoxLayout(m_content);
@@ -273,15 +273,14 @@ MainWidget::MainWidget(QWidget* parent)
     auto* sidebar = new QWidget(this);
     sidebar->setObjectName("roadSidebar");
     sidebar->setFixedWidth(84);
-    sidebar->setStyleSheet(
-        "QWidget#roadSidebar { background-color: #0d1117; border-right: 1px solid #21262d; }"
+    sidebar->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QWidget#roadSidebar { background-color: %BgBase%; border-right: 1px solid %BorderSub%; }"
         "QToolButton { background: transparent; border: none; border-radius: 8px; "
-        "  padding: 4px 2px; margin: 1px 2px; font-size: 10px; color: #e6edf3; }"
-        "QToolButton:hover { background-color: #21262d; }"
-        "QToolButton:checked { background-color: #1f6feb33; border: 1px solid #1f6feb; "
-        "  border-radius: 8px; color: #79c0ff; }"
-        "QLabel#sidebarCaption { color: #6e7681; font-size: 8px; font-weight: bold; "
-        "  letter-spacing: 1px; padding: 6px 4px 0 4px; }");
+        "  padding: 4px 2px; margin: 1px 2px; font-size: 10px; color: %Text%; }"
+        "QToolButton:hover { background-color: %BorderSub%; }"
+        "QToolButton:checked { background-color: %AccentEdge%; border: 1px solid %Accent%; "
+        "  border-radius: 8px; color: %Accent%; }"
+        "QLabel#sidebarCaption { color: %TextDim%; font-size: 8px; font-weight: bold; "
+        "  letter-spacing: 1px; padding: 6px 4px 0 4px; }")));
     auto* sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(3, 8, 3, 8);
     sidebarLayout->setSpacing(1);
@@ -372,14 +371,13 @@ MainWidget::MainWidget(QWidget* parent)
     auto* topBar = new QWidget(this);
     topBar->setObjectName("roadTopBar");
     topBar->setFixedHeight(40);
-    topBar->setStyleSheet(
-        "QWidget#roadTopBar { background-color: #0d1117; border-bottom: 1px solid #21262d; }"
+    topBar->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QWidget#roadTopBar { background-color: %BgBase%; border-bottom: 1px solid %BorderSub%; }"
         "QToolButton { background: transparent; border: none; border-radius: 6px; "
         "  padding: 6px; margin: 2px; }"
-        "QToolButton:hover { background-color: #21262d; }"
-        "QToolButton:checked { background-color: #1f6feb33; border: 1px solid #1f6feb; "
+        "QToolButton:hover { background-color: %BorderSub%; }"
+        "QToolButton:checked { background-color: %AccentEdge%; border: 1px solid %Accent%; "
         "  border-radius: 6px; }"
-        "QLabel { color: #7d8590; font-size: 11px; padding: 0 4px; }");
+        "QLabel { color: %TextMuted%; font-size: 11px; padding: 0 4px; }")));
     auto* topBarLayout = new QHBoxLayout(topBar);
     topBarLayout->setContentsMargins(8, 4, 8, 4);
     topBarLayout->setSpacing(2);
@@ -399,7 +397,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep1 = new QFrame;
     sep1->setFrameShape(QFrame::VLine);
-    sep1->setStyleSheet("color: #21262d;");
+    sep1->setStyleSheet(ogs::theme::kSeparatorStyle);
     topBarLayout->addWidget(sep1);
 
     auto* undoButton = makeToolbarBtn("undo", tr("Undo"));
@@ -409,7 +407,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep2 = new QFrame;
     sep2->setFrameShape(QFrame::VLine);
-    sep2->setStyleSheet("color: #21262d;");
+    sep2->setStyleSheet(ogs::theme::kSeparatorStyle);
     topBarLayout->addWidget(sep2);
 
     auto* drawOptionButton = makeToolbarBtn("draw_option", tr("Draw options"));
@@ -417,7 +415,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep3 = new QFrame;
     sep3->setFrameShape(QFrame::VLine);
-    sep3->setStyleSheet("color: #21262d;");
+    sep3->setStyleSheet(ogs::theme::kSeparatorStyle);
     topBarLayout->addWidget(sep3);
 
     // Profile selector is now in the LaneConfigWidget (Cross-Section Studio)
@@ -425,7 +423,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep3b = new QFrame;
     sep3b->setFrameShape(QFrame::VLine);
-    sep3b->setStyleSheet("color: #21262d;");
+    sep3b->setStyleSheet(ogs::theme::kSeparatorStyle);
     topBarLayout->addWidget(sep3b);
 
     // Zoom buttons — SVG icons
@@ -442,7 +440,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     auto* sep4 = new QFrame;
     sep4->setFrameShape(QFrame::VLine);
-    sep4->setStyleSheet("color: #21262d;");
+    sep4->setStyleSheet(ogs::theme::kSeparatorStyle);
     topBarLayout->addWidget(sep4);
 
     // Search bar — geocode via Nominatim, fly to location
@@ -450,11 +448,10 @@ MainWidget::MainWidget(QWidget* parent)
     searchEdit->setPlaceholderText("Search location...");
     searchEdit->setMinimumWidth(180);
     searchEdit->setMaximumWidth(280);
-    searchEdit->setStyleSheet(
-        "QLineEdit { background: #161b22; border: 1px solid #21262d; border-radius: 6px;"
-        "padding: 6px 10px 6px 32px; color: #e6edf3; font-size: 12px; }"
-        "QLineEdit:focus { border-color: #1f6feb; }"
-        "QLineEdit::placeholder { color: #484f58; }");
+    searchEdit->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLineEdit { background: %BgSurface%; border: 1px solid %BorderSub%; border-radius: 6px;"
+        "padding: 6px 10px 6px 32px; color: %Text%; font-size: 12px; }"
+        "QLineEdit:focus { border-color: %Accent%; }"
+        "QLineEdit::placeholder { color: %TextFaint%; }")));
     // Add search icon as a leading indicator via action
     auto* searchAction = new QAction(loadSvgIcon("search"), tr("Search"), searchEdit);
     searchEdit->addAction(searchAction, QLineEdit::LeadingPosition);
@@ -521,14 +518,14 @@ MainWidget::MainWidget(QWidget* parent)
     // ─── Right panel: collapsible Inspector / Cross Section / Object Tree / Validation ───
     rightPanel = new QWidget(this);
     rightPanel->setFixedWidth(300);
-    rightPanel->setStyleSheet("QWidget { background: #0d1117; color: #e6edf3; } "
-        "QGroupBox { border: 1px solid #30363d; border-radius: 4px; margin-top: 8px; padding-top: 8px; } "
+    rightPanel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QWidget { background: %BgBase%; color: %Text%; } "
+        "QGroupBox { border: 1px solid %Border%; border-radius: 4px; margin-top: 8px; padding-top: 8px; } "
         "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; } "
-        "QTreeWidget { background: #161b22; border: 1px solid #30363d; color: #e6edf3; } "
-        "QLabel { color: #e6edf3; } "
-        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: #161b22; color: #e6edf3; border: 1px solid #30363d; } "
-        "QPushButton { background: #21262d; color: #e6edf3; border: 1px solid #30363d; padding: 4px 12px; } "
-        "QPushButton:hover { background: #30363d; }");
+        "QTreeWidget { background: %BgSurface%; border: 1px solid %Border%; color: %Text%; } "
+        "QLabel { color: %Text%; } "
+        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; } "
+        "QPushButton { background: %BorderSub%; color: %Text%; border: 1px solid %Border%; padding: 4px 12px; } "
+        "QPushButton:hover { background: %Border%; }")));
 
     auto* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(6, 6, 6, 6);
@@ -540,8 +537,7 @@ MainWidget::MainWidget(QWidget* parent)
 
     inspectorPlaceholder = new QLabel(tr("Select an object to view properties"));
     inspectorPlaceholder->setWordWrap(true);
-    inspectorPlaceholder->setStyleSheet(
-        "QLabel { color: #6e7681; font-size: 11px; padding: 12px 4px; }");
+    inspectorPlaceholder->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextDim%; font-size: 11px; padding: 12px 4px; }")));
     inspectorArea->addWidget(inspectorPlaceholder);
 
     inspectorGroup = new QGroupBox;
@@ -642,7 +638,7 @@ MainWidget::MainWidget(QWidget* parent)
     auto* valArea = validationSection->content();
     auto* valSummaryRow = new QHBoxLayout;
     validationSummary = new QLabel(tr("Not run"));
-    validationSummary->setStyleSheet("QLabel { color: #6e7681; font-size: 11px; }");
+    validationSummary->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextDim%; font-size: 11px; }")));
     validateButton = new QPushButton(tr("Run"));
     validateButton->setFixedWidth(56);
     valSummaryRow->addWidget(validationSummary, 1);
@@ -659,8 +655,8 @@ MainWidget::MainWidget(QWidget* parent)
     // ─── Status bar ───
     auto* statusBar = new QWidget(this);
     statusBar->setFixedHeight(24);
-    statusBar->setStyleSheet("QWidget { background: #0d1117; border-top: 1px solid #30363d; } "
-        "QLabel { color: #8b949e; padding: 2px 8px; font-size: 11px; }");
+    statusBar->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QWidget { background: %BgBase%; border-top: 1px solid %Border%; } "
+        "QLabel { color: %TextSoft%; padding: 2px 8px; font-size: 11px; }")));
     auto* statusLayout = new QHBoxLayout(statusBar);
     statusLayout->setContentsMargins(0, 0, 0, 0);
     statusLayout->setSpacing(0);
@@ -1014,8 +1010,8 @@ void MainWidget::gotoCreateRoundaboutMode(bool checked)
 
     QDialog dlg(this);
     dlg.setWindowTitle("Create Roundabout");
-    dlg.setStyleSheet("QDialog { background: #0d1117; } QLabel { color: #e6edf3; } "
-        "QDoubleSpinBox, QSpinBox { background: #161b22; color: #e6edf3; border: 1px solid #30363d; }");
+    dlg.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QDialog { background: %BgBase%; } QLabel { color: %Text%; } "
+        "QDoubleSpinBox, QSpinBox { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; }")));
 
     auto* layout = new QVBoxLayout(&dlg);
     auto* form = new QFormLayout;
@@ -1091,8 +1087,8 @@ void MainWidget::toggleSnapSettings()
     auto* snap = LM::SnapSettings::Instance();
     QDialog dlg(this);
     dlg.setWindowTitle("Snap Settings");
-    dlg.setStyleSheet("QDialog { background: #0d1117; } QLabel { color: #e6edf3; } "
-        "QCheckBox { color: #e6edf3; } QDoubleSpinBox { background: #161b22; color: #e6edf3; }");
+    dlg.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QDialog { background: %BgBase%; } QLabel { color: %Text%; } "
+        "QCheckBox { color: %Text%; } QDoubleSpinBox { background: %BgSurface%; color: %Text%; }")));
 
     auto* layout = new QVBoxLayout(&dlg);
     auto* label = new QLabel("Enable snapping categories:");
@@ -1427,7 +1423,7 @@ void MainWidget::runValidation()
         {
             auto* item = new QTreeWidgetItem(validationTree,
                 QStringList() << QString("Road %1 too short").arg(QString::fromStdString(road->ID())) << "Error");
-            item->setForeground(1, QColor("#f85149"));
+            item->setForeground(1, ogs::theme::c::qDanger());
             errors++;
         }
         auto leftPlan = road->generated.rr_profile.ProfileAt(0, 1);
@@ -1436,7 +1432,7 @@ void MainWidget::runValidation()
         {
             auto* item = new QTreeWidgetItem(validationTree,
                 QStringList() << QString("Road %1 has no lanes").arg(QString::fromStdString(road->ID())) << "Error");
-            item->setForeground(1, QColor("#f85149"));
+            item->setForeground(1, ogs::theme::c::qDanger());
             errors++;
         }
     }
@@ -1451,7 +1447,7 @@ void MainWidget::runValidation()
                 QStringList() << QString("Sign %1 references missing road %2")
                     .arg(QString::fromStdString(sign.id))
                     .arg(QString::fromStdString(sign.roadID)) << "Warning");
-            item->setForeground(1, QColor("#d29922"));
+            item->setForeground(1, ogs::theme::c::qWarn());
             warnings++;
         }
     }
@@ -1466,7 +1462,7 @@ void MainWidget::runValidation()
                 QStringList() << QString("Marking %1 references missing road %2")
                     .arg(QString::fromStdString(marking.id))
                     .arg(QString::fromStdString(marking.roadID)) << "Warning");
-            item->setForeground(1, QColor("#d29922"));
+            item->setForeground(1, ogs::theme::c::qWarn());
             warnings++;
         }
     }
@@ -1481,7 +1477,7 @@ void MainWidget::runValidation()
                 QStringList() << QString("Furniture %1 references missing road %2")
                     .arg(QString::fromStdString(furn.id))
                     .arg(QString::fromStdString(furn.roadID)) << "Warning");
-            item->setForeground(1, QColor("#d29922"));
+            item->setForeground(1, ogs::theme::c::qWarn());
             warnings++;
         }
     }
@@ -1489,10 +1485,10 @@ void MainWidget::runValidation()
     if (errors == 0 && warnings == 0)
     {
         auto* item = new QTreeWidgetItem(validationTree, QStringList() << "No issues found" << "OK");
-        item->setForeground(1, QColor("#3fb950"));
+        item->setForeground(1, ogs::theme::c::qSuccess());
     }
     statusValidation->setText(QString("Validation: %1 err, %2 warn").arg(errors).arg(warnings));
-    statusValidation->setStyleSheet(errors > 0 ? "QLabel { color: #f85149; }" : "QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(errors > 0 ? ogs::theme::kLabelDanger : ogs::theme::kLabelOk);
 
     // Compact panel summary; auto-expand only when something is wrong
     if (validationSummary)
@@ -1500,14 +1496,14 @@ void MainWidget::runValidation()
         if (errors == 0 && warnings == 0)
         {
             validationSummary->setText(tr("OK"));
-            validationSummary->setStyleSheet("QLabel { color: #3fb950; font-size: 11px; }");
+            validationSummary->setStyleSheet(ogs::theme::kLabelOkSmall);
         }
         else
         {
             validationSummary->setText(tr("%1 error%2, %3 warning%4")
                 .arg(errors).arg(errors == 1 ? "" : "s")
                 .arg(warnings).arg(warnings == 1 ? "" : "s"));
-            validationSummary->setStyleSheet("QLabel { color: #f85149; font-size: 11px; }");
+            validationSummary->setStyleSheet(ogs::theme::kLabelDangerSmall);
             validationSection->setExpanded(true);
         }
     }
@@ -1582,12 +1578,12 @@ void MainWidget::onSplitRoad()
         mapViewGL->update();
         refreshObjectTree();
         statusValidation->setText("Validation: Road split");
-        statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelOk);
     }
     catch (...)
     {
         statusValidation->setText("Validation: Split failed");
-        statusValidation->setStyleSheet("QLabel { color: #f85149; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelDanger);
     }
 }
 
@@ -1651,7 +1647,7 @@ void MainWidget::onMergeRoads()
         mapViewGL->update();
         refreshObjectTree();
         statusValidation->setText("Validation: Roads merged");
-        statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelOk);
     }
     else
         QMessageBox::warning(this, tr("Merge Roads"), tr("Cannot merge: no connected road found."));
@@ -1712,7 +1708,7 @@ void MainWidget::onReverseRoad()
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Road reversed");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::onCrossSectionChanged()
@@ -1733,7 +1729,7 @@ void MainWidget::onCrossSectionChanged()
     if (csHasShoulder->isChecked()) msg += " +shoulder";
     if (csHasMedian->isChecked()) msg += " +median";
     statusValidation->setText("Validation: " + msg);
-    statusValidation->setStyleSheet("QLabel { color: #58a6ff; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelInfo);
 }
 
 void MainWidget::onApplyCrossSection()
@@ -1771,7 +1767,7 @@ void MainWidget::onApplyCrossSection()
     refreshObjectTree();
     onSelectionChanged();
     statusValidation->setText("Validation: Cross section applied");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 // ============================================================
@@ -1788,7 +1784,7 @@ void MainWidget::showObjectTreeContextMenu(QTreeWidgetItem* item, QPoint globalP
     if (!isMarking && !isSign && !isFurniture) return;
 
     QMenu menu(this);
-    menu.setStyleSheet("QMenu { background: #161b22; color: #e6edf3; border: 1px solid #30363d; }");
+    menu.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QMenu { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; }")));
 
     if (isMarking)
     {
@@ -1839,8 +1835,8 @@ void MainWidget::editMarking(const std::string& markingId)
 
     QDialog dlg(this);
     dlg.setWindowTitle(QString("Edit Marking %1").arg(QString::fromStdString(markingId)));
-    dlg.setStyleSheet("QDialog { background: #0d1117; } QLabel { color: #e6edf3; } "
-        "QDoubleSpinBox, QComboBox { background: #161b22; color: #e6edf3; border: 1px solid #30363d; }");
+    dlg.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QDialog { background: %BgBase%; } QLabel { color: %Text%; } "
+        "QDoubleSpinBox, QComboBox { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; }")));
     auto* layout = new QVBoxLayout(&dlg);
     auto* form = new QFormLayout;
     auto* typeCombo = new QComboBox;
@@ -1880,7 +1876,7 @@ void MainWidget::editMarking(const std::string& markingId)
         mapViewGL->update();
         refreshObjectTree();
         statusValidation->setText("Validation: Marking updated");
-        statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelOk);
     }
 }
 
@@ -1892,8 +1888,8 @@ void MainWidget::editSign(const std::string& signId)
 
     QDialog dlg(this);
     dlg.setWindowTitle(QString("Edit Sign %1").arg(QString::fromStdString(signId)));
-    dlg.setStyleSheet("QDialog { background: #0d1117; } QLabel { color: #e6edf3; } "
-        "QDoubleSpinBox, QComboBox { background: #161b22; color: #e6edf3; border: 1px solid #30363d; }");
+    dlg.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QDialog { background: %BgBase%; } QLabel { color: %Text%; } "
+        "QDoubleSpinBox, QComboBox { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; }")));
     auto* layout = new QVBoxLayout(&dlg);
     auto* form = new QFormLayout;
     auto* typeCombo = new QComboBox;
@@ -1948,7 +1944,7 @@ void MainWidget::editSign(const std::string& signId)
         }
         refreshObjectTree();
         statusValidation->setText("Validation: Sign updated");
-        statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelOk);
     }
 }
 
@@ -1960,8 +1956,8 @@ void MainWidget::editFurniture(const std::string& furnitureId)
 
     QDialog dlg(this);
     dlg.setWindowTitle(QString("Edit Furniture %1").arg(QString::fromStdString(furnitureId)));
-    dlg.setStyleSheet("QDialog { background: #0d1117; } QLabel { color: #e6edf3; } "
-        "QDoubleSpinBox, QComboBox, QSpinBox { background: #161b22; color: #e6edf3; border: 1px solid #30363d; }");
+    dlg.setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QDialog { background: %BgBase%; } QLabel { color: %Text%; } "
+        "QDoubleSpinBox, QComboBox, QSpinBox { background: %BgSurface%; color: %Text%; border: 1px solid %Border%; }")));
     auto* layout = new QVBoxLayout(&dlg);
     auto* form = new QFormLayout;
     auto* typeCombo = new QComboBox;
@@ -2009,7 +2005,7 @@ void MainWidget::editFurniture(const std::string& furnitureId)
         mapViewGL->update();
         refreshObjectTree();
         statusValidation->setText("Validation: Furniture updated");
-        statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+        statusValidation->setStyleSheet(ogs::theme::kLabelOk);
     }
 }
 
@@ -2024,7 +2020,7 @@ void MainWidget::deleteMarking(const std::string& markingId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Marking deleted");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::deleteSign(const std::string& signId)
@@ -2038,7 +2034,7 @@ void MainWidget::deleteSign(const std::string& signId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Sign deleted");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::deleteFurniture(const std::string& furnitureId)
@@ -2052,7 +2048,7 @@ void MainWidget::deleteFurniture(const std::string& furnitureId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Furniture deleted");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::duplicateMarking(const std::string& markingId)
@@ -2069,7 +2065,7 @@ void MainWidget::duplicateMarking(const std::string& markingId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Marking duplicated");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::duplicateSign(const std::string& signId)
@@ -2085,7 +2081,7 @@ void MainWidget::duplicateSign(const std::string& signId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Sign duplicated");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::moveMarking(const std::string& markingId)
@@ -2105,7 +2101,7 @@ void MainWidget::moveMarking(const std::string& markingId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Marking moved");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::reverseMarking(const std::string& markingId)
@@ -2120,7 +2116,7 @@ void MainWidget::reverseMarking(const std::string& markingId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Marking reversed");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::mirrorMarking(const std::string& markingId)
@@ -2134,7 +2130,7 @@ void MainWidget::mirrorMarking(const std::string& markingId)
     mapViewGL->update();
     refreshObjectTree();
     statusValidation->setText("Validation: Marking mirrored");
-    statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+    statusValidation->setStyleSheet(ogs::theme::kLabelOk);
 }
 
 void MainWidget::toggleViewMode(bool checked)
@@ -2307,7 +2303,7 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
                 mapViewGL->update();
                 refreshObjectTree();
                 statusValidation->setText("Validation: Sign placed");
-                statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+                statusValidation->setStyleSheet(ogs::theme::kLabelOk);
             }
         }
     }
@@ -2347,7 +2343,7 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
             mapViewGL->update();
             refreshObjectTree();
             statusValidation->setText("Validation: Marking placed");
-            statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelOk);
         }
     }
 
@@ -2389,7 +2385,7 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
                 mapViewGL->update();
                 refreshObjectTree();
                 statusValidation->setText("Validation: Furniture placed");
-                statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+                statusValidation->setStyleSheet(ogs::theme::kLabelOk);
             }
         }
     }
@@ -2445,14 +2441,14 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
         if (radius <= 0.0)
         {
             statusValidation->setText("Validation: Roundabout radius must be positive");
-            statusValidation->setStyleSheet("QLabel { color: #f85149; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelDanger);
             dragModeButton->setChecked(true);
             return;
         }
         if (m_roundaboutLanes <= 0)
         {
             statusValidation->setText("Validation: Roundabout needs at least 1 lane");
-            statusValidation->setStyleSheet("QLabel { color: #f85149; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelDanger);
             dragModeButton->setChecked(true);
             return;
         }
@@ -2477,20 +2473,20 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
             refreshAllCustomGraphics();
             refreshObjectTree();
             statusValidation->setText("Validation: Roundabout created");
-            statusValidation->setStyleSheet("QLabel { color: #3fb950; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelOk);
             mapViewGL->update();
         }
         catch (const std::exception& e)
         {
             spdlog::warn("Roundabout creation failed: {}", e.what());
             statusValidation->setText("Validation: Roundabout creation failed");
-            statusValidation->setStyleSheet("QLabel { color: #f85149; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelDanger);
         }
         catch (...)
         {
             spdlog::warn("Roundabout creation failed: unknown exception");
             statusValidation->setText("Validation: Roundabout creation failed");
-            statusValidation->setStyleSheet("QLabel { color: #f85149; }");
+            statusValidation->setStyleSheet(ogs::theme::kLabelDanger);
         }
         dragModeButton->setChecked(true);
     }

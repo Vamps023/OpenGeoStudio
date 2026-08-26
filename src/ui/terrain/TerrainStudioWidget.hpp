@@ -11,6 +11,8 @@
 #include "LayerStack.hpp"
 #include "SearchBar.hpp"
 
+#include "../theme/Theme.hpp"
+
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QToolBar>
@@ -20,6 +22,8 @@
 #include <QHBoxLayout>
 #include <QToolButton>
 #include <QFrame>
+#include <QSplitter>
+#include <QSettings>
 
 class TerrainStudioWidget : public QWidget {
     Q_OBJECT
@@ -40,39 +44,24 @@ public:
         setupToolbar();
         layout->addWidget(m_toolbar);
 
-        // Search bar row
-        auto* searchContainer = new QWidget();
-        searchContainer->setStyleSheet("background: #0d1117; border-bottom: 1px solid #30363d;");
-        auto* searchLayout = new QHBoxLayout(searchContainer);
-        searchLayout->setContentsMargins(8, 4, 8, 4);
-        m_searchBar = new SearchBar();
-        searchLayout->addWidget(m_searchBar);
-        layout->addWidget(searchContainer);
-
-        // Main content: LayerStack | viewport | export panel
-        auto* contentWidget = new QWidget();
-        auto* contentLayout = new QHBoxLayout(contentWidget);
-        contentLayout->setContentsMargins(0, 0, 0, 0);
-        contentLayout->setSpacing(0);
+        // Main content: LayerStack | viewport | export panel — resizable
+        m_splitter = new QSplitter(Qt::Horizontal, this);
+        m_splitter->setChildrenCollapsible(false);
 
         // Left panel: LayerStack
         m_layerStack = new LayerStack(m_store);
-        m_layerStack->setMaximumWidth(240);
-        m_layerStack->setStyleSheet("QWidget { background: #0d1117; }");
-        contentLayout->addWidget(m_layerStack);
+        m_layerStack->setMinimumWidth(160);
+        m_layerStack->setStyleSheet(
+            QStringLiteral("QWidget { background: %1; }").arg(ogs::theme::c::BgBase));
+        m_splitter->addWidget(m_layerStack);
 
-        // Separator
-        auto* leftSep = new QFrame();
-        leftSep->setFrameShape(QFrame::VLine);
-        leftSep->setStyleSheet("color: #30363d;");
-        contentLayout->addWidget(leftSep);
-
-        auto* canvasFrame = new QFrame(contentWidget);
+        auto* canvasFrame = new QFrame();
         canvasFrame->setObjectName(QStringLiteral("terrainCanvasFrame"));
         canvasFrame->setStyleSheet(
-            "QFrame#terrainCanvasFrame { background: #161b22; border: 1px solid #30363d;"
-            "border-radius: 6px; }");
-        canvasFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+            QStringLiteral("QFrame#terrainCanvasFrame { background: %1; border: 1px solid %2;"
+            "border-radius: %3px; }")
+                .arg(ogs::theme::c::BgSurface, ogs::theme::c::Border)
+                .arg(ogs::theme::RadiusM));
         auto* canvasLayout = new QVBoxLayout(canvasFrame);
         canvasLayout->setContentsMargins(8, 8, 8, 8);
         canvasLayout->setSpacing(0);
@@ -80,18 +69,26 @@ public:
         m_viewport = new TerrainViewport(ctx, m_store, canvasFrame);
         m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         canvasLayout->addWidget(m_viewport, 1);
-        contentLayout->addWidget(canvasFrame, 3);
+        m_splitter->addWidget(canvasFrame);
 
-        // Separator
-        auto* rightSep = new QFrame();
-        rightSep->setFrameShape(QFrame::VLine);
-        rightSep->setStyleSheet("color: #30363d;");
-        contentLayout->addWidget(rightSep);
+        m_exportPanel = new ExportPanel(m_store, ctx);
+        m_exportPanel->setMinimumWidth(300);
+        m_splitter->addWidget(m_exportPanel);
 
-        m_exportPanel = new ExportPanel(m_store, ctx, this);
-        m_exportPanel->setMinimumWidth(340);
-        m_exportPanel->setMaximumWidth(400);
-        contentLayout->addWidget(m_exportPanel, 1);
+        // Map gets the extra space; remember pane sizes across runs
+        m_splitter->setStretchFactor(0, 0);
+        m_splitter->setStretchFactor(1, 1);
+        m_splitter->setStretchFactor(2, 0);
+        m_splitter->setSizes({220, 600, 360});
+        {
+            QSettings s;
+            const QByteArray st = s.value("terrain/splitter").toByteArray();
+            if (!st.isEmpty()) m_splitter->restoreState(st);
+        }
+        connect(m_splitter, &QSplitter::splitterMoved, this, [this](int, int) {
+            QSettings s;
+            s.setValue("terrain/splitter", m_splitter->saveState());
+        });
 
         // Connect search bar to map — fly to location on select
         connect(m_searchBar, &SearchBar::locationSelected, this, [this](double lat, double lon, int zoom) {
@@ -104,13 +101,14 @@ public:
             }
         });
 
-        layout->addWidget(contentWidget, 1);
+        layout->addWidget(m_splitter, 1);
 
         // Status bar — GitHub dark theme
         m_statusLabel = new QLabel("Shift+drag on map to select area");
         m_statusLabel->setStyleSheet(
-            "QLabel { background: #0d1117; color: #7d8590; padding: 4px 12px;"
-            "border-top: 1px solid #30363d; font-size: 12px; }");
+            QStringLiteral("QLabel { background: %1; color: %2; padding: 4px 12px;"
+            "border-top: 1px solid %3; font-size: 12px; }")
+                .arg(ogs::theme::c::BgBase, ogs::theme::c::TextMuted, ogs::theme::c::Border));
         layout->addWidget(m_statusLabel);
     }
 
@@ -121,12 +119,15 @@ public:
 private:
     void setupToolbar() {
         m_toolbar->setStyleSheet(
-            "QToolBar { background: #0d1117; border-bottom: 1px solid #30363d; spacing: 4px; padding: 4px; }"
-            "QToolBar QToolButton { color: #e6edf3; padding: 4px 10px; border-radius: 4px; }"
-            "QToolBar QToolButton:hover { background: #21262d; }"
-            "QToolBar QToolButton:checked { background: #1f6feb; color: #ffffff; }"
-            "QToolBar QLabel { color: #7d8590; font-size: 11px; padding: 0 6px; }"
-            "QToolBar QDoubleSpinBox { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 2px 6px; color: #e6edf3; }");
+            ogs::theme::resolveTokens(QStringLiteral("QToolBar { background: %1; border-bottom: 2px solid %2; spacing: 4px; padding: 4px; }"
+            "QToolBar QToolButton { color: %3; padding: 4px 10px; border-radius: 4px; }"
+            "QToolBar QToolButton:hover { background: %4; }"
+            "QToolBar QToolButton:checked { background: %5; color: %OnAccent%; }"
+            "QToolBar QLabel { color: %6; font-size: 11px; padding: 0 6px; }"
+            "QToolBar QDoubleSpinBox { background: %4; border: 1px solid %2; border-radius: 4px; padding: 2px 6px; color: %3; }")
+                .arg(ogs::theme::c::BgBase, ogs::theme::c::Border, ogs::theme::c::Text,
+                     ogs::theme::c::BgOverlay, ogs::theme::c::Accent, ogs::theme::c::TextMuted)));
+
 
         // Tile size buttons (discrete, matching Electron)
         auto* tileLabel = new QLabel("Tile:");
@@ -163,7 +164,8 @@ private:
 
         // Tile count display
         auto* tileCountLabel = new QLabel("0/0");
-        tileCountLabel->setStyleSheet("color: #58a6ff; font-weight: bold; padding: 0 8px;");
+        tileCountLabel->setStyleSheet(ogs::theme::resolveTokens(
+            QStringLiteral("color: %Accent%; font-weight: bold; padding: 0 8px;")));
         m_toolbar->addWidget(tileCountLabel);
         connect(m_store, &TerrainStore::tileSelectionChanged, this, [tileCountLabel, this]() {
             int selected = m_store->selectedTiles().size();
@@ -238,13 +240,27 @@ private:
         m_toolbar->addSeparator();
 
         auto* hintLabel = new QLabel("Shift+drag to select | Click tiles to toggle | Scroll to zoom");
-        hintLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        hintLabel->setStyleSheet(
+            QStringLiteral("color: %1; font-size: %2px;")
+                .arg(ogs::theme::c::TextMuted).arg(ogs::theme::FontSmall));
         m_toolbar->addWidget(hintLabel);
+
+        // Location search takes the remaining toolbar width
+        auto* searchHolder = new QWidget();
+        searchHolder->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        auto* searchLayout = new QHBoxLayout(searchHolder);
+        searchLayout->setContentsMargins(8, 0, 4, 0);
+        m_searchBar = new SearchBar();
+        m_searchBar->setMaximumWidth(360);
+        searchLayout->addWidget(m_searchBar);
+        searchLayout->addStretch();
+        m_toolbar->addWidget(searchHolder);
     }
 
     ApplicationContext* m_ctx;
     TerrainStore* m_store = nullptr;
     QToolBar* m_toolbar = nullptr;
+    QSplitter* m_splitter = nullptr;
     SearchBar* m_searchBar = nullptr;
     LayerStack* m_layerStack = nullptr;
     TerrainViewport* m_viewport = nullptr;

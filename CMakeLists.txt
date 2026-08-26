@@ -266,6 +266,11 @@ add_library(lanemaker::core ALIAS lanemaker)
 # ─── Main Application Executable ─────────────────────────────
 set(APP_SOURCES
     src/app/main.cpp
+    src/app/AppMainWindow.hpp
+    src/app/SettingsDialog.hpp
+    src/app/CommandPalette.hpp
+    # Theme (single source of truth for UI colors/styles)
+    src/theme/Theme.hpp
     # Core services
     src/core/ApplicationContext.cpp
     src/core/events/EventBus.cpp

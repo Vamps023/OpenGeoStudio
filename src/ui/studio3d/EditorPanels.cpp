@@ -1,5 +1,7 @@
 #include "EditorPanels.hpp"
 #include "OgreWidget.hpp"
+#include "../theme/Theme.hpp"
+
 
 #include "core/assets/ImportedModel.hpp"
 
@@ -529,7 +531,8 @@ ContentBrowser::ContentBrowser(OgreWidget* ogre, QWidget* parent)
     layout->addLayout(headerLayout);
 
     m_pathLabel = new QLabel(this);
-    m_pathLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+    m_pathLabel->setStyleSheet(
+        ogs::theme::resolveTokens("QLabel { color: %TextMuted%; font-size: 10px; }"));
     layout->addWidget(m_pathLabel);
 
     // Asset grid
@@ -710,7 +713,8 @@ void ContentBrowser::onImportClicked()
         form->addRow("Uniform scale:", scaleSpin);
         auto* hint = new QLabel(
             "Leave at 1.0 to auto-detect units (FBX in centimetres becomes metres).", &dlg);
-        hint->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+        hint->setStyleSheet(
+        ogs::theme::resolveTokens("QLabel { color: %TextMuted%; font-size: 10px; }"));
         form->addRow(QString(), hint);
         auto* placeCheck = new QCheckBox("Place imported models in the scene", &dlg);
         placeCheck->setChecked(true);

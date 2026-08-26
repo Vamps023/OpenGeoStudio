@@ -1,4 +1,5 @@
 #include "LaneConfigWidget.h"
+#include "../../../theme/Theme.hpp"
 #include "action_manager.h"
 
 #include <QHBoxLayout>
@@ -125,18 +126,18 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
     XRight = rect.x() + rect.width() / 20 * 19;
     XCenter = rect.x() + rect.width() / 2;
     // Draw background — dark theme
-    painter.setBrush(QColor(13, 17, 23));  // #0d1117
+    painter.setBrush(ogs::theme::c::qBase());
     painter.setPen(Qt::NoPen);
     painter.drawRect(0, 0, rect.width(), rect.height());
     // Draw ruler — subtle gray
     TickInterval = static_cast<float>(XRight - XLeft) / (2 * SingleSideLaneLimit);
-    QPen colorPen(QColor(48, 54, 61));  // #30363d
+    QPen colorPen(ogs::theme::c::qBorder());
     painter.setPen(colorPen);
     painter.drawLine(XCenter - SingleSideLaneLimit * TickInterval, YCenter,
                      XCenter + SingleSideLaneLimit * TickInterval, YCenter);
     // Draw ticks — subtle
     const int TickHeight = rect.height() / 2;
-    colorPen.setColor(QColor(33, 38, 45));  // #21262d
+    colorPen.setColor(ogs::theme::c::qBorderSub());
     painter.setPen(colorPen);
     for (int tick = -SingleSideLaneLimit; tick <= SingleSideLaneLimit; ++tick)
     {
@@ -211,7 +212,7 @@ void CrossSectionVisual::paintRoadSection(QPainter& painter, const QRect& rect)
 
     // Draw Handles — dark theme: light gray handles, blue when dragging
     colorPen.setWidth(5);
-    colorPen.setColor(QColor(139, 148, 158));  // #8b949e
+    colorPen.setColor(QColor(ogs::theme::c::TextSoft));
     painter.setPen(colorPen);
 
     for (int i = 0; i != handleX.size(); ++i)
@@ -242,7 +243,7 @@ void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
     TickInterval = static_cast<float>(ppm);
 
     // Draw dark background
-    painter.setBrush(QColor(13, 17, 23));  // #0d1117
+    painter.setBrush(ogs::theme::c::qBase());
     painter.setPen(Qt::NoPen);
     painter.drawRect(0, 0, rect.width(), rect.height());
 
@@ -257,7 +258,7 @@ void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
                      ballastRight - ballastLeft, ballastHeight);
 
     // Draw ruler line — subtle gray
-    QPen colorPen(QColor(48, 54, 61));  // #30363d
+    QPen colorPen(ogs::theme::c::qBorder());
     painter.setPen(colorPen);
     painter.drawLine(XLeft, YCenter + ballastHeight / 2 + 2,
                      XRight, YCenter + ballastHeight / 2 + 2);
@@ -314,7 +315,7 @@ void CrossSectionVisual::paintRailSection(QPainter& painter, const QRect& rect)
     }
 
     // Draw gauge label — light text for dark theme
-    colorPen.setColor(QColor(230, 237, 243));  // #e6edf3
+    colorPen.setColor(ogs::theme::c::qText());
     colorPen.setWidth(1);
     painter.setPen(colorPen);
     QFont font = painter.font();
@@ -453,39 +454,38 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
     setMinimumWidth(550);
 
     // Dark theme for the entire LaneConfigWidget — Cross-Section Studio
-    setStyleSheet(
-        "LaneConfigWidget { background-color: #0d1117; border: 1px solid #21262d; border-radius: 8px; }"
-        "QLabel { color: #7d8590; font-size: 11px; }"
-        "QGroupBox { color: #7d8590; font-size: 11px; font-weight: bold; "
-        "  border: 1px solid #21262d; border-radius: 6px; margin-top: 10px; padding-top: 6px; }"
+    setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("LaneConfigWidget { background-color: %BgBase%; border: 1px solid %BorderSub%; border-radius: 8px; }"
+        "QLabel { color: %TextMuted%; font-size: 11px; }"
+        "QGroupBox { color: %TextMuted%; font-size: 11px; font-weight: bold; "
+        "  border: 1px solid %BorderSub%; border-radius: 6px; margin-top: 10px; padding-top: 6px; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-        "QToolButton { background: #161b22; border: 1px solid #30363d; border-radius: 6px; "
+        "QToolButton { background: %BgSurface%; border: 1px solid %Border%; border-radius: 6px; "
         "  padding: 4px; margin: 1px; }"
-        "QToolButton:hover { background: #21262d; border-color: #1f6feb; }"
-        "QToolButton:pressed { background: #0d1117; }"
-        "QToolButton:disabled { color: #484f58; border-color: #21262d; background: #0d1117; }"
-        "QDoubleSpinBox { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-        "  padding: 4px; color: #e6edf3; font-size: 12px; }"
-        "QDoubleSpinBox:hover { border-color: #1f6feb; }"
+        "QToolButton:hover { background: %BorderSub%; border-color: %Accent%; }"
+        "QToolButton:pressed { background: %BgBase%; }"
+        "QToolButton:disabled { color: %TextFaint%; border-color: %BorderSub%; background: %BgBase%; }"
+        "QDoubleSpinBox { background: %BgSurface%; border: 1px solid %Border%; border-radius: 6px;"
+        "  padding: 4px; color: %Text%; font-size: 12px; }"
+        "QDoubleSpinBox:hover { border-color: %Accent%; }"
         "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-        "  background: #21262d; border: none; border-radius: 3px; width: 16px; }"
+        "  background: %BorderSub%; border: none; border-radius: 3px; width: 16px; }"
         "QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {"
-        "  background: #30363d; }"
-        "QComboBox { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-        "  padding: 4px 8px; color: #e6edf3; font-size: 12px; }"
-        "QComboBox:hover { border-color: #1f6feb; }"
+        "  background: %Border%; }"
+        "QComboBox { background: %BgSurface%; border: 1px solid %Border%; border-radius: 6px;"
+        "  padding: 4px 8px; color: %Text%; font-size: 12px; }"
+        "QComboBox:hover { border-color: %Accent%; }"
         "QComboBox::drop-down { border: none; }"
-        "QComboBox QAbstractItemView { background: #161b22; border: 1px solid #21262d;"
-        "  selection-background-color: #1f6feb; color: #e6edf3; }"
-        "QCheckBox { color: #e6edf3; font-size: 11px; }"
+        "QComboBox QAbstractItemView { background: %BgSurface%; border: 1px solid %BorderSub%;"
+        "  selection-background-color: %Accent%; color: %Text%; }"
+        "QCheckBox { color: %Text%; font-size: 11px; }"
         "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px;"
-        "  border: 1px solid #30363d; background: #161b22; }"
-        "QCheckBox::indicator:checked { background: #1f6feb; border-color: #1f6feb; }"
-        "QPushButton { background: #161b22; border: 1px solid #30363d; border-radius: 6px;"
-        "  padding: 4px 10px; color: #e6edf3; font-size: 11px; }"
-        "QPushButton:hover { background: #21262d; border-color: #1f6feb; }"
-        "QPushButton:pressed { background: #0d1117; }"
-        "QPushButton:disabled { color: #484f58; border-color: #21262d; }");
+        "  border: 1px solid %Border%; background: %BgSurface%; }"
+        "QCheckBox::indicator:checked { background: %Accent%; border-color: %Accent%; }"
+        "QPushButton { background: %BgSurface%; border: 1px solid %Border%; border-radius: 6px;"
+        "  padding: 4px 10px; color: %Text%; font-size: 11px; }"
+        "QPushButton:hover { background: %BorderSub%; border-color: %Accent%; }"
+        "QPushButton:pressed { background: %BgBase%; }"
+        "QPushButton:disabled { color: %TextFaint%; border-color: %BorderSub%; }")));
 
     int size = style()->pixelMetric(QStyle::PM_ToolBarIconSize);
     if (verticalLayout) size *= 2;
@@ -535,7 +535,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
     profileCombo->setMinimumWidth(200);
 
     // Modified indicator — subtle, only visible when modified
-    modifiedLabel->setStyleSheet("color: #d29922; font-size: 10px; font-style: italic;");
+    modifiedLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %Warning%; font-size: 10px; font-style: italic;")));
     modifiedLabel->hide();
 
     // Reset / Save buttons
@@ -557,7 +557,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         auto* profileRow = new QHBoxLayout;
         profileRow->setSpacing(4);
         auto* pLabel = new QLabel("Preset:");
-        pLabel->setStyleSheet("color: #7d8590; font-size: 11px; font-weight: bold;");
+        pLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px; font-weight: bold;")));
         profileRow->addWidget(pLabel);
         profileRow->addWidget(profileCombo, 1);
         layout->addLayout(profileRow);
@@ -579,7 +579,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         bottomLayout->addWidget(swapDirectionButton);
         bottomLayout->addStretch(1);
         auto* wLabel = new QLabel("Lane W:");
-        wLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        wLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
         bottomLayout->addWidget(wLabel);
         bottomLayout->addWidget(laneWidthSpinner);
         bottomLayout->addStretch(1);
@@ -591,7 +591,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         auto* metaRow = new QHBoxLayout;
         metaRow->setSpacing(8);
         auto* sLabel = new QLabel("Speed:");
-        sLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        sLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
         metaRow->addWidget(sLabel);
         metaRow->addWidget(speedLimitSpinner);
         metaRow->addSpacing(8);
@@ -620,7 +620,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         layout->addWidget(flipLaneButton);
         layout->addWidget(swapDirectionButton);
         auto* wLabel = new QLabel("W:");
-        wLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        wLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
         layout->addWidget(wLabel);
         layout->addWidget(laneWidthSpinner);
         layout->addWidget(rightMinus);

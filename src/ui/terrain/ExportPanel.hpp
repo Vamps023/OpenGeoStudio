@@ -25,6 +25,8 @@
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QToolButton>
+#include <QTimer>
+#include <QElapsedTimer>
 
 class ExportEngine;
 
@@ -41,18 +43,20 @@ private slots:
     void onDemSourceChanged();
     void onImagerySourceChanged();
     void onToggleAdvancedSettings();
+    void onCancelClicked();
+    void onOpenFolderClicked();
 
 private:
     void setupUi();
     void updateApiKeyWarnings();
     void applyDarkTheme();
+    void updateElapsedLabel();
 
     TerrainStore* m_store;
     ExportEngine* m_engine;
     ApplicationContext* m_ctx;
 
     // Format settings
-    QComboBox* m_heightmapFormatCombo = nullptr;
     QComboBox* m_albedoFormatCombo = nullptr;
     QComboBox* m_demSourceCombo = nullptr;
     QComboBox* m_imagerySourceCombo = nullptr;
@@ -91,10 +95,13 @@ private:
 
     // Export controls
     QPushButton* m_exportBtn = nullptr;
-    QPushButton* m_selectAllBtn = nullptr;
-    QPushButton* m_clearTilesBtn = nullptr;
     QProgressBar* m_progressBar = nullptr;
+    QPushButton* m_cancelBtn = nullptr;
+    QPushButton* m_openFolderBtn = nullptr;
     QLabel* m_statusLabel = nullptr;
-    QLabel* m_tileCountLabel = nullptr;
+    QLabel* m_elapsedLabel = nullptr;
+    QString m_lastExportDir;
+    QElapsedTimer m_elapsed;
+    QTimer m_elapsedTick;
     QLabel* m_tileBadge = nullptr;
 };

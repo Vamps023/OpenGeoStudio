@@ -1,4 +1,5 @@
 #include "AnimatedPopupDialog.h"
+#include "../../../theme/Theme.hpp"
 #include <QApplication>
 #include <QScreen>
 #include <QVBoxLayout>

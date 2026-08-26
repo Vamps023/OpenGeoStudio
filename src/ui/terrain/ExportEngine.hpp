@@ -20,7 +20,11 @@
 #include <QNetworkAccessManager>
 #include <QMap>
 #include <QImage>
+#include <QSet>
+#include <atomic>
 #include <vector>
+
+class QNetworkReply;
 
 class ExportEngine : public QObject {
     Q_OBJECT
@@ -29,6 +33,9 @@ public:
     explicit ExportEngine(TerrainStore* store, QObject* parent = nullptr);
 
     void exportToDirectory(const QString& dir);
+    // Abort all in-flight downloads and stop the tile chain. Emits
+    // finished(false, "Export cancelled.") once.
+    void cancel();
 
 signals:
     void progress(int percent, const QString& stage);
@@ -42,6 +49,17 @@ private:
     void writeManifest(const QString& dir);
     void writeMergedOutputs(const QString& dir);
     void processNextTile();
+
+    // ─── Progress + cancel helpers ───
+    bool isCancelled() const { return m_cancelRequested.load(); }
+    // Emit progress inside the current tile: fracInTile ∈ [0,1] maps onto
+    // this tile's share of the total percent, never exceeding 99.
+    void reportTileStage(double fracInTile, const QString& stage);
+    // Common phase completions of the current tile.
+    void demPhaseDone(const QString& tileId);
+    void imageryPhaseDone(const QString& tileId);
+    // m_network->get() that also tracks the reply for cancel-abort.
+    QNetworkReply* trackedGet(const QNetworkRequest& request);
 
     // ─── Slippy-tile mosaic download ───
     // Tiled sources (AWS Terrarium, Mapbox, Google, ArcGIS, ...) must cover
@@ -121,6 +139,11 @@ private:
     QMap<QString, std::vector<float>> m_tileDemData;
     QMap<QString, QImage> m_tileAlbedoData;
     Logger m_log{"ExportEngine"};
+
+    // Cancel state + in-flight replies aborted by cancel()
+    std::atomic<bool> m_cancelRequested{false};
+    QSet<QNetworkReply*> m_activeReplies;
+    double m_tileFrac = 0.0;   // progress floor within the current tile
 
     // URL for one slippy sub-tile of a tiled source (z/x/y); bbox-based
     // providers ignore z/x/y and return their area URL for the tile.

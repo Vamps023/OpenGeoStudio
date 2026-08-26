@@ -11,14 +11,17 @@
 #include <QSizePolicy>
 #include <QSettings>
 
+#include "../../theme/Theme.hpp"
+
 RoadStudioWidget::RoadStudioWidget(ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_ctx(ctx)
 {
     setObjectName(QStringLiteral("roadStudioWorkspace"));
     setStyleSheet(
-        "QWidget#roadStudioWorkspace { background: #0d1117; }"
-        "QFrame#roadCanvasFrame { background: #161b22; border: 1px solid #30363d;"
-        "border-radius: 6px; }");
+        QStringLiteral("QWidget#roadStudioWorkspace { background: %1; }"
+        "QFrame#roadCanvasFrame { background: %2; border: 1px solid %3;"
+        "border-radius: 6px; }")
+            .arg(ogs::theme::c::BgBase, ogs::theme::c::BgSurface, ogs::theme::c::Border));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

@@ -11,6 +11,9 @@
 
 #include "TerrainStore.hpp"
 
+#include "../../theme/Theme.hpp"
+
+
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -37,30 +40,36 @@ public:
         headerLayout->setSpacing(8);
         auto* title = new QLabel("LAYERS");
         title->setStyleSheet(
-            "QLabel { font-size: 11px; font-weight: bold; color: #7d8590;"
-            "letter-spacing: 2px; }");
+            QStringLiteral("QLabel { font-size: %1px; font-weight: bold; color: %2;"
+            "letter-spacing: 2px; }")
+                .arg(ogs::theme::FontSmall).arg(ogs::theme::c::TextMuted));
         headerLayout->addWidget(title);
         headerLayout->addStretch();
 
         m_tileInfoLabel = new QLabel("");
-        m_tileInfoLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+        m_tileInfoLabel->setStyleSheet(
+            QStringLiteral("color: %1; font-size: %2px;")
+                .arg(ogs::theme::c::TextMuted).arg(ogs::theme::FontSmall));
         headerLayout->addWidget(m_tileInfoLabel);
         layout->addLayout(headerLayout);
 
         // Separator
         auto* sep = new QFrame();
         sep->setFrameShape(QFrame::HLine);
-        sep->setStyleSheet("color: #30363d;");
+        sep->setStyleSheet(QStringLiteral("color: %1;").arg(ogs::theme::c::Border));
         layout->addWidget(sep);
 
         // Scrollable layer list
         auto* scroll = new QScrollArea();
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
-        scroll->setStyleSheet("QScrollArea { background: #0d1117; border: none; }");
+        scroll->setStyleSheet(
+            QStringLiteral("QScrollArea { background: %1; border: none; }")
+                .arg(ogs::theme::c::BgBase));
 
         auto* content = new QWidget();
-        content->setStyleSheet("background: #0d1117;");
+        content->setStyleSheet(
+            QStringLiteral("background: %1;").arg(ogs::theme::c::BgBase));
         m_listLayout = new QVBoxLayout(content);
         m_listLayout->setContentsMargins(0, 0, 0, 0);
         m_listLayout->setSpacing(0);
@@ -71,8 +80,6 @@ public:
 
         // Connect store signals
         connect(m_store, &TerrainStore::tileGridChanged, this, &LayerStack::updateTileInfo);
-        connect(m_store, &TerrainStore::maskSettingsChanged, this, &LayerStack::onMaskSettingsChanged);
-        connect(m_store, &TerrainStore::visibilityChanged, this, &LayerStack::onVisibilityChanged);
         connect(m_store, &TerrainStore::tileSelectionChanged, this, &LayerStack::updateTileInfo);
 
         updateTileInfo();
@@ -81,34 +88,29 @@ public:
 private:
     void buildLayerList() {
         // DEM layer
-        addLayerRow("DEM (Heightmap)", "#d29922", [this]() {
+        addLayerRow("DEM (Heightmap)", ogs::theme::c::Warning, [this]() {
             m_store->setDemVisible(!m_store->demVisible());
         }, [this]() { return m_store->demVisible(); });
 
         // Satellite imagery layer
-        addLayerRow("Satellite Imagery", "#3fb950", [this]() {
+        addLayerRow("Satellite Imagery", ogs::theme::c::Success, [this]() {
             m_store->setSatelliteVisible(!m_store->satelliteVisible());
         }, [this]() { return m_store->satelliteVisible(); });
 
-        // Mask layers
-        addMaskLayer("Road Mask", "#58a6ff", MaskType::Road);
-        addMaskLayer("Water Mask", "#06b6d4", MaskType::Water);
-        addMaskLayer("Vegetation Mask", "#3fb950", MaskType::Vegetation);
-        addMaskLayer("Building Mask", "#d29922", MaskType::Building);
-        addMaskLayer("Cliff Mask", "#f85149", MaskType::Cliff);
+        // Mask layers (Road/Water/Vegetation/Building/Cliff) are hidden until
+        // mask generation is wired into the export pipeline.
 
         m_listLayout->addStretch();
     }
-
-    enum class MaskType { Road, Water, Vegetation, Building, Cliff };
 
     void addLayerRow(const QString& label, const QString& color,
                      std::function<void()> onToggle,
                      std::function<bool()> isActive) {
         auto* row = new QWidget();
         row->setStyleSheet(
-            "QWidget { background: #0d1117; border-bottom: 1px solid #21262d; }"
-            "QWidget:hover { background: #161b22; }");
+            QStringLiteral("QWidget { background: %1; border-bottom: 1px solid %2; }"
+            "QWidget:hover { background: %3; }")
+                .arg(ogs::theme::c::BgBase, ogs::theme::c::BorderSub, ogs::theme::c::BgSurface));
         row->setAutoFillBackground(true);
         auto* rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(12, 8, 12, 8);
@@ -120,7 +122,8 @@ private:
         rowLayout->addWidget(dot);
 
         auto* name = new QLabel(label);
-        name->setStyleSheet("color: #e6edf3; font-size: 12px;");
+        name->setStyleSheet(
+            QStringLiteral("color: %1; font-size: 12px;").arg(ogs::theme::c::Text));
         name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         rowLayout->addWidget(name);
 
@@ -129,8 +132,10 @@ private:
         visBtn->setChecked(isActive());
         visBtn->setText(isActive() ? "On" : "Off");
         visBtn->setStyleSheet(
-            "QToolButton { color: #7d8590; font-size: 11px; padding: 2px 8px; border-radius: 3px; }"
-            "QToolButton:checked { color: #3fb950; }");
+            QStringLiteral("QToolButton { color: %1; font-size: %2px; padding: 2px 8px; border-radius: 3px; }"
+            "QToolButton:checked { color: %3; }")
+                .arg(ogs::theme::c::TextMuted).arg(ogs::theme::FontSmall)
+                .arg(ogs::theme::c::Success));
         connect(visBtn, &QToolButton::clicked, this, [onToggle, visBtn, isActive]() {
             onToggle();
             visBtn->setChecked(isActive());
@@ -139,133 +144,6 @@ private:
         rowLayout->addWidget(visBtn);
 
         m_listLayout->addWidget(row);
-    }
-
-    void addMaskLayer(const QString& label, const QString& color, MaskType type) {
-        auto* container = new QWidget();
-        container->setStyleSheet(
-            "QWidget { background: #0d1117; border-bottom: 1px solid #21262d; }");
-        auto* containerLayout = new QVBoxLayout(container);
-        containerLayout->setContentsMargins(0, 0, 0, 0);
-        containerLayout->setSpacing(0);
-
-        // Toggle row
-        auto* row = new QWidget();
-        row->setStyleSheet("QWidget:hover { background: #161b22; }");
-        auto* rowLayout = new QHBoxLayout(row);
-        rowLayout->setContentsMargins(12, 8, 12, 8);
-        rowLayout->setSpacing(8);
-
-        auto* dot = new QLabel();
-        dot->setFixedSize(8, 8);
-        dot->setStyleSheet(QString("background: %1; border-radius: 4px;").arg(color));
-        rowLayout->addWidget(dot);
-
-        auto* name = new QLabel(label);
-        name->setStyleSheet("color: #e6edf3; font-size: 12px;");
-        name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        rowLayout->addWidget(name);
-
-        auto* visBtn = new QToolButton();
-        visBtn->setCheckable(true);
-        bool active = isMaskActive(type);
-        visBtn->setChecked(active);
-        visBtn->setText(active ? "On" : "Off");
-        visBtn->setStyleSheet(
-            "QToolButton { color: #7d8590; font-size: 11px; padding: 2px 8px; border-radius: 3px; }"
-            "QToolButton:checked { color: #3fb950; }");
-
-        // Slider container (shown when mask is active)
-        auto* sliderWidget = new QWidget();
-        sliderWidget->setStyleSheet("background: #161b22;");
-        auto* sliderLayout = new QVBoxLayout(sliderWidget);
-        sliderLayout->setContentsMargins(24, 6, 12, 8);
-        sliderLayout->setSpacing(4);
-
-        auto* sliderHeader = new QHBoxLayout();
-        auto* sliderLabel = new QLabel();
-        auto* sliderValue = new QLabel();
-        sliderLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
-        sliderValue->setStyleSheet("color: #e6edf3; font-size: 11px; font-weight: bold;");
-        sliderHeader->addWidget(sliderLabel);
-        sliderHeader->addStretch();
-        sliderHeader->addWidget(sliderValue);
-        sliderLayout->addLayout(sliderHeader);
-
-        auto* slider = new QSlider(Qt::Horizontal);
-        slider->setStyleSheet(
-            "QSlider::groove:horizontal { background: #21262d; height: 4px; border-radius: 2px; }"
-            "QSlider::handle:horizontal { background: #1f6feb; width: 12px; height: 12px;"
-            "margin: -4px 0; border-radius: 6px; }"
-            "QSlider::sub-page:horizontal { background: #1f6feb; border-radius: 2px; }");
-        sliderLayout->addWidget(slider);
-
-        if (type == MaskType::Road) {
-            sliderLabel->setText("Road Width");
-            slider->setRange(1, 10);
-            slider->setValue(m_store->maskSettings().roadLineWidthPx);
-            sliderValue->setText(QString("%1px").arg(m_store->maskSettings().roadLineWidthPx));
-            connect(slider, &QSlider::valueChanged, this, [this, sliderValue](int val) {
-                auto s = m_store->maskSettings();
-                s.roadLineWidthPx = val;
-                m_store->setMaskSettings(s);
-                sliderValue->setText(QString("%1px").arg(val));
-            });
-        } else if (type == MaskType::Cliff) {
-            sliderLabel->setText("Cliff Threshold");
-            slider->setRange(0, 90);
-            slider->setValue(m_store->maskSettings().cliffThresholdDegrees);
-            sliderValue->setText(QString("%1°").arg(m_store->maskSettings().cliffThresholdDegrees));
-            connect(slider, &QSlider::valueChanged, this, [this, sliderValue](int val) {
-                auto s = m_store->maskSettings();
-                s.cliffThresholdDegrees = val;
-                m_store->setMaskSettings(s);
-                sliderValue->setText(QString("%1°").arg(val));
-            });
-        } else {
-            // No slider for water/vegetation/building
-            sliderWidget->setVisible(false);
-        }
-
-        sliderWidget->setVisible(active && (type == MaskType::Road || type == MaskType::Cliff));
-
-        connect(visBtn, &QToolButton::clicked, this, [this, type, visBtn, sliderWidget]() {
-            toggleMask(type);
-            bool a = isMaskActive(type);
-            visBtn->setChecked(a);
-            visBtn->setText(a ? "On" : "Off");
-            sliderWidget->setVisible(a && (type == MaskType::Road || type == MaskType::Cliff));
-        });
-
-        rowLayout->addWidget(visBtn);
-        containerLayout->addWidget(row);
-        containerLayout->addWidget(sliderWidget);
-
-        m_listLayout->addWidget(container);
-    }
-
-    bool isMaskActive(MaskType type) const {
-        const auto& m = m_store->maskSettings();
-        switch (type) {
-        case MaskType::Road: return m.generateRoadMask;
-        case MaskType::Water: return m.generateWaterMask;
-        case MaskType::Vegetation: return m.generateVegetationMask;
-        case MaskType::Building: return m.generateBuildingMask;
-        case MaskType::Cliff: return m.generateCliffMask;
-        }
-        return false;
-    }
-
-    void toggleMask(MaskType type) {
-        auto m = m_store->maskSettings();
-        switch (type) {
-        case MaskType::Road: m.generateRoadMask = !m.generateRoadMask; break;
-        case MaskType::Water: m.generateWaterMask = !m.generateWaterMask; break;
-        case MaskType::Vegetation: m.generateVegetationMask = !m.generateVegetationMask; break;
-        case MaskType::Building: m.generateBuildingMask = !m.generateBuildingMask; break;
-        case MaskType::Cliff: m.generateCliffMask = !m.generateCliffMask; break;
-        }
-        m_store->setMaskSettings(m);
     }
 
 private slots:
@@ -277,14 +155,6 @@ private slots:
         } else {
             m_tileInfoLabel->setText("No tiles");
         }
-    }
-
-    void onMaskSettingsChanged(const terrain::MaskSettings&) {
-        // Rebuild would be heavy; individual widgets update via their lambdas
-    }
-
-    void onVisibilityChanged() {
-        // Visibility toggles update via their lambdas
     }
 
 private:

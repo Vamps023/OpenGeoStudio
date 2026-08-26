@@ -13,6 +13,7 @@
 #include <sstream>
 
 #include "main_window.h"
+#include "../../../theme/Theme.hpp"
 #include "main_widget.h"
 #include "change_tracker.h"
 #include "action_manager.h"
@@ -76,10 +77,9 @@ MainWindow::MainWindow(QWidget* parent): QWidget(parent)
     auto* statusBar = new QWidget;
     statusBar->setObjectName("roadStatusBar");
     statusBar->setFixedHeight(26);
-    statusBar->setStyleSheet(
-        "QWidget#roadStatusBar { background-color: #161b22; border-top: 1px solid #30363d; }"
-        "QStatusBar { background: transparent; color: #7d8590; font-size: 11px; }"
-        "QStatusBar QLabel { color: #7d8590; padding: 0 8px; }");
+    statusBar->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QWidget#roadStatusBar { background-color: %BgSurface%; border-top: 1px solid %Border%; }"
+        "QStatusBar { background: transparent; color: %TextMuted%; font-size: 11px; }"
+        "QStatusBar QLabel { color: %TextMuted%; padding: 0 8px; }")));
     auto* statusLayout = new QHBoxLayout(statusBar);
     statusLayout->setContentsMargins(0, 0, 0, 0);
     statusLayout->setSpacing(0);

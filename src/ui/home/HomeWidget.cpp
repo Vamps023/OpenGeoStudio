@@ -2,6 +2,8 @@
 
 #include "HomeWidget.hpp"
 
+#include "../../theme/Theme.hpp"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -32,12 +34,15 @@ void HomeWidget::setupUi() {
     mainLayout->setSpacing(20);
 
     // Welcome header
+    namespace th = ogs::theme;
     m_welcomeLabel = new QLabel("OpenGeoStudio");
-    m_welcomeLabel->setStyleSheet("font-size: 28px; font-weight: bold; color: #e6edf3;");
+    m_welcomeLabel->setStyleSheet(
+        QStringLiteral("font-size: 28px; font-weight: bold; color: %1;").arg(th::c::Text));
     mainLayout->addWidget(m_welcomeLabel);
 
     auto* subtitle = new QLabel("Native C++/Qt 6 desktop application for terrain and road design");
-    subtitle->setStyleSheet("font-size: 14px; color: #7d8590;");
+    subtitle->setStyleSheet(
+        QStringLiteral("font-size: 14px; color: %1;").arg(th::c::TextMuted));
     mainLayout->addWidget(subtitle);
 
     // Template cards
@@ -45,33 +50,32 @@ void HomeWidget::setupUi() {
     auto* tmplLayout = new QHBoxLayout(templatesGroup);
     tmplLayout->setSpacing(16);
 
-    // Terrain template — green accent like reference
+    // Template cards
+    const QString cardStyle = QStringLiteral(
+        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
+        "background-color: %1; color: %2; border: 2px solid %3; border-radius: 8px; }"
+        "QPushButton:hover { background-color: %4; border: 2px solid %5; }")
+            .arg(th::c::BgSurface, th::c::Text, th::c::Border,
+                 th::c::BgActive, th::c::Accent);
+
+    // Terrain template
     auto* terrainCard = new QPushButton("Terrain\n\nMap area selection\nDEM / heightmaps\nSatellite imagery");
     terrainCard->setFixedSize(220, 140);
-    terrainCard->setStyleSheet(
-        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 2px solid #3fb950; }");
+    terrainCard->setStyleSheet(cardStyle);
     connect(terrainCard, &QPushButton::clicked, this, &HomeWidget::onCreateTerrain);
     tmplLayout->addWidget(terrainCard);
 
-    // Road Studio template — cyan accent like reference
+    // Road Studio template
     auto* roadCard = new QPushButton("Road Studio\n\nRoad network design\nLaneMaker integration\nC++ geometry engine");
     roadCard->setFixedSize(220, 140);
-    roadCard->setStyleSheet(
-        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 2px solid #06b6d4; }");
+    roadCard->setStyleSheet(cardStyle);
     connect(roadCard, &QPushButton::clicked, this, &HomeWidget::onCreateRoadStudio);
     tmplLayout->addWidget(roadCard);
 
-    // Train Studio template — cyan accent
+    // Train Studio template
     auto* trainCard = new QPushButton("Train Studio\n\nRailway design\nOSM import\nTrack editing");
     trainCard->setFixedSize(220, 140);
-    trainCard->setStyleSheet(
-        "QPushButton { text-align: left; padding: 16px; font-size: 13px; "
-        "background-color: #161b22; color: #e6edf3; border: 2px solid #30363d; border-radius: 8px; }"
-        "QPushButton:hover { background-color: #1c2128; border: 2px solid #06b6d4; }");
+    trainCard->setStyleSheet(cardStyle);
     connect(trainCard, &QPushButton::clicked, this, [this]() { emit newProjectRequested("train-studio"); });
     tmplLayout->addWidget(trainCard);
 
@@ -107,23 +111,23 @@ void HomeWidget::setupUi() {
     // System status bar (matching reference app)
     auto* statusLayout = new QHBoxLayout();
     auto* wsCount = new QLabel("Workspaces: 4");
-    wsCount->setStyleSheet("color: #7d8590; font-size: 12px;");
+    wsCount->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(th::c::TextMuted));
     statusLayout->addWidget(wsCount);
 
     auto* sep1 = new QLabel("·");
-    sep1->setStyleSheet("color: #484f58;");
+    sep1->setStyleSheet(QStringLiteral("color: %1;").arg(th::c::TextFaint));
     statusLayout->addWidget(sep1);
 
     auto* engineLabel = new QLabel("C++ Engine: Native");
-    engineLabel->setStyleSheet("color: #3fb950; font-size: 12px;");
+    engineLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(th::c::Success));
     statusLayout->addWidget(engineLabel);
 
     auto* sep2 = new QLabel("·");
-    sep2->setStyleSheet("color: #484f58;");
+    sep2->setStyleSheet(QStringLiteral("color: %1;").arg(th::c::TextFaint));
     statusLayout->addWidget(sep2);
 
     auto* versionLabel = new QLabel("v" OGS_VERSION);
-    versionLabel->setStyleSheet("color: #7d8590; font-size: 12px;");
+    versionLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 12px;").arg(th::c::TextMuted));
     statusLayout->addWidget(versionLabel);
 
     statusLayout->addStretch();
@@ -159,8 +163,10 @@ void HomeWidget::refreshRecent(const QString& filter) {
         pinBtn->setText(entry.pinned ? "★" : "☆");
         pinBtn->setFixedSize(24, 24);
         pinBtn->setStyleSheet(
-            "QToolButton { border: none; font-size: 16px; color: #d29922; }"
-            "QToolButton:hover { color: #06b6d4; }");
+            QStringLiteral("QToolButton { border: none; font-size: 16px; color: %1; }"
+            "QToolButton:hover { color: %2; }")
+                .arg(ogs::theme::c::Warning, ogs::theme::c::Accent));
+
         connect(pinBtn, &QToolButton::clicked, this, [this, filePath = entry.filePath]() {
             m_ctx->projects().togglePin(filePath);
         });
@@ -176,7 +182,8 @@ void HomeWidget::refreshRecent(const QString& filter) {
             }
         }
         auto* infoLabel = new QLabel(infoText, rowWidget);
-        infoLabel->setStyleSheet("color: #e6edf3; font-size: 13px;");
+        infoLabel->setStyleSheet(
+            QStringLiteral("color: %1; font-size: 13px;").arg(ogs::theme::c::Text));
         rowLayout->addWidget(infoLabel, 1);
 
         // Remove button (delete project from disk + recent list)
@@ -185,8 +192,10 @@ void HomeWidget::refreshRecent(const QString& filter) {
         removeBtn->setFixedSize(24, 24);
         removeBtn->setToolTip("Remove this project (deletes from disk)");
         removeBtn->setStyleSheet(
-            "QToolButton { border: none; font-size: 14px; color: #f85149; }"
-            "QToolButton:hover { color: #ff6b6b; background: #21262d; border-radius: 4px; }");
+            QStringLiteral("QToolButton { border: none; font-size: 14px; color: %1; }"
+            "QToolButton:hover { color: %1; background: %2; border-radius: 4px; }")
+                .arg(ogs::theme::c::Danger, ogs::theme::c::BgOverlay));
+
         connect(removeBtn, &QToolButton::clicked, this, [this, filePath = entry.filePath, name = entry.name]() {
             auto ret = QMessageBox::question(this, "Delete Project",
                 QString("Delete project \"%1\"?\n\n%2\n\nThis will permanently delete the project folder and all its contents.")
@@ -208,7 +217,7 @@ void HomeWidget::refreshRecent(const QString& filter) {
     if (m_recentList->count() == 0) {
         auto* item = new QListWidgetItem("No recent projects. Create a new one above.");
         item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsSelectable);
-        item->setForeground(QColor("#484f58"));
+        item->setForeground(ogs::theme::c::qWarn());
         m_recentList->addItem(item);
     }
 }

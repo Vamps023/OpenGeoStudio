@@ -13,6 +13,8 @@
 //
 
 #include "../../core/osm/OsmImportPipeline.hpp"
+#include "../../theme/Theme.hpp"
+
 #include "../../core/osm/RoundaboutGenerator.hpp"
 #include "../../core/osm/RoadMarkingGenerator.hpp"
 #include "../../core/osm/TrafficSignGenerator.hpp"
@@ -184,16 +186,20 @@ private slots:
             if (loaded) {
                 m_elevationLabel->setText(QString("Elevation source: %1")
                     .arg(QFileInfo(m_elevation.sourcePath()).fileName()));
-                m_elevationLabel->setStyleSheet("QLabel { color: #7ee787; font-size: 10px; }");
+                m_elevationLabel->setStyleSheet(
+                    QStringLiteral("QLabel { color: %1; font-size: 10px; }")
+                        .arg(ogs::theme::c::Success));
             } else {
                 m_elevationLabel->setText(
                     "No project heightmap found — export terrain in Terrain Studio first "
                     "(roads will be flat)");
-                m_elevationLabel->setStyleSheet("QLabel { color: #f85149; font-size: 10px; }");
+                m_elevationLabel->setStyleSheet(
+                    QStringLiteral("QLabel { color: %1; font-size: 10px; }")
+                        .arg(ogs::theme::c::Danger));
             }
         } else {
             m_elevationLabel->setText("No heightmap available — roads will be flat");
-            m_elevationLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+            m_elevationLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextMuted%; font-size: 10px; }")));
         }
 
         // Display results
@@ -311,7 +317,7 @@ private:
         m_elevationCheck->setChecked(true);
         formLayout->addRow(m_elevationCheck);
         m_elevationLabel = new QLabel("Elevation: not loaded yet");
-        m_elevationLabel->setStyleSheet("QLabel { color: #7d8590; font-size: 10px; }");
+        m_elevationLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextMuted%; font-size: 10px; }")));
         formLayout->addRow(m_elevationLabel);
 
         mainLayout->addWidget(settingsGroup);

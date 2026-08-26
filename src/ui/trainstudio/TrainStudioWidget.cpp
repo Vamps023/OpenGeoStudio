@@ -9,14 +9,17 @@
 #include <QSizePolicy>
 #include <QSettings>
 
+#include "../../theme/Theme.hpp"
+
 TrainStudioWidget::TrainStudioWidget(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("trainStudioWorkspace"));
     setStyleSheet(
-        "QWidget#trainStudioWorkspace { background: #0d1117; }"
-        "QFrame#trainCanvasFrame { background: #161b22; border: 1px solid #30363d;"
-        "border-radius: 6px; }");
+        QStringLiteral("QWidget#trainStudioWorkspace { background: %1; }"
+        "QFrame#trainCanvasFrame { background: %2; border: 1px solid %3;"
+        "border-radius: 6px; }")
+            .arg(ogs::theme::c::BgBase, ogs::theme::c::BgSurface, ogs::theme::c::Border));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

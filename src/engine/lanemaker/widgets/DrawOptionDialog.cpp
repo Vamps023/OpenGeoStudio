@@ -1,4 +1,5 @@
 #include "DrawOptionDialog.h"
+#include "../../../theme/Theme.hpp"
 
 #include "LaneConfigWidget.h"
 #include "map_view_gl.h"
@@ -10,16 +11,15 @@ DrawOptionDialog::DrawOptionDialog(QWidget* parent):
     AnimatedPopupDialog(QSize(parent->width() / 3 * 2, parent->height() / 2), true, parent)
 {
     // Dark theme for the dialog itself
-    setStyleSheet(
-        "DrawOptionDialog { background-color: #0d1117; border: 1px solid #30363d; border-radius: 12px; }"
-        "QLabel { color: #e6edf3; font-size: 12px; }"
-        "QSlider::groove:horizontal { background: #21262d; height: 6px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #1f6feb; width: 16px; height: 16px;"
+    setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("DrawOptionDialog { background-color: %BgBase%; border: 1px solid %Border%; border-radius: 12px; }"
+        "QLabel { color: %Text%; font-size: 12px; }"
+        "QSlider::groove:horizontal { background: %BorderSub%; height: 6px; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: %Accent%; width: 16px; height: 16px;"
         "  margin: -5px 0; border-radius: 8px; }"
-        "QSlider::handle:horizontal:hover { background: #388bfd; }"
-        "QDial { background: #161b22; border: 1px solid #30363d; border-radius: 4px; }"
-        "QDial::handle { background: #1f6feb; width: 8px; border-radius: 4px; }"
-        "QDial::handle:hover { background: #388bfd; }");
+        "QSlider::handle:horizontal:hover { background: %AccentBright%; }"
+        "QDial { background: %BgSurface%; border: 1px solid %Border%; border-radius: 4px; }"
+        "QDial::handle { background: %Accent%; width: 8px; border-radius: 4px; }"
+        "QDial::handle:hover { background: %AccentBright%; }")));
 
     auto* mainLayout = new QVBoxLayout;
     mainLayout->setContentsMargins(12, 12, 12, 12);
@@ -27,9 +27,8 @@ DrawOptionDialog::DrawOptionDialog(QWidget* parent):
 
     // Section header — Lane Configuration
     auto* laneHeader = new QLabel("Lane Configuration");
-    laneHeader->setStyleSheet(
-        "QLabel { color: #7d8590; font-size: 11px; font-weight: bold;"
-        "  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0; }");
+    laneHeader->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextMuted%; font-size: 11px; font-weight: bold;"
+        "  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0; }")));
     mainLayout->addWidget(laneHeader);
 
     // Lane config widget (vertical layout mode, no profile selector)
@@ -39,14 +38,13 @@ DrawOptionDialog::DrawOptionDialog(QWidget* parent):
     // Separator
     auto* sep = new QFrame;
     sep->setFrameShape(QFrame::HLine);
-    sep->setStyleSheet("color: #21262d; background-color: #21262d; max-height: 1px;");
+    sep->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %BorderSub%; background-color: %BorderSub%; max-height: 1px;")));
     mainLayout->addWidget(sep);
 
     // Section header — Elevation
     auto* elevHeader = new QLabel("Road Elevation");
-    elevHeader->setStyleSheet(
-        "QLabel { color: #7d8590; font-size: 11px; font-weight: bold;"
-        "  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0; }");
+    elevHeader->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %TextMuted%; font-size: 11px; font-weight: bold;"
+        "  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0; }")));
     mainLayout->addWidget(elevHeader);
 
     // Elevation dial + display in a horizontal layout
@@ -61,10 +59,9 @@ DrawOptionDialog::DrawOptionDialog(QWidget* parent):
 
     // Elevation value display
     heightDisplay = new QLabel("G");
-    heightDisplay->setStyleSheet(
-        "QLabel { color: #e6edf3; font-size: 24px; font-weight: bold;"
-        "  background: #161b22; border: 1px solid #30363d; border-radius: 8px;"
-        "  padding: 8px 16px; min-width: 40px; }");
+    heightDisplay->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %Text%; font-size: 24px; font-weight: bold;"
+        "  background: %BgSurface%; border: 1px solid %Border%; border-radius: 8px;"
+        "  padding: 8px 16px; min-width: 40px; }")));
     heightDisplay->setAlignment(Qt::AlignCenter);
     elevLayout->addWidget(heightDisplay);
 

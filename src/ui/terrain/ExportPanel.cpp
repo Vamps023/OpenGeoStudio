@@ -2,6 +2,8 @@
 
 #include "ExportPanel.hpp"
 #include "ExportEngine.hpp"
+#include "../../theme/Theme.hpp"
+
 
 #include "gis/ui/CrsSelectorDialog.hpp"
 #include "gis/crs/CRSManager.hpp"
@@ -15,62 +17,67 @@
 #include <QDir>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QDesktopServices>
+#include <QUrl>
 
 // ============================================================
 // Dark theme stylesheet (GitHub dark inspired, matching Electron)
 // ============================================================
-static const char* kDarkTheme = R"(
-    QWidget { background: #0d1117; color: #e6edf3; font-size: 12px; }
-    QScrollArea { background: #0d1117; border: none; }
+static QString darkThemeSheet() {
+    return ogs::theme::resolveTokens(QStringLiteral(R"(
+    QWidget { background: %BgBase%; color: %Text%; font-size: 12px; }
+    QScrollArea { background: %BgBase%; border: none; }
     QGroupBox {
-        background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+        background: %BgSurface%; border: 1px solid %Border%; border-radius: 6px;
         margin-top: 12px; padding-top: 8px; font-size: 11px;
-        font-weight: bold; color: #7d8590; letter-spacing: 1px;
+        font-weight: bold; color: %TextMuted%; letter-spacing: 1px;
     }
     QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
     QComboBox {
-        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-        padding: 4px 8px; color: #e6edf3; min-height: 20px;
+        background: %BgOverlay%; border: 1px solid %Border%; border-radius: 4px;
+        padding: 4px 8px; color: %Text%; min-height: 20px;
     }
     QComboBox::drop-down { border: none; width: 20px; }
     QComboBox::down-arrow { image: none; width: 0; height: 0; }
     QComboBox QAbstractItemView {
-        background: #1c2128; border: 1px solid #30363d; selection-background-color: #1f6feb;
-        color: #e6edf3; outline: none;
+        background: %BgActive%; border: 1px solid %Border%; selection-background-color: %Accent%;
+        color: %Text%; outline: none;
     }
     QSpinBox, QDoubleSpinBox {
-        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-        padding: 4px 8px; color: #e6edf3; min-height: 20px;
+        background: %BgOverlay%; border: 1px solid %Border%; border-radius: 4px;
+        padding: 4px 8px; color: %Text%; min-height: 20px;
     }
     QLineEdit {
-        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-        padding: 4px 8px; color: #e6edf3;
+        background: %BgOverlay%; border: 1px solid %Border%; border-radius: 4px;
+        padding: 4px 8px; color: %Text%;
     }
-    QLineEdit:focus { border-color: #1f6feb; }
-    QCheckBox { color: #e6edf3; spacing: 6px; }
+    QLineEdit:focus { border-color: %Accent%; }
+    QCheckBox { color: %Text%; spacing: 6px; }
     QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px; }
-    QCheckBox::indicator:unchecked { background: #21262d; border: 1px solid #30363d; }
-    QCheckBox::indicator:checked { background: #1f6feb; border: 1px solid #1f6feb; }
+    QCheckBox::indicator:unchecked { background: %BgOverlay%; border: 1px solid %Border%; }
+    QCheckBox::indicator:checked { background: %Accent%; border: 1px solid %Accent%; }
     QPushButton {
-        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-        padding: 6px 12px; color: #e6edf3; font-weight: 500;
+        background: %BgOverlay%; border: 1px solid %Border%; border-radius: 4px;
+        padding: 6px 12px; color: %Text%; font-weight: 500;
     }
-    QPushButton:hover { background: #30363d; border-color: #8b949e; }
-    QPushButton:pressed { background: #1c2128; }
-    QPushButton:disabled { color: #484f58; background: #161b22; }
+    QPushButton:hover { background: %Border%; border-color: %TextSoft%; }
+    QPushButton:pressed { background: %BgActive%; }
+    QPushButton:disabled { color: %TextFaint%; background: %BgSurface%; }
     QToolButton {
-        background: transparent; border: none; color: #7d8590;
+        background: transparent; border: none; color: %TextMuted%;
         font-size: 10px; font-weight: bold; text-transform: uppercase;
         letter-spacing: 1px; padding: 6px 10px;
     }
-    QToolButton:hover { color: #e6edf3; }
+    QToolButton:hover { color: %Text%; }
     QProgressBar {
-        background: #21262d; border: 1px solid #30363d; border-radius: 4px;
-        height: 6px; text-align: center;
+        background: %BgOverlay%; border: 1px solid %Border%; border-radius: 4px;
+        height: 14px; text-align: center; font-size: 10px; color: %Text%;
     }
-    QProgressBar::chunk { background: #1f6feb; border-radius: 3px; }
-    QLabel { color: #e6edf3; }
-)";
+    QProgressBar::chunk { background: %Accent%; border-radius: 3px; }
+    QLabel { color: %Text%; }
+)"));
+}
+
 
 ExportPanel::ExportPanel(TerrainStore* store, ApplicationContext* ctx, QWidget* parent)
     : QWidget(parent), m_store(store), m_ctx(ctx) {
@@ -82,22 +89,17 @@ ExportPanel::ExportPanel(TerrainStore* store, ApplicationContext* ctx, QWidget* 
     connect(m_engine, &ExportEngine::finished, this, &ExportPanel::onExportFinished);
     connect(m_store, &TerrainStore::tileSelectionChanged, this, [this]() {
         const int count = m_store->selectedTiles().size();
-        const int total = m_store->tileGrid().tiles.size();
-        m_tileCountLabel->setText(QString("%1 of %2 tiles selected — only these download "
-                                          "(click tiles, Ctrl+drag to box-select)")
-                                      .arg(count).arg(total));
         if (m_tileBadge) m_tileBadge->setText(QString::number(count));
         // Update export button text dynamically
-        if (count > 0) {
-            m_exportBtn->setText(QString("Export %1 tile%2").arg(count).arg(count > 1 ? "s" : ""));
-        } else {
-            m_exportBtn->setText("Export");
-        }
+        m_exportBtn->setText(count > 0
+            ? QString("Export %1 tile%2").arg(count).arg(count > 1 ? "s" : "")
+            : "Export");
     });
+    connect(&m_elapsedTick, &QTimer::timeout, this, &ExportPanel::updateElapsedLabel);
 }
 
 void ExportPanel::applyDarkTheme() {
-    setStyleSheet(kDarkTheme);
+    setStyleSheet(darkThemeSheet());
 }
 
 void ExportPanel::setupUi() {
@@ -114,21 +116,22 @@ void ExportPanel::setupUi() {
     auto* headerLayout = new QHBoxLayout();
     headerLayout->setSpacing(8);
     auto* headerLabel = new QLabel("EXPORT");
-    headerLabel->setStyleSheet(
-        "QLabel { font-size: 14px; font-weight: bold; color: #e6edf3; letter-spacing: 2px; }");
+    headerLabel->setStyleSheet(ogs::theme::resolveTokens(
+        "QLabel { font-size: 14px; font-weight: bold; color: %Text%; letter-spacing: 2px; }"));
     headerLayout->addWidget(headerLabel);
 
     auto* tileBadge = new QLabel("0");
-    tileBadge->setStyleSheet(
-        "QLabel { background: rgba(31,111,235,0.2); color: #58a6ff; border-radius: 10px;"
-        "padding: 2px 10px; font-size: 11px; font-weight: bold; }");
+    tileBadge->setStyleSheet(ogs::theme::resolveTokens(
+        "QLabel { background: %AccentEdge%; color: %Accent%; border-radius: 10px;"
+        "padding: 2px 10px; font-size: 11px; font-weight: bold; }"));
+
     tileBadge->setAlignment(Qt::AlignCenter);
     tileBadge->setMinimumWidth(30);
     headerLayout->addWidget(tileBadge);
     headerLayout->addStretch();
 
     auto* engineBadge = new QLabel("C++ Native · Float32 GeoTIFF + PNG");
-    engineBadge->setStyleSheet("QLabel { color: #3fb950; font-size: 11px; }");
+    engineBadge->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("QLabel { color: %Success%; font-size: 11px; }")));
     headerLayout->addWidget(engineBadge);
 
     mainLayout->addLayout(headerLayout);
@@ -143,15 +146,11 @@ void ExportPanel::setupUi() {
     basicLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     basicLayout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
 
-    // Heightmap format — only 32-bit Float GeoTIFF is supported for
+    // Heightmap format is fixed: only 32-bit Float GeoTIFF is supported for
     // Unigine / QGIS interoperability.
-    m_heightmapFormatCombo = new QComboBox();
-    m_heightmapFormatCombo->addItem("GeoTIFF Float32 (full precision)");
-    m_store->setHeightmapFormat(terrain::HeightmapFormat::GeoTIFF_Float32);
-    connect(m_heightmapFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int /*idx*/) {
-        m_store->setHeightmapFormat(terrain::HeightmapFormat::GeoTIFF_Float32);
-    });
-    basicLayout->addRow("Heightmap:", m_heightmapFormatCombo);
+    auto* hmCaption = new QLabel("GeoTIFF Float32 (full precision)");
+    hmCaption->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%;")));
+    basicLayout->addRow("Heightmap:", hmCaption);
 
     // Albedo format
     m_albedoFormatCombo = new QComboBox();
@@ -206,12 +205,12 @@ void ExportPanel::setupUi() {
     m_advancedToggle = new QToolButton();
     m_advancedToggle->setText("Settings  +");
     m_advancedToggle->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_advancedToggle->setStyleSheet(
-        "QToolButton { color: #7d8590; font-size: 10px; font-weight: bold;"
+    m_advancedToggle->setStyleSheet(ogs::theme::resolveTokens(
+        "QToolButton { color: %TextMuted%; font-size: 10px; font-weight: bold;"
         "text-transform: uppercase; letter-spacing: 1px; padding: 8px 0;"
-        "border-top: 1px solid #30363d; border-bottom: 1px solid #30363d;"
+        "border-top: 1px solid %Border%; border-bottom: 1px solid %Border%;"
         "background: transparent; }"
-        "QToolButton:hover { color: #e6edf3; }");
+        "QToolButton:hover { color: %Text%; }"));
     connect(m_advancedToggle, &QToolButton::clicked, this, &ExportPanel::onToggleAdvancedSettings);
     mainLayout->addWidget(m_advancedToggle);
 
@@ -239,7 +238,7 @@ void ExportPanel::setupUi() {
     connect(m_gladArdIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), m_store, &TerrainStore::setGladArdInterval);
     gladLayout->addWidget(m_gladArdIntervalSpin);
     auto* gladHint = new QLabel("≈ mid-2022");
-    gladHint->setStyleSheet("color: #7d8590; font-size: 11px;");
+    gladHint->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
     gladLayout->addWidget(gladHint);
     formLayout->addRow("GLAD Interval:", m_gladArdContainer);
     m_gladArdContainer->setVisible(false);
@@ -370,7 +369,7 @@ void ExportPanel::setupUi() {
 
     m_localDemBtn = new QPushButton("Browse...");
     m_localDemLabel = new QLabel("No DEM file selected");
-    m_localDemLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+    m_localDemLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
     connect(m_localDemBtn, &QPushButton::clicked, this, [this]() {
         QString path = QFileDialog::getOpenFileName(this, "Select DEM GeoTIFF", "", "GeoTIFF (*.tif *.tiff);;All Files (*)");
         if (!path.isEmpty()) {
@@ -383,7 +382,7 @@ void ExportPanel::setupUi() {
 
     m_localImageryBtn = new QPushButton("Browse...");
     m_localImageryLabel = new QLabel("No imagery file selected");
-    m_localImageryLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
+    m_localImageryLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
     connect(m_localImageryBtn, &QPushButton::clicked, this, [this]() {
         QString path = QFileDialog::getOpenFileName(this, "Select Imagery", "", "Images (*.png *.jpg *.tif *.tiff);;All Files (*)");
         if (!path.isEmpty()) {
@@ -440,54 +439,56 @@ void ExportPanel::setupUi() {
 
     // --- API Key Warning ---
     m_apiKeyWarning = new QLabel("");
-    m_apiKeyWarning->setStyleSheet(
-        "QLabel { color: #d29922; font-size: 11px; padding: 8px 10px;"
+    m_apiKeyWarning->setStyleSheet(ogs::theme::resolveTokens(
+        "QLabel { color: %Warning%; font-size: 11px; padding: 8px 10px;"
         "background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.3);"
-        "border-radius: 6px; }");
+        "border-radius: 6px; }"));
     m_apiKeyWarning->setWordWrap(true);
     m_apiKeyWarning->setVisible(false);
     mainLayout->addWidget(m_apiKeyWarning);
 
-    // --- Tile Selection ---
-    auto* tileGroup = new QGroupBox("TILES");
-    auto* tileLayout = new QVBoxLayout(tileGroup);
-    tileLayout->setSpacing(6);
-    tileLayout->setContentsMargins(10, 16, 10, 10);
-
-    m_tileCountLabel = new QLabel("0 tiles selected");
-    m_tileCountLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
-    tileLayout->addWidget(m_tileCountLabel);
-
-    auto* tileBtnLayout = new QHBoxLayout();
-    tileBtnLayout->setSpacing(6);
-    m_selectAllBtn = new QPushButton("Select All");
-    connect(m_selectAllBtn, &QPushButton::clicked, m_store, &TerrainStore::selectAllTiles);
-    m_clearTilesBtn = new QPushButton("Clear");
-    connect(m_clearTilesBtn, &QPushButton::clicked, m_store, &TerrainStore::clearTileSelection);
-    tileBtnLayout->addWidget(m_selectAllBtn);
-    tileBtnLayout->addWidget(m_clearTilesBtn);
-    tileLayout->addLayout(tileBtnLayout);
-
-    mainLayout->addWidget(tileGroup);
-
     // --- Export Button ---
     m_exportBtn = new QPushButton("Export");
-    m_exportBtn->setStyleSheet(
-        "QPushButton { background-color: #238636; color: #ffffff; padding: 10px;"
+    m_exportBtn->setStyleSheet(ogs::theme::resolveTokens(
+        "QPushButton { background-color: %Accent%; color: %OnAccent%; padding: 10px;"
         "font-weight: bold; border: none; border-radius: 6px; font-size: 13px; }"
-        "QPushButton:hover { background-color: #2ea043; }"
-        "QPushButton:disabled { background-color: #21262d; color: #484f58; }");
+        "QPushButton:hover { background-color: %AccentBright%; }"
+        "QPushButton:disabled { background-color: %BgOverlay%; color: %TextFaint%; }"));
     connect(m_exportBtn, &QPushButton::clicked, this, &ExportPanel::onExportClicked);
     mainLayout->addWidget(m_exportBtn);
 
+    // --- Progress row: bar + cancel + elapsed time ---
+    auto* progRow = new QHBoxLayout();
+    progRow->setSpacing(6);
     m_progressBar = new QProgressBar();
     m_progressBar->setVisible(false);
-    mainLayout->addWidget(m_progressBar);
+    progRow->addWidget(m_progressBar, 1);
+    m_elapsedLabel = new QLabel();
+    m_elapsedLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
+    m_elapsedLabel->setFixedWidth(40);
+    m_elapsedLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_elapsedLabel->setVisible(false);
+    progRow->addWidget(m_elapsedLabel);
+    m_cancelBtn = new QPushButton("Cancel");
+    m_cancelBtn->setVisible(false);
+    connect(m_cancelBtn, &QPushButton::clicked, this, &ExportPanel::onCancelClicked);
+    progRow->addWidget(m_cancelBtn);
+    mainLayout->addLayout(progRow);
 
+    // --- Status row: message + inline Open Folder ---
+    auto* statusRow = new QHBoxLayout();
+    statusRow->setSpacing(6);
     m_statusLabel = new QLabel("");
     m_statusLabel->setWordWrap(true);
-    m_statusLabel->setStyleSheet("color: #7d8590; font-size: 11px;");
-    mainLayout->addWidget(m_statusLabel);
+    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
+    statusRow->addWidget(m_statusLabel, 1);
+
+    m_openFolderBtn = new QPushButton("Open Folder");
+    m_openFolderBtn->setVisible(false);
+    connect(m_openFolderBtn, &QPushButton::clicked, this, &ExportPanel::onOpenFolderClicked);
+    statusRow->addWidget(m_openFolderBtn);
+    mainLayout->addLayout(statusRow);
 
     mainLayout->addStretch();
 
@@ -572,25 +573,63 @@ void ExportPanel::onExportClicked() {
     m_exportBtn->setText("Exporting...");
     m_progressBar->setVisible(true);
     m_progressBar->setValue(0);
+    m_cancelBtn->setVisible(true);
+    m_openFolderBtn->setVisible(false);
+    m_elapsedLabel->setVisible(true);
+    m_elapsed.start();
+    m_elapsedTick.start(1000);
+    updateElapsedLabel();
     m_statusLabel->setText("Exporting to: " + dir);
+    m_statusLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px;")));
 
+    m_lastExportDir = dir;
     m_engine->exportToDirectory(dir);
+}
+
+void ExportPanel::onCancelClicked() {
+    m_cancelBtn->setEnabled(false);
+    m_cancelBtn->setText("Cancelling...");
+    m_engine->cancel();
+}
+
+void ExportPanel::onOpenFolderClicked() {
+    if (!m_lastExportDir.isEmpty())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(m_lastExportDir));
+}
+
+void ExportPanel::updateElapsedLabel() {
+    const qint64 ms = m_elapsed.elapsed();
+    m_elapsedLabel->setText(QString("%1:%2")
+        .arg(ms / 60000).arg((ms / 1000) % 60, 2, 10, QChar('0')));
 }
 
 void ExportPanel::onExportProgress(int percent, const QString& stage) {
     m_progressBar->setValue(percent);
     m_statusLabel->setText(stage);
+    updateElapsedLabel();
 }
 
 void ExportPanel::onExportFinished(bool success, const QString& message) {
+    m_elapsedTick.stop();
     m_exportBtn->setEnabled(true);
-    int count = m_store->selectedTiles().size();
+    const int count = m_store->selectedTiles().size();
     m_exportBtn->setText(count > 0 ? QString("Export %1 tile%2").arg(count).arg(count > 1 ? "s" : "") : "Export");
     m_progressBar->setVisible(false);
-    m_statusLabel->setText(message);
-    if (success) {
-        QMessageBox::information(this, "Export Complete", message);
+    m_cancelBtn->setVisible(false);
+    m_cancelBtn->setEnabled(true);
+    m_cancelBtn->setText("Cancel");
+    m_elapsedLabel->setVisible(false);
+
+    if (message == QStringLiteral("Export cancelled.")) {
+        m_statusLabel->setText("Export cancelled.");
+        // keep default muted styling
+    } else if (success) {
+        m_openFolderBtn->setVisible(true);
+        m_statusLabel->setText(QString("✔ %1").arg(message));
+        m_statusLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %Success%; font-size: 11px;")));
     } else {
+        m_statusLabel->setText(QString("✖ %1").arg(message));
+        m_statusLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %Danger%; font-size: 11px;")));
         QMessageBox::warning(this, "Export Failed", message);
     }
 }
