@@ -125,6 +125,10 @@ private:
     // Build RasterExtent from tile bounds and CRS settings
     terrain::RasterExtent buildRasterExtent(const terrain::Tile& tile) const;
 
+    // SCANeR (osgEarth) .earth files referencing the merged products
+    void writeScanerEarthFiles(const QString& dir,
+                               const terrain::RasterExtent& ext);
+
 
     TerrainStore* m_store;
     QNetworkAccessManager* m_network;

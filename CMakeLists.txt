@@ -172,6 +172,7 @@ set(LANEMAKER_UI_SOURCES
 set(LANEMAKER_WIDGET_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/AnimatedPopupDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/DrawOptionDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/ElevationProfileEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/LaneConfigWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/engine/lanemaker/widgets/replay_window.cpp
 )
@@ -285,6 +286,7 @@ set(APP_SOURCES
     # UI - Road Studio (LaneMaker's MainWindow is used directly)
     src/ui/roadstudio/RoadStudioWidget.cpp
     src/ui/roadstudio/OsmImportDialog.cpp
+    src/ui/roadstudio/DrapeOntoTerrain.cpp
     # UI - Train Studio
     src/ui/trainstudio/TrainStudioWidget.cpp
     src/ui/trainstudio/RailOsmImportDialog.cpp

@@ -21,6 +21,7 @@
 #include "marking_graphics.h"
 #include <memory>
 #include <map>
+#include <functional>
 
 #ifdef HAVE_MAPLIBRE
 #include <QMapLibre/Map>
@@ -37,6 +38,10 @@ class QButtonGroup;
 class QComboBox;
 class QPixmap;
 QT_END_NAMESPACE
+
+class ElevationProfileEditor;
+
+namespace odr { struct RefLine; }
 
 class MapView;
 class RoadDrawingSession;
@@ -92,6 +97,15 @@ public:
     void SetRailMode(bool railMode);
     bool IsRailMode() const;
 
+    // Drape provider — injected by the app layer (RoadStudioWidget).
+    // Samples terrain elevation along a road and returns (s → z) points;
+    // returns false and sets outError on failure. Kept as a hook so the
+    // LaneMaker engine never links against the roadstudio/app layer.
+    using DrapeProvider = std::function<bool(
+        const odr::RefLine&, double centerLat, double centerLon,
+        QString& outError, std::map<double, double>& outPoints)>;
+    void setDrapeProvider(DrapeProvider provider) { m_drapeProvider = std::move(provider); }
+
     // Use the same Esri satellite appearance and slippy-map zoom as Terrain Studio.
     void UseSharedSatelliteView(double lat, double lon, double zoom);
 
@@ -139,8 +153,10 @@ private slots:
     void onSplitRoad();
     void onMergeRoads();
     void onReverseRoad();
+    void onDrapeOntoTerrain();
     void onCrossSectionChanged();
     void onApplyCrossSection();
+    void onElevationEdited(std::map<double,double> points);
 
 private:
     static MainWidget* instance;
@@ -174,6 +190,7 @@ protected:
 
     LM::EditMode editMode = LM::Mode_None;
     RoadDrawingSession* drawingSession = nullptr;
+    DrapeProvider m_drapeProvider;
 
     QButtonGroup* pointerModeGroup;
     QToolButton* createModeButton, * dragModeButton;
@@ -211,6 +228,7 @@ protected:
     QPushButton* splitRoadButton;
     QPushButton* mergeRoadsButton;
     QPushButton* reverseRoadButton;
+    QPushButton* drapeRoadButton;
 
     // ─── Cross-section editor (in inspector) ───
     QGroupBox* crossSectionGroup;
@@ -224,6 +242,10 @@ protected:
     QCheckBox* csHasShoulder;
     QCheckBox* csHasMedian;
     QPushButton* csApplyButton;
+
+    // ─── Inspector/selection state ───
+    std::string m_inspectedRoadID;   // road ID the inspector currently shows
+    int m_treeRoadCount = -1;        // road count at last object-tree rebuild
 
     // ─── Status bar (bottom) ───
     QLabel* statusTool;
@@ -240,6 +262,8 @@ protected:
     QLabel* validationSummary = nullptr;      // compact validation status line
     CollapsibleSection* inspectorSection = nullptr;
     CollapsibleSection* crossSectionSection = nullptr;
+    CollapsibleSection* elevationSection = nullptr;
+    ElevationProfileEditor* elevationEditor = nullptr;
     CollapsibleSection* objectTreeSection = nullptr;
     CollapsibleSection* validationSection = nullptr;
 

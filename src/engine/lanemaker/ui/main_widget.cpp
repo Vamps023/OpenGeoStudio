@@ -68,6 +68,7 @@ void LmStyleServer::onReadyRead() {
 #include "change_tracker.h"
 #include "LaneConfigWidget.h"
 #include "DrawOptionDialog.h"
+#include "../widgets/ElevationProfileEditor.h"
 #include "RoadTypes.hpp"
 #include "sign_system.h"
 #include "marking_graphics.h"
@@ -576,10 +577,13 @@ MainWidget::MainWidget(QWidget* parent)
     splitRoadButton = new QPushButton("Split");
     mergeRoadsButton = new QPushButton("Merge");
     reverseRoadButton = new QPushButton("Reverse");
+    drapeRoadButton = new QPushButton(tr("Drape onto terrain"));
     roadOpsLayout->addWidget(splitRoadButton);
     roadOpsLayout->addWidget(mergeRoadsButton);
     roadOpsLayout->addWidget(reverseRoadButton);
     inspectorArea->addLayout(roadOpsLayout);
+    // Own row — four buttons overflow the 300px panel and clip the label
+    inspectorArea->addWidget(drapeRoadButton);
     rightLayout->addWidget(inspectorSection);
 
     // ── Cross Section section (advanced — collapsed by default) ──
@@ -648,7 +652,16 @@ MainWidget::MainWidget(QWidget* parent)
     validationTree->setHeaderLabels({"Issue", "Severity"});
     validationTree->setMaximumHeight(140);
     valArea->addWidget(validationTree);
+    // ─── Elevation profile editor (SCANeR-style vertical profile) ───
+    elevationSection = new CollapsibleSection(tr("Elevation"), false, this);
+    auto* elevArea = elevationSection->content();
+    elevationEditor = new ElevationProfileEditor(this);
+    elevArea->addWidget(elevationEditor);
+    connect(elevationEditor, &ElevationProfileEditor::profileEdited,
+            this, &MainWidget::onElevationEdited);
+
     rightLayout->addWidget(validationSection);
+    rightLayout->addWidget(elevationSection);
 
     contentLayout->addWidget(rightPanel);
 
@@ -761,6 +774,7 @@ MainWidget::MainWidget(QWidget* parent)
     connect(splitRoadButton, &QPushButton::clicked, this, &MainWidget::onSplitRoad);
     connect(mergeRoadsButton, &QPushButton::clicked, this, &MainWidget::onMergeRoads);
     connect(reverseRoadButton, &QPushButton::clicked, this, &MainWidget::onReverseRoad);
+    connect(drapeRoadButton, &QPushButton::clicked, this, &MainWidget::onDrapeOntoTerrain);
     connect(csApplyButton, &QPushButton::clicked, this, &MainWidget::onApplyCrossSection);
     // Live preview of cross-section changes
     connect(csLeftLanes, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWidget::onCrossSectionChanged);
@@ -1302,6 +1316,7 @@ void MainWidget::refreshInspector()
 
 void MainWidget::onSelectionChanged()
 {
+    m_inspectedRoadID = LM::g_PointerRoadID;
     auto g_road = RoadDrawingSession::GetPointerRoad();
     if (!g_road)
     {
@@ -1311,12 +1326,14 @@ void MainWidget::onSelectionChanged()
         splitRoadButton->setEnabled(false);
         mergeRoadsButton->setEnabled(false);
         reverseRoadButton->setEnabled(false);
+        drapeRoadButton->setEnabled(false);
         inspectorRoadName->setText("");
         inspectorRoadId->setText("");
         inspectorRoadLength->setValue(0);
         inspectorLaneCount->setValue(0);
         inspectorLaneWidth->setValue(LM::LaneWidth);
         inspectorSpeedLimit->setValue(0);
+        elevationEditor->clear();
         statusStation->setText("S: —");
         return;
     }
@@ -1326,6 +1343,7 @@ void MainWidget::onSelectionChanged()
     splitRoadButton->setEnabled(true);
     mergeRoadsButton->setEnabled(true);
     reverseRoadButton->setEnabled(true);
+    drapeRoadButton->setEnabled(true);
 
     QSignalBlocker blockName(inspectorRoadName);
     QSignalBlocker blockCount(inspectorLaneCount);
@@ -1361,6 +1379,45 @@ void MainWidget::onSelectionChanged()
     csHasMedian->setChecked(csConfig.hasMedian);
 
     statusStation->setText(QString("S: %1m").arg(LM::g_PointerRoadS, 0, 'f', 1));
+
+    // Elevation control points — same spline the renderer samples.
+    // Sample the profile at up to 50 stations and re-anchor to exact
+    // endpoints so the editor always shows s=0 / s=length anchors.
+    {
+        std::map<double, double> pts;
+        const double len = g_road->Length();
+        const int samples = std::min(50, std::max(2, static_cast<int>(len / 5.0)));
+        for (int i = 0; i <= samples; ++i)
+        {
+            const double s = len * static_cast<double>(i) / samples;
+            pts[s] = g_road->generated.ref_line.elevation_profile.get(s);
+        }
+        elevationEditor->setPoints(std::move(pts), len);
+    }
+}
+
+void MainWidget::onElevationEdited(std::map<double, double> points)
+{
+    auto g_road = RoadDrawingSession::GetPointerRoad();
+    if (!g_road || points.empty()) return;
+
+    // Control points drive the z spline; re-anchoring to the road
+    // endpoints mirrors how RoadCreationSession builds profiles.
+    points.erase(points.begin(), points.upper_bound(0.05));
+    points[g_road->Length()] = points.rbegin()->second;
+    points.erase(points.lower_bound(g_road->Length() - 0.05), points.end());
+    points[g_road->Length()] = points.rbegin()->second;
+
+    g_road->generated.ref_line.elevation_profile =
+        LM::CubicSplineGenerator::FromControlPoints(points);
+    try {
+        g_road->Generate(false);
+        g_road->GenerateAllSectionGraphics();
+        refreshCustomGraphics(g_road->ID());
+    } catch (...) {
+        spdlog::warn("Failed to regenerate road after elevation edit");
+    }
+    mapViewGL->update();
 }
 
 void MainWidget::onInspectorPropertyChanged()
@@ -1512,6 +1569,36 @@ void MainWidget::runValidation()
 void MainWidget::onValidationItemClicked(QTreeWidgetItem* item, int column)
 {
     // Future: focus the road with the issue
+}
+
+// ponytail: DEM lookup now lives in the app layer (RoadStudioWidget's
+// drape provider); LaneMaker only consumes sampled points via the hook.
+
+void MainWidget::onDrapeOntoTerrain()
+{
+    auto g_road = RoadDrawingSession::GetPointerRoad();
+    if (!g_road) return;
+    if (!m_drapeProvider)
+    {
+        QMessageBox::information(this, tr("Drape onto terrain"),
+            tr("No terrain provider — export terrain from Terrain Studio first."));
+        return;
+    }
+
+    QString error;
+    std::map<double, double> points;
+    if (!m_drapeProvider(g_road->generated.ref_line,
+            mapViewGL->MapCenterLat(), mapViewGL->MapCenterLon(), error, points))
+    {
+        QMessageBox::warning(this, tr("Drape onto terrain"), error);
+        return;
+    }
+
+    // Show the sampled profile in the elevation editor, then apply it
+    // to the road (regenerates graphics via the normal pathway).
+    elevationEditor->setPoints(points, g_road->Length());
+    elevationSection->setExpanded(true);
+    onElevationEdited(points);
 }
 
 void MainWidget::onSplitRoad()
@@ -2262,6 +2349,24 @@ void MainWidget::OnMouseAction(LM::MouseAction evt)
     if (statusStation && !LM::g_PointerRoadID.empty())
         statusStation->setText(QString("S: %1m").arg(LM::g_PointerRoadS, 0, 'f', 1));
 
+    // Hover-follow selection — MapViewGL::UpdateRayHit rewrites
+    // g_PointerRoadID on every mouse move; refresh the inspector only
+    // when the road under the pointer actually changes.
+    if (LM::g_PointerRoadID != m_inspectedRoadID)
+        onSelectionChanged();
+
+    // ponytail: O(1) road-count check per mouse event; the tree rebuilds
+    // only when a road is added/removed (creation/deletion don't notify).
+    if (auto* world = World::Instance())
+    {
+        const int roadCount = static_cast<int>(world->allRoads.size());
+        if (roadCount != m_treeRoadCount)
+        {
+            m_treeRoadCount = roadCount;
+            refreshObjectTree();
+        }
+    }
+
     // Handle sign placement mode
     if (editMode == LM::Mode_PlaceSign &&
         evt.button == Qt::LeftButton &&
@@ -2628,6 +2733,10 @@ void MainWidget::Reset()
     m_measurePoints.clear();
     if (objectTree) objectTree->clear();
     if (validationTree) validationTree->clear();
+    // Re-sync inspector + elevation editor to the (now empty) selection —
+    // also fixes the startup state where the placeholder and the empty
+    // property form were visible at the same time.
+    onSelectionChanged();
 }
 
 void MainWidget::SetModeFromReplay(int mode)

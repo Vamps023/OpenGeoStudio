@@ -945,6 +945,24 @@ TEST(test_opendrive_export) {
     QString valError;
     bool valid = OsmExporter::validateExport(exportPath, &valError);
     CHECK(valid, "Exported OpenDRIVE should be valid");
+
+    // SCANeR compatibility: header must be OpenDRIVE 1.6 with a
+    // standard PROJ geoReference (not the non-standard refLat/refLon).
+    QFile xodr(exportPath);
+    QString content;
+    if (xodr.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        content = QString::fromUtf8(xodr.readAll());
+        xodr.close();
+    }
+    CHECK(content.contains("revMinor=\"6\""),
+          "Header must declare OpenDRIVE 1.6 for SCANeR import");
+    CHECK(content.contains("<geoReference><![CDATA[+proj="),
+          "geoReference must be a standard PROJ string in CDATA");
+    CHECK(content.contains("+lat_0=") && content.contains("+lon_0="),
+          "PROJ string must carry the reference origin");
+    // Header bounds must be real values, not all-zero
+    CHECK(!content.contains("north=\"0\" south=\"0\" east=\"0\" west=\"0\""),
+          "Header bounding box must be filled from network extent");
 }
 
 // ─── Test 32: GeoJSON export ───

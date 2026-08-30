@@ -53,7 +53,7 @@ void HomeWidget::setupUi() {
 
     auto* subtitle = new QLabel("Native C++/Qt 6 desktop application for terrain and road design");
     subtitle->setStyleSheet(
-        QStringLiteral("font-size: 14px; color: %1; margin-top: -12px;").arg(th::c::TextMuted));
+        QStringLiteral("font-size: 14px; color: %1;").arg(th::c::TextMuted));
     mainLayout->addWidget(subtitle);
 
     // Template cards

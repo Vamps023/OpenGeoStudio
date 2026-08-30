@@ -52,6 +52,10 @@ namespace LM
 
 		// Map background — dynamic tile-based satellite imagery
 		void SetMapCenter(double lat, double lon);
+		// World origin (map center) — used by terrain draping to map
+		// world-space meters back to lat/lon for DEM sampling.
+		double MapCenterLat() const { return m_mapCenterLat; }
+		double MapCenterLon() const { return m_mapCenterLon; }
 		// Match the MapLibre viewport's slippy-map zoom level in 2D mode.
 		void SetMapZoom(double zoom);
 		void ClearMapBackground();

@@ -758,7 +758,7 @@ inline RoadMesh generateMeshFromCenterline(
     // NOTE: offsets in this function run along the LEFT normal, while
     // surfaceZ() takes right-positive offsets — hence the negation.
     auto elevAt = [&](double s, double leftOffset) {
-        return surfaceZ(params, s, -leftOffset);
+        return detail::surfaceZ(params, s, -leftOffset);
     };
 
     // ── Step 1: Compute normals at each point ──
@@ -941,7 +941,14 @@ inline RoadMesh generateMeshFromCenterline(
                         };
                         for (int c = 0; c < 4; c++) {
                             MeshVertex v;
-                            v.position = Point3D(corners[c].x, corners[c].y, markZ);
+                            // Dash corner Z follows the designed surface:
+                            // corners 0/1 sit at arc position p, 2/3 at end.
+                            const double sAt = (c < 2) ? p : end;
+                            const double latOff =
+                                ((c == 0 || c == 2) ? halfW : -halfW) + offset;
+                            v.position = Point3D(corners[c].x, corners[c].y,
+                                                 elevAt(sAt, latOff)
+                                                 + params.markingElevation);
                             v.normal = upNormal;
                             v.uv = Vec2(c < 2 ? 0.0 : 1.0, c % 2 == 0 ? 0.0 : 1.0);
                             section.vertices.push_back(v);

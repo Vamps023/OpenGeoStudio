@@ -24,6 +24,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QByteArray>
 #include <vector>
 #include <cmath>

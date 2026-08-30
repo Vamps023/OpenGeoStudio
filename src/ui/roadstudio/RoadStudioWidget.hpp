@@ -27,6 +27,7 @@ public:
 
 private slots:
     void onImportOsm();
+    void onExportScanerDataSet();
 
 private:
     ApplicationContext* m_ctx = nullptr;

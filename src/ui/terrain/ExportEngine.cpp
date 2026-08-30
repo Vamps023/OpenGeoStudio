@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QFile>
 #include <QDir>
+#include <QTextStream>
 #include <QImage>
 #include <QPainter>
 #include <QJsonDocument>
@@ -1827,5 +1828,35 @@ void ExportEngine::writeMergedOutputs(const QString& dir) {
     m_log.info("Merged terrain product:", mergedW, "x", mergedH,
                "DEM tiles:", m_tileDemData.size(),
                "albedo tiles:", m_tileAlbedoData.size());
+
+    // SCANeR (osgEarth) one-click import files referencing the products above
+    writeScanerEarthFiles(dir, mergedExt);
+}
+
+// ============================================================
+// SCANeR (osgEarth) .earth emitter — implementation in
+// EarthFileWriter.hpp (header-only, shared with the test target)
+// ============================================================
+
+#include "EarthFileWriter.hpp"
+
+void ExportEngine::writeScanerEarthFiles(const QString& dir,
+                                         const terrain::RasterExtent& ext) {
+    const bool hasDem = QFileInfo::exists(dir + "/heightmap_merged.tif");
+    const bool hasAlbedoTif = QFileInfo::exists(dir + "/albedo_merged.tif");
+    const bool hasAlbedoPng = QFileInfo::exists(dir + "/albedo_merged.png");
+    if (!hasDem && !hasAlbedoTif && !hasAlbedoPng) return;
+
+    QString base = QDir(dir).dirName();
+    if (base.isEmpty()) base = QStringLiteral("terrain");
+    const QString imagePath = hasAlbedoTif ? QStringLiteral("albedo_merged.tif")
+                            : hasAlbedoPng ? QStringLiteral("albedo_merged.png")
+                            : QString();
+    const QString heightPath = hasDem ? QStringLiteral("heightmap_merged.tif") : QString();
+
+    if (terrain::writeEarthFile(dir + "/" + base + ".earth", ext, imagePath, heightPath))
+        m_log.info("SCANeR .earth written:", base + ".earth");
+    else
+        m_log.warn("Failed to write SCANeR .earth:", dir);
 }
 

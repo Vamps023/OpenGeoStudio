@@ -18,6 +18,8 @@
 //
 
 #include <cmath>
+#include <sstream>
+#include <string>
 #include <QString>
 
 namespace osm {
@@ -92,6 +94,35 @@ public:
             toGeoUTM(x, y, outLat, outLon);
             break;
         }
+    }
+
+    // ─── PROJ string ───
+    // Standard PROJ definition of the local coordinate system, such that
+    // proj(lat, lon) == toLocal(lat, lon). Embedded in OpenDRIVE exports
+    // (<geoReference>) so simulators (SCANeR, esmini, odrviewer) can
+    // geolocate the road network on the map.
+    std::string projString() const {
+        std::ostringstream p;
+        p << std::fixed << std::setprecision(9);
+        if (method == Method::UTM) {
+            // Local coords = absolute UTM minus the reference origin.
+            // Encode that shift as false easting/northing so the PROJ
+            // transform reproduces toLocal() exactly.
+            double refE, refN;
+            latLonToUTM(refLat, refLon, utmZone, utmNorthern, refE, refN);
+            const double centralMeridian = (utmZone - 1) * 6.0 - 180.0 + 3.0;
+            p << "+proj=tmerc +lat_0=0 +lon_0=" << centralMeridian
+              << " +k_0=0.9996 +x_0=" << (500000.0 - refE)
+              << " +y_0=" << (-refN)
+              << " +ellps=WGS84 +units=m +no_defs";
+        } else {
+            // Equirectangular with latitude-corrected X. R = 6378137 matches
+            // toLocalEquirectangular's metersPerDegree (2*pi*6378137/360).
+            p << "+proj=eqc +lat_ts=" << refLat << " +lat_0=" << refLat
+              << " +lon_0=" << refLon
+              << " +a=6378137 +ellps=WGS84 +units=m +no_defs";
+        }
+        return p.str();
     }
 
 private:

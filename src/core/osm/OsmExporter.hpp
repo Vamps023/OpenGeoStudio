@@ -60,13 +60,37 @@ public:
         std::ostringstream xml;
         xml << std::fixed << std::setprecision(6);
 
-        // Header
+        // Header — revMinor 1.6: the newest OpenDRIVE version widely
+        // supported by simulators (SCANeR's importer accepts 1.4–1.6).
+        // All tags we emit are 1.4-era, so 1.6 is valid.
         xml << "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
         xml << "<OpenDRIVE>\n";
-        xml << "  <header revMajor=\"1\" revMinor=\"7\" name=\"OSM Export\""
-            << " version=\"1.00\" north=\"0\" south=\"0\" east=\"0\" west=\"0\">\n";
-        xml << "    <geoReference refLat=\"" << converter.refLat
-            << "\" refLon=\"" << converter.refLon << "\"/>\n";
+
+        // Bounding box in local meters, sampled along road centerlines
+        double minX = 0, minY = 0, maxX = 0, maxY = 0;
+        bool hasBounds = false;
+        for (const auto& road : network.roads) {
+            const double total = road.totalLength();
+            if (total <= 0) continue;
+            for (int i = 0; i <= 16; ++i) {
+                const geo::Point2D p = road.geometry().positionAt(total * double(i) / 16.0);
+                if (!hasBounds) {
+                    minX = maxX = p.x; minY = maxY = p.y; hasBounds = true;
+                } else {
+                    minX = std::min(minX, p.x); maxX = std::max(maxX, p.x);
+                    minY = std::min(minY, p.y); maxY = std::max(maxY, p.y);
+                }
+            }
+        }
+        xml << "  <header revMajor=\"1\" revMinor=\"6\" name=\"OSM Export\""
+            << " version=\"1.00\""
+            << " north=\"" << (hasBounds ? maxY : 0.0)
+            << "\" south=\"" << (hasBounds ? minY : 0.0)
+            << "\" east=\"" << (hasBounds ? maxX : 0.0)
+            << "\" west=\"" << (hasBounds ? minX : 0.0) << "\">\n";
+        // Standard PROJ geoReference — lets SCANeR / esmini / odrviewer
+        // geolocate the network. projString() matches toLocal() exactly.
+        xml << "    <geoReference><![CDATA[" << converter.projString() << "]]></geoReference>\n";
         xml << "  </header>\n";
 
         // Build road ID → index map

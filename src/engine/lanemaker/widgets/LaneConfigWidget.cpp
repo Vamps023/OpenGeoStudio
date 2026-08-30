@@ -520,7 +520,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
     laneWidthSpinner->setValue(LM::LaneWidth);
     laneWidthSpinner->setSuffix("m");
     laneWidthSpinner->setToolTip("Lane width in meters");
-    laneWidthSpinner->setFixedWidth(70);
+    laneWidthSpinner->setMinimumWidth(95); // "3.25 m" + spin buttons must fit
 
     // Speed limit spinner (20-150 km/h)
     speedLimitSpinner->setRange(20, 150);
@@ -528,7 +528,7 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
     speedLimitSpinner->setValue(50);
     speedLimitSpinner->setSuffix(" km/h");
     speedLimitSpinner->setToolTip("Road speed limit");
-    speedLimitSpinner->setFixedWidth(85);
+    speedLimitSpinner->setMinimumWidth(120); // "50.00 km/h" + spin buttons must fit
 
     // Profile combo — populated later by PopulateRoadProfiles/PopulateRailProfiles
     profileCombo->setToolTip("Select a road profile preset — sets lanes, width, speed, sidewalk, curb");
@@ -553,17 +553,21 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         layout->setContentsMargins(8, 8, 8, 8);
         layout->setSpacing(6);
 
-        // ── Profile section ──
-        auto* profileRow = new QHBoxLayout;
-        profileRow->setSpacing(4);
-        auto* pLabel = new QLabel("Preset:");
-        pLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px; font-weight: bold;")));
-        profileRow->addWidget(pLabel);
-        profileRow->addWidget(profileCombo, 1);
-        layout->addLayout(profileRow);
+        // ── Profile section (only when this instance owns the presets;
+        // the DrawOptionDialog instance doesn't — dead empty combo otherwise) ──
+        if (hasProfileSelector)
+        {
+            auto* profileRow = new QHBoxLayout;
+            profileRow->setSpacing(4);
+            auto* pLabel = new QLabel("Preset:");
+            pLabel->setStyleSheet(ogs::theme::resolveTokens(QStringLiteral("color: %TextMuted%; font-size: 11px; font-weight: bold;")));
+            profileRow->addWidget(pLabel);
+            profileRow->addWidget(profileCombo, 1);
+            layout->addLayout(profileRow);
 
-        // Modified indicator
-        layout->addWidget(modifiedLabel);
+            // Modified indicator
+            layout->addWidget(modifiedLabel);
+        }
 
         // ── Cross-section visual ──
         layout->addWidget(visual, 1, Qt::AlignHCenter);
@@ -600,13 +604,16 @@ LaneConfigWidget::LaneConfigWidget(bool verticalLayout, bool showProfileSelector
         metaRow->addStretch(1);
         layout->addLayout(metaRow);
 
-        // ── Reset / Save row ──
-        auto* actionRow = new QHBoxLayout;
-        actionRow->setSpacing(4);
-        actionRow->addStretch(1);
-        actionRow->addWidget(resetButton);
-        actionRow->addWidget(savePresetButton);
-        layout->addLayout(actionRow);
+        // ── Reset / Save row (preset operations — need a profile selector) ──
+        if (hasProfileSelector)
+        {
+            auto* actionRow = new QHBoxLayout;
+            actionRow->setSpacing(4);
+            actionRow->addStretch(1);
+            actionRow->addWidget(resetButton);
+            actionRow->addWidget(savePresetButton);
+            layout->addLayout(actionRow);
+        }
     }
     else
     {

@@ -12,6 +12,8 @@
 
 #include "RasterWriter.hpp"
 #include "TerrainTypes.hpp"
+#include "EarthFileWriter.hpp"
+#include <QFile>
 
 // Register GeoTIFF tags for reading (same as in RasterWriter.cpp)
 static const TIFFFieldInfo kReadFieldInfo[] = {
@@ -189,6 +191,55 @@ int main(int argc, char* argv[]) {
         terrain::normalizeImageryZoom(22) != 19) {
         std::cerr << "Imagery zoom normalization failed" << std::endl;
         ++failures;
+    }
+
+    // Test: SCANeR .earth emitter
+    {
+        terrain::RasterExtent ext;
+        ext.west = 500000; ext.east = 502000;
+        ext.south = 5600000; ext.north = 5602000;
+        ext.crsMode = terrain::GeoCrsMode::UTM;
+        ext.utmEpsg = 32615;
+
+        QString earthPath = QDir::tempPath() + "/test_scaner.earth";
+        QFile::remove(earthPath);
+        const bool ok = terrain::writeEarthFile(earthPath, ext,
+                                                QStringLiteral("albedo_merged.tif"),
+                                                QStringLiteral("heightmap_merged.tif"));
+        if (!ok) { std::cerr << ".earth write FAILED" << std::endl; ++failures; }
+        else {
+            QFile f(earthPath);
+            QString content;
+            if (f.open(QIODevice::ReadOnly)) content = QString::fromUtf8(f.readAll());
+            const bool hasSrs = content.contains(QStringLiteral("epsg:32615"));
+            const bool hasHeight = content.contains(QStringLiteral("<heightfield driver=\"gdal\"")) &&
+                                   content.contains(QStringLiteral("heightmap_merged.tif"));
+            const bool hasImage = content.contains(QStringLiteral("albedo_merged.tif"));
+            const bool projected = content.contains(QStringLiteral("<map type=\"projected\""));
+            std::cerr << ".earth UTM  srs:" << (hasSrs ? "OK" : "FAIL")
+                      << " heightfield:" << (hasHeight ? "OK" : "FAIL")
+                      << " imagery:" << (hasImage ? "OK" : "FAIL")
+                      << " projected:" << (projected ? "OK" : "FAIL") << std::endl;
+            if (!(hasSrs && hasHeight && hasImage && projected)) ++failures;
+        }
+        QFile::remove(earthPath);
+
+        // WGS84 → geographic map, empty image file → no <image> block
+        terrain::RasterExtent wgs = ext;
+        wgs.crsMode = terrain::GeoCrsMode::WGS84;
+        wgs.west = -95.38; wgs.east = -95.33; wgs.south = 29.72; wgs.north = 29.77;
+        QString p2 = QDir::tempPath() + "/test_scaner_wgs.earth";
+        terrain::writeEarthFile(p2, wgs, QString(), QStringLiteral("heightmap_merged.tif"));
+        QFile f2(p2);
+        QString c2;
+        if (f2.open(QIODevice::ReadOnly)) c2 = QString::fromUtf8(f2.readAll());
+        const bool geo = c2.contains(QStringLiteral("<map type=\"geographic\"")) &&
+                         c2.contains(QStringLiteral("epsg:4326"));
+        const bool noImage = !c2.contains(QStringLiteral("<image "));
+        std::cerr << ".earth WGS84 geographic:" << (geo ? "OK" : "FAIL")
+                  << " image-omitted:" << (noImage ? "OK" : "FAIL") << std::endl;
+        if (!(geo && noImage)) ++failures;
+        QFile::remove(p2);
     }
 
     std::cerr << "\n=== Done ===" << std::endl;
