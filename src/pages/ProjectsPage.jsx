@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { FolderOpen, Layers, Map as MapIcon, Plus, Route } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Route, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import LogoMark from '@/components/layout/LogoMark'
 import { Badge } from '@/components/ui/badge'
@@ -28,8 +29,17 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
   const projects = useStore((s) => s.projects)
   const createProject = useStore((s) => s.createProject)
   const openProject = useStore((s) => s.openProject)
+  const refreshProjects = useStore((s) => s.refreshProjects)
+  const deleteProject = useStore((s) => s.deleteProject)
+  const workspacePath = useStore((s) => s.workspacePath)
   const [name, setName] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+
+  // Load projects from C:\OpenGeoStudio on mount
+  useEffect(() => {
+    void refreshProjects()
+  }, [refreshProjects])
 
   function handleCreate(event) {
     event.preventDefault()
@@ -49,6 +59,14 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
     onOpenTerrain()
   }
 
+  async function handleDelete() {
+    if (!deleteTarget) return
+    const projectName = deleteTarget.name
+    await deleteProject(deleteTarget.id)
+    setDeleteTarget(null)
+    toast.success('Project deleted', { description: projectName })
+  }
+
   return (
     <main className="relative min-h-screen bg-background">
       {/* Ambient background */}
@@ -66,6 +84,12 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
                 OpenGeoStudio
               </p>
               <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+              {workspacePath && (
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <HardDrive className="size-3" />
+                  {workspacePath}
+                </p>
+              )}
             </div>
           </div>
 
@@ -158,12 +182,45 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
                     <MapIcon className="size-4" />
                     Terrain
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="px-2 text-muted-foreground hover:text-destructive"
+                    onClick={() => setDeleteTarget(project)}
+                    title="Delete project"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
                 </CardFooter>
               </Card>
             ))}
           </div>
         )}
       </div>
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{deleteTarget?.name}</strong>?
+              This will permanently remove the project folder and all exported terrain files from{' '}
+              <code className="rounded bg-muted px-1 text-xs">C:\OpenGeoStudio</code>.
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDelete}>
+              <Trash2 className="size-4" />
+              Delete Project
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

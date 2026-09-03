@@ -53,6 +53,8 @@ interface OgsExportTile {
 interface OgsExportOptions {
   bounds: GeoBounds
   outputPath?: string
+  projectId?: string
+  projectName?: string
   demSource?: DEMProvider
   imagerySource?: ImagerySource
   heightmapFormat?: HeightmapFormat
@@ -76,7 +78,35 @@ interface OgsExportResult {
   files?: Record<string, string>
 }
 
+interface OgsProjectSaveResult {
+  success: boolean
+  error?: string
+  projectDir?: string
+  exportsDir?: string
+  projectFile?: string
+}
+
+interface OgsProjectLoadResult {
+  success: boolean
+  error?: string
+  project?: Record<string, unknown>
+  projectDir?: string
+}
+
+interface OgsProjectListResult {
+  success: boolean
+  error?: string
+  projects?: Array<Record<string, unknown> & { dirName: string; projectDir: string }>
+}
+
+interface OgsWorkspacePathResult {
+  success: boolean
+  workspacePath?: string
+  projectsPath?: string
+}
+
 interface OgsBridge {
+  // ── Terrain ──
   downloadTerrain: (
     bounds: GeoBounds,
     options?: OgsTerrainDownloadOptions,
@@ -91,6 +121,16 @@ interface OgsBridge {
   ) => Promise<{ success: boolean; error?: string; path?: string }>
   exportTerrain: (options: OgsExportOptions) => Promise<OgsExportResult>
   onExportProgress: (callback: (p: { stage: string; current: number; total: number; message: string }) => void) => () => void
+
+  // ── Project files ──
+  saveProject: (project: Record<string, unknown>) => Promise<OgsProjectSaveResult>
+  loadProject: (projectId: string, projectName: string) => Promise<OgsProjectLoadResult>
+  listProjects: () => Promise<OgsProjectListResult>
+  deleteProject: (projectId: string, projectName: string) => Promise<{ success: boolean; error?: string }>
+  getExportsDir: (projectId: string, projectName: string) => Promise<{ success: boolean; exportsDir?: string; projectDir?: string; error?: string }>
+
+  // ── Workspace ──
+  getWorkspacePath: () => Promise<OgsWorkspacePathResult>
 }
 
 interface Window {

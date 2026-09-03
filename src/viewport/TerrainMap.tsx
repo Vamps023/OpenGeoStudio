@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { Map as MapLibreMap, NavigationControl, ScaleControl, Point, GeoJSONSource, setWorkerUrl } from 'maplibre-gl'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { Map as MapLibreMap, NavigationControl, ScaleControl, Point, setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { GeoBounds } from '../engine/crs'
@@ -19,10 +19,12 @@ interface Props {
   gridVisible: boolean
 }
 
-const TILEGRID_SOURCE = 'tilegrid-source'
-const TILEGRID_FILL = 'tilegrid-fill'
-const TILEGRID_OUTLINE = 'tilegrid-outline'
-const TILEGRID_LABEL = 'tilegrid-label'
+interface PixelRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 export default function TerrainMap({
   onBoundsSelected,
@@ -37,18 +39,21 @@ export default function TerrainMap({
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const liveBoundsRef = useRef<GeoBounds | null>(null)
-  // Pixel rect of the in-progress drag — rendered as a DOM overlay so the
-  // selection is always visible, regardless of MapLibre source/layer timing.
   const [liveRectPx, setLiveRectPx] = useState<{ x: number; y: number; size: number } | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
+  // Pixel rects for each tile, recomputed on every map move/zoom
+  const [tileRects, setTileRects] = useState<{ key: string; row: number; col: number; rect: PixelRect }[]>([])
+  // Selection rectangle in pixels (for the confirmed selection)
+  const [selectionRect, setSelectionRect] = useState<PixelRect | null>(null)
+
   const onBoundsSelectedRef = useRef(onBoundsSelected)
   onBoundsSelectedRef.current = onBoundsSelected
 
-  // Keep latest tile toggle callback in a ref so the click handler doesn't need to re-bind
   const onToggleTileRef = useRef(onToggleTile)
   onToggleTileRef.current = onToggleTile
 
+  // ─── Map creation (runs once) ────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
 
@@ -79,12 +84,18 @@ export default function TerrainMap({
       },
       center: [-112.1129, 36.1069],
       zoom: 11,
+      minZoom: 2,
       maxZoom: 22,
+      maxPitch: 0,        // top-down only — no tilt
+      dragRotate: false,  // no right-click drag rotation
+      touchPitch: false,  // no touch tilt
+      dragPitch: false,   // no drag tilt
+      keyboardRotate: false,
       attributionControl: false,
     })
 
     map.boxZoom.disable()
-    map.addControl(new NavigationControl(), 'top-right')
+    map.addControl(new NavigationControl({ visualizePitch: false }), 'top-right')
     map.addControl(new ScaleControl(), 'bottom-left')
     map.on('load', () => {
       setMapReady(true)
@@ -94,23 +105,22 @@ export default function TerrainMap({
       const message = (event as { error?: { message?: string } }).error?.message
       setMapError(message || 'The map failed to load')
     })
-    // If the container settled its layout after mount, make sure the canvas matches
+
     const resizeTimer = window.setTimeout(() => {
       if (mapRef.current === map) map.resize()
     }, 150)
 
-    // Debug handle for diagnostics (used by OGS_TEST end-to-end runs)
     ;(window as unknown as Record<string, unknown>).__ogsMap = map
 
     const canvas = map.getCanvas()
     const container = containerRef.current!
 
-    // Coords helper — works regardless of pointer events captured by MapLibre
     const canvasPoint = (clientX: number, clientY: number) => {
       const r = canvas.getBoundingClientRect()
       return { x: clientX - r.left, y: clientY - r.top }
     }
 
+    // ── Shift+drag square selection ──
     const onMouseDown = (e: MouseEvent) => {
       if (!e.shiftKey) return
       e.preventDefault()
@@ -146,7 +156,6 @@ export default function TerrainMap({
         north: Math.max(startLngLat.lat, endLngLat.lat),
       }
       liveBoundsRef.current = bounds
-      // Live pixel rect for the DOM overlay (drawn at the smallest enclosing square)
       const left = Math.min(start.x, endX)
       const top = Math.min(start.y, endY)
       setLiveRectPx({ x: left, y: top, size })
@@ -166,9 +175,6 @@ export default function TerrainMap({
       setLiveRectPx(null)
     }
 
-    // Bind to the container, not the canvas — MapLibre's pointer handling
-    // can swallow events on the canvas itself, but the wrapper div always
-    // receives them and we can still derive canvas-local coords above.
     container.addEventListener('mousedown', onMouseDown)
     container.addEventListener('mousemove', onMouseMove)
     container.addEventListener('mouseup', onMouseUp)
@@ -185,233 +191,161 @@ export default function TerrainMap({
       container.removeEventListener('mousemove', onMouseMove)
       container.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('mouseup', onMouseUp)
+      clearTimeout(resizeTimer)
       map.remove()
       mapRef.current = null
     }
   }, [])
 
-  // ─── Selection rectangle overlay ─────────────────────────────
+  // ─── Recompute pixel rects on map move/zoom ──────────────────
+  const recomputeRects = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    // Don't try to project before the map is ready
+    if (!map.getCanvas().width) return
+
+    // Selection rectangle
+    if (selectedBounds) {
+      const nw = map.project([selectedBounds.west, selectedBounds.north])
+      const se = map.project([selectedBounds.east, selectedBounds.south])
+      setSelectionRect({
+        left: nw.x,
+        top: nw.y,
+        width: Math.abs(se.x - nw.x),
+        height: Math.abs(se.y - nw.y),
+      })
+    } else {
+      setSelectionRect(null)
+    }
+
+    // Tile grid rectangles
+    if (tileGrid && gridVisible) {
+      const rects: { key: string; row: number; col: number; rect: PixelRect }[] = []
+      for (const tile of tileGrid.tiles) {
+        const nw = map.project([tile.bounds.west, tile.bounds.north])
+        const se = map.project([tile.bounds.east, tile.bounds.south])
+        rects.push({
+          key: `${tile.row},${tile.col}`,
+          row: tile.row,
+          col: tile.col,
+          rect: {
+            left: nw.x,
+            top: nw.y,
+            width: Math.abs(se.x - nw.x),
+            height: Math.abs(se.y - nw.y),
+          },
+        })
+      }
+      setTileRects(rects)
+    } else {
+      setTileRects([])
+    }
+  }, [selectedBounds, tileGrid, gridVisible])
+
+  // Recompute on load and when bounds/grid/visibility change (not on every move frame)
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
-    function ensureSelectionLayer() {
-      if (map.getSource('selection')) return
-      map.addSource('selection', {
-        type: 'geojson',
-        data: { type: 'Feature', geometry: { type: 'Polygon', coordinates: [] }, properties: {} },
-      })
-      map.addLayer({
-        id: 'selection',
-        type: 'fill',
-        source: 'selection',
-        paint: { 'fill-color': '#4ade80', 'fill-opacity': 0.08 },
-      })
-      map.addLayer({
-        id: 'selection-outline',
-        type: 'line',
-        source: 'selection',
-        paint: { 'line-color': '#4ade80', 'line-width': 2 },
-      })
+    const onLoad = () => recomputeRects()
+    const onMoveEnd = () => recomputeRects()
+    // Use 'render' for smooth updates during zoom — it fires after each frame
+    // but is less noisy than 'move'
+    const onRender = () => {
+      if (map.isMoving() || map.isZooming()) recomputeRects()
     }
 
-    function updateSelection() {
-      const bounds = selectedBounds
-      if (!map.loaded()) return
-      try {
-        ensureSelectionLayer()
-      } catch {
-        return
-      }
-      if (!bounds) {
-        map.setLayoutProperty('selection', 'visibility', 'none')
-        map.setLayoutProperty('selection-outline', 'visibility', 'none')
-        return
-      }
-      map.setLayoutProperty('selection', 'visibility', 'visible')
-      map.setLayoutProperty('selection-outline', 'visibility', 'visible')
-      const coords = [
-        [
-          [bounds.west, bounds.south],
-          [bounds.east, bounds.south],
-          [bounds.east, bounds.north],
-          [bounds.west, bounds.north],
-          [bounds.west, bounds.south],
-        ],
-      ]
-      ;(map.getSource('selection') as GeoJSONSource).setData({
-        type: 'Feature',
-        geometry: { type: 'Polygon', coordinates: coords },
-        properties: {},
-      })
+    map.on('load', onLoad)
+    map.on('moveend', onMoveEnd)
+    map.on('render', onRender)
+
+    // Try immediately
+    recomputeRects()
+
+    return () => {
+      map.off('load', onLoad)
+      map.off('moveend', onMoveEnd)
+      map.off('render', onRender)
     }
-
-    if (map.loaded()) {
-      updateSelection()
-    } else {
-      map.once('load', updateSelection)
-    }
-  }, [selectedBounds])
-
-  // ─── Tile grid overlay ───────────────────────────────────────
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-
-    function applyTileGrid() {
-      if (!map.loaded()) return
-
-      // No grid → remove layers if they exist
-      if (!tileGrid) {
-        try {
-          if (map.getLayer(TILEGRID_FILL)) map.removeLayer(TILEGRID_FILL)
-          if (map.getLayer(TILEGRID_OUTLINE)) map.removeLayer(TILEGRID_OUTLINE)
-          if (map.getLayer(TILEGRID_LABEL)) map.removeLayer(TILEGRID_LABEL)
-          if (map.getSource(TILEGRID_SOURCE)) map.removeSource(TILEGRID_SOURCE)
-        } catch {
-          // ignore
-        }
-        return
-      }
-
-      const features = tileGrid.tiles.map((tile) => {
-        const key = `${tile.row},${tile.col}`
-        const isSelected = selectedTiles.has(key)
-        return {
-          type: 'Feature' as const,
-          geometry: {
-            type: 'Polygon' as const,
-            coordinates: [
-              [
-                [tile.bounds.west, tile.bounds.south],
-                [tile.bounds.east, tile.bounds.south],
-                [tile.bounds.east, tile.bounds.north],
-                [tile.bounds.west, tile.bounds.north],
-                [tile.bounds.west, tile.bounds.south],
-              ],
-            ],
-          },
-          properties: {
-            row: tile.row,
-            col: tile.col,
-            selected: isSelected ? 1 : 0,
-            label: `${tile.row},${tile.col}`,
-          },
-        }
-      })
-
-      const geojson = { type: 'FeatureCollection' as const, features }
-
-      if (!map.getSource(TILEGRID_SOURCE)) {
-        map.addSource(TILEGRID_SOURCE, { type: 'geojson', data: geojson })
-        map.addLayer({
-          id: TILEGRID_FILL,
-          type: 'fill',
-          source: TILEGRID_SOURCE,
-          paint: {
-            'fill-color': '#06b6d4',
-            'fill-opacity': ['case', ['==', ['get', 'selected'], 1], 0.25, 0.03],
-          },
-        })
-        map.addLayer({
-          id: TILEGRID_OUTLINE,
-          type: 'line',
-          source: TILEGRID_SOURCE,
-          paint: {
-            'line-color': ['case', ['==', ['get', 'selected'], 1], '#06b6d4', '#666'],
-            'line-width': ['case', ['==', ['get', 'selected'], 1], 2, 1],
-            'line-dasharray': [4, 2],
-          },
-        })
-        map.addLayer({
-          id: TILEGRID_LABEL,
-          type: 'symbol',
-          source: TILEGRID_SOURCE,
-          layout: {
-            'text-field': ['get', 'label'],
-            'text-size': 11,
-            'text-anchor': 'center',
-          },
-          paint: {
-            'text-color': ['case', ['==', ['get', 'selected'], 1], '#06b6d4', '#888'],
-            'text-halo-color': '#000',
-            'text-halo-width': 1,
-          },
-        })
-
-        // Click to toggle tile selection
-        const handleClick = (e: { features?: Array<{ properties?: Record<string, unknown> }> }) => {
-          if (!e.features || e.features.length === 0) return
-          const props = e.features[0].properties
-          if (!props) return
-          const row = props.row as number
-          const col = props.col as number
-          onToggleTileRef.current(row, col)
-        }
-        const handleMouseEnter = () => {
-          map.getCanvas().style.cursor = 'pointer'
-        }
-        const handleMouseLeave = () => {
-          map.getCanvas().style.cursor = ''
-        }
-        map.on('click', TILEGRID_FILL, handleClick)
-        map.on('mouseenter', TILEGRID_FILL, handleMouseEnter)
-        map.on('mouseleave', TILEGRID_FILL, handleMouseLeave)
-      } else {
-        ;(map.getSource(TILEGRID_SOURCE) as GeoJSONSource).setData(geojson)
-      }
-    }
-
-    if (map.loaded()) {
-      applyTileGrid()
-    } else {
-      map.once('load', applyTileGrid)
-    }
-  }, [tileGrid, selectedTiles])
-
-  // ─── Tile grid visibility toggle ─────────────────────────────
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    const visibility = gridVisible ? 'visible' : 'none'
-    function applyVis() {
-      try {
-        if (map.getLayer(TILEGRID_FILL)) map.setLayoutProperty(TILEGRID_FILL, 'visibility', visibility)
-        if (map.getLayer(TILEGRID_OUTLINE)) map.setLayoutProperty(TILEGRID_OUTLINE, 'visibility', visibility)
-        if (map.getLayer(TILEGRID_LABEL)) map.setLayoutProperty(TILEGRID_LABEL, 'visibility', visibility)
-      } catch {
-        // ignore
-      }
-    }
-    if (map.loaded()) {
-      applyVis()
-    } else {
-      map.once('load', applyVis)
-    }
-  }, [gridVisible])
+  }, [recomputeRects])
 
   return (
     <div className="terrain-map-container">
       <div ref={containerRef} className="terrain-map-canvas" />
-      {/* Live drag selection rectangle (DOM overlay) */}
+
+      {/* ─── Confirmed selection rectangle (DOM overlay) ─── */}
+      {selectionRect && !liveRectPx && (
+        <div
+          className="pointer-events-none absolute border-2 border-green-400 bg-green-400/10"
+          style={{
+            left: selectionRect.left,
+            top: selectionRect.top,
+            width: selectionRect.width,
+            height: selectionRect.height,
+            zIndex: 5,
+            willChange: 'left, top, width, height',
+          }}
+        />
+      )}
+
+      {/* ─── Live drag selection rectangle (DOM overlay) ─── */}
       {liveRectPx && (
         <div
-          className="pointer-events-none absolute z-20 border-2 border-green-400 bg-green-400/15"
+          className="pointer-events-none absolute border-2 border-green-400 bg-green-400/15"
           style={{
             left: liveRectPx.x,
             top: liveRectPx.y,
             width: liveRectPx.size,
             height: liveRectPx.size,
+            zIndex: 20,
           }}
         />
       )}
+
+      {/* ─── Tile grid (DOM overlay) ─── */}
+      {gridVisible && tileRects.map(({ key, row, col, rect }) => {
+        const isSelected = selectedTiles.has(key)
+        return (
+          <div
+            key={key}
+            className="absolute cursor-pointer"
+            style={{
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              height: rect.height,
+              border: `${isSelected ? 2 : 1}px solid ${isSelected ? '#06b6d4' : 'rgba(102, 102, 102, 0.7)'}`,
+              backgroundColor: isSelected ? 'rgba(6, 182, 212, 0.25)' : 'rgba(6, 182, 212, 0.04)',
+              zIndex: 10,
+              willChange: 'left, top, width, height',
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleTileRef.current(row, col)
+            }}
+            title={`Tile ${row},${col}`}
+          >
+            <span
+              className="pointer-events-none absolute left-1 top-0.5 text-[10px] font-medium select-none"
+              style={{
+                color: isSelected ? '#06b6d4' : 'rgba(136, 136, 136, 0.9)',
+                textShadow: '0 0 3px #000, 0 0 3px #000',
+              }}
+            >
+              {row},{col}
+            </span>
+          </div>
+        )
+      })}
+
+      {/* ─── Status overlays ─── */}
       {!mapReady && !mapError && (
-        <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-border bg-card/85 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-lg backdrop-blur">
+        <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full border border-border bg-card/85 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-lg backdrop-blur" style={{ zIndex: 30 }}>
           Loading map…
         </div>
       )}
       {mapError && (
-        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-lg backdrop-blur">
+        <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-lg backdrop-blur" style={{ zIndex: 30 }}>
           Map error: {mapError}
         </div>
       )}

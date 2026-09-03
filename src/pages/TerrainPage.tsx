@@ -220,6 +220,8 @@ export default function TerrainPage({ onBack }: { onBack: () => void }) {
 
       const result = await window.ogs.exportTerrain({
         bounds: selectedBounds,
+        projectId: project?.id,
+        projectName: project?.name,
         demSource: demProvider,
         imagerySource,
         heightmapFormat,
@@ -238,9 +240,11 @@ export default function TerrainPage({ onBack }: { onBack: () => void }) {
         setError(result.error || 'Export failed')
         toast.error('Export failed', { description: result.error || undefined })
       } else {
-        setProgress(`Export complete → ${result.files?.heightmap || ''} ${result.files?.albedo || ''}`.trim())
+        const manifestPath = result.manifestPath || ''
+        const fileList = Object.values(result.files || {}).filter(Boolean)
+        setProgress(`Export complete → ${manifestPath}`)
         toast.success('Export complete', {
-          description: [result.files?.heightmap, result.files?.albedo].filter(Boolean).join(' · ') || undefined,
+          description: manifestPath || (fileList.length > 0 ? fileList.join(' · ') : undefined),
         })
       }
     } catch (err) {

@@ -5,9 +5,6 @@
 
 const fs = require('node:fs/promises')
 const path = require('node:path')
-const { downloadTerrainDEM } = require('./demDownloader.cjs')
-const { downloadImagery } = require('./imageryDownloader.cjs')
-const { writeHeightmap, writeAlbedo, computeElevationMetadata } = require('./formatWriter.cjs')
 
 function resolveCRS(crsSource, bounds) {
   const crs = crsSource || 'EPSG:4326'
@@ -61,6 +58,12 @@ function getAlbedoExtension(format) {
  *   onProgress       — callback({ stage, current, total, message })
  */
 async function executeExport(options) {
+  // Lazy-load modules inside the function so a load failure doesn't
+  // crash the entire Electron main process at startup.
+  const { downloadTerrainDEM } = require('./demDownloader.cjs')
+  const { downloadImagery: fetchImagery } = require('./imageryDownloader.cjs')
+  const { writeHeightmap, writeAlbedo, computeElevationMetadata } = require('./formatWriter.cjs')
+
   const {
     bounds,
     outputPath,
@@ -83,6 +86,10 @@ async function executeExport(options) {
 
   if (!outputPath) throw new Error('outputPath is required')
   await fs.mkdir(outputPath, { recursive: true })
+  console.log('[exportEngine] Output directory:', outputPath)
+  console.log('[exportEngine] CRS:', crs, '| DEM:', demSource, '| Imagery:', imagerySource)
+  console.log('[exportEngine] Heightmap:', heightmapFormat, heightmapSize, '| Albedo:', albedoFormat, albedoSize)
+  console.log('[exportEngine] Tiles to export:', tiles ? tiles.length : 1)
 
   const heightmapExt = getHeightmapExtension(heightmapFormat)
   const albedoExt = getAlbedoExtension(albedoFormat)
@@ -106,6 +113,7 @@ async function executeExport(options) {
 
     // ── Download + write heightmap ───────────────────────────
     if (downloadDem && heightmapFormat !== 'none') {
+      console.log('[exportEngine] Downloading DEM for tile', tile.row, tile.col, 'with', demSource)
       onProgress({ stage: 'download_dem', current: 0, total: 1, message: `Downloading DEM for tile ${tile.row},${tile.col}...` })
       const dem = await downloadTerrainDEM(tile.bounds, {
         provider: demSource,
@@ -113,6 +121,7 @@ async function executeExport(options) {
         targetSize: heightmapSize,
         onProgress: (p) => onProgress({ stage: 'download_dem', ...p }),
       })
+      console.log('[exportEngine] DEM downloaded:', dem.width, 'x', dem.height, 'min:', dem.minElevation, 'max:', dem.maxElevation)
       const meta = computeElevationMetadata(dem.elevations)
       if (meta.min < elevationMeta.min || elevationMeta.min === 0) elevationMeta.min = meta.min
       if (meta.max > elevationMeta.max) elevationMeta.max = meta.max
@@ -120,19 +129,22 @@ async function executeExport(options) {
       onProgress({ stage: 'write_heightmap', current: 0, total: 1, message: `Writing ${heightmapFormat} heightmap...` })
       const heightmapPath = path.join(outputPath, heightmapFile)
       await writeHeightmap(dem.elevations, dem.width, dem.height, tile.bounds, heightmapFormat, heightmapPath, compression, crs)
+      console.log('[exportEngine] Heightmap written:', heightmapPath)
       allFiles[`tile_${tile.row}_${tile.col}_heightmap`] = heightmapPath
       onProgress({ stage: 'write_heightmap', current: 1, total: 1, message: 'Heightmap written.' })
     }
 
     // ── Download + write albedo ──────────────────────────────
     if (downloadImagery && albedoFormat !== 'none') {
+      console.log('[exportEngine] Downloading imagery for tile', tile.row, tile.col, 'with', imagerySource)
       onProgress({ stage: 'download_imagery', current: 0, total: 1, message: `Downloading imagery for tile ${tile.row},${tile.col}...` })
-      const img = await downloadImagery(tile.bounds, {
+      const img = await fetchImagery(tile.bounds, {
         source: imagerySource,
         apiKey: imageryApiKey,
         targetSize: albedoSize,
         onProgress: (p) => onProgress({ stage: 'download_imagery', ...p }),
       })
+      console.log('[exportEngine] Imagery downloaded:', img.width, 'x', img.height)
 
       onProgress({ stage: 'write_albedo', current: 0, total: 1, message: `Writing ${albedoFormat} albedo...` })
       const albedoPath = path.join(outputPath, albedoFile)

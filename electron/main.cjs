@@ -2,9 +2,6 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron
 const path = require('node:path')
 const fs = require('node:fs')
 const { pathToFileURL } = require('node:url')
-const { writeGeoTIFF } = require('./terrain/geotiff-writer.cjs')
-const { downloadTerrainDEM } = require('./terrain/demDownloader.cjs')
-const { executeExport } = require('./terrain/exportEngine.cjs')
 
 const isDev = Boolean(process.env.OGS_DEV)
 const isTest = Boolean(process.env.OGS_TEST)
@@ -326,12 +323,131 @@ function createWindow() {
   }
 }
 
+// ─── Default workspace directory ───────────────────────────────
+const DEFAULT_WORKSPACE = 'C:\\OpenGeoStudio'
+const PROJECTS_DIR = path.join(DEFAULT_WORKSPACE, 'projects')
+
+function ensureWorkspace() {
+  try {
+    if (!fs.existsSync(DEFAULT_WORKSPACE)) fs.mkdirSync(DEFAULT_WORKSPACE, { recursive: true })
+    if (!fs.existsSync(PROJECTS_DIR)) fs.mkdirSync(PROJECTS_DIR, { recursive: true })
+  } catch (e) {
+    console.error('[ogs] Failed to create workspace directory:', e.message)
+  }
+}
+
+function sanitizeFileName(name) {
+  return name.replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 64) || 'Untitled'
+}
+
+function getProjectDir(projectId, projectName) {
+  const safeName = sanitizeFileName(projectName || 'Untitled')
+  const dirName = `${safeName}_${projectId.substring(0, 8)}`
+  return path.join(PROJECTS_DIR, dirName)
+}
+
+// ─── IPC: Project file operations ──────────────────────────────
+ipcMain.handle('project:save', async (event, project) => {
+  try {
+    ensureWorkspace()
+    const projectDir = getProjectDir(project.id, project.name)
+    const exportsDir = path.join(projectDir, 'exports')
+    if (!fs.existsSync(projectDir)) fs.mkdirSync(projectDir, { recursive: true })
+    if (!fs.existsSync(exportsDir)) fs.mkdirSync(exportsDir, { recursive: true })
+    const projectFile = path.join(projectDir, 'project.json')
+    fs.writeFileSync(projectFile, JSON.stringify(project, null, 2))
+    console.log('[ogs] Project saved:', projectFile)
+    return { success: true, projectDir, exportsDir, projectFile }
+  } catch (err) {
+    console.error('[ogs] project:save error:', err.message)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('project:load', async (event, projectId, projectName) => {
+  try {
+    ensureWorkspace()
+    const projectDir = getProjectDir(projectId, projectName)
+    const projectFile = path.join(projectDir, 'project.json')
+    if (!fs.existsSync(projectFile)) return { success: false, error: 'Project file not found' }
+    const data = fs.readFileSync(projectFile, 'utf-8')
+    const project = JSON.parse(data)
+    return { success: true, project, projectDir }
+  } catch (err) {
+    console.error('[ogs] project:load error:', err.message)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('project:list', async () => {
+  try {
+    ensureWorkspace()
+    if (!fs.existsSync(PROJECTS_DIR)) return { success: true, projects: [] }
+    const entries = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    const projects = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const projectFile = path.join(PROJECTS_DIR, entry.name, 'project.json')
+      if (!fs.existsSync(projectFile)) continue
+      try {
+        const data = JSON.parse(fs.readFileSync(projectFile, 'utf-8'))
+        projects.push({
+          ...data,
+          dirName: entry.name,
+          projectDir: path.join(PROJECTS_DIR, entry.name),
+        })
+      } catch {
+        // skip corrupt project files
+      }
+    }
+    // Sort by createdAt descending
+    projects.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+    return { success: true, projects }
+  } catch (err) {
+    console.error('[ogs] project:list error:', err.message)
+    return { success: false, error: err.message, projects: [] }
+  }
+})
+
+ipcMain.handle('project:delete', async (event, projectId, projectName) => {
+  try {
+    const projectDir = getProjectDir(projectId, projectName)
+    if (fs.existsSync(projectDir)) {
+      fs.rmSync(projectDir, { recursive: true, force: true })
+      console.log('[ogs] Project deleted:', projectDir)
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('[ogs] project:delete error:', err.message)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('project:getExportsDir', async (event, projectId, projectName) => {
+  try {
+    ensureWorkspace()
+    const projectDir = getProjectDir(projectId, projectName)
+    const exportsDir = path.join(projectDir, 'exports')
+    if (!fs.existsSync(exportsDir)) fs.mkdirSync(exportsDir, { recursive: true })
+    return { success: true, exportsDir, projectDir }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('workspace:getPath', async () => {
+  ensureWorkspace()
+  return { success: true, workspacePath: DEFAULT_WORKSPACE, projectsPath: PROJECTS_DIR }
+})
+
 // ─── IPC: Terrain download ──────────────────────────────────────
 ipcMain.handle('terrain:download', async (event, bounds, options) => {
   try {
+    const { downloadTerrainDEM } = require('./terrain/demDownloader.cjs')
     const result = await downloadTerrainDEM(bounds, options || {})
     return { success: true, data: result }
   } catch (err) {
+    console.error('[ogs] terrain:download error:', err.message)
     return { success: false, error: err.message }
   }
 })
@@ -339,6 +455,7 @@ ipcMain.handle('terrain:download', async (event, bounds, options) => {
 // ─── IPC: Save GeoTIFF ──────────────────────────────────────────
 ipcMain.handle('terrain:save-geotiff', async (event, data, options) => {
   try {
+    const { writeGeoTIFF } = require('./terrain/geotiff-writer.cjs')
     const result = await dialog.showSaveDialog({
       title: 'Save GeoTIFF',
       defaultPath: options.filename || 'terrain.tif',
@@ -349,6 +466,7 @@ ipcMain.handle('terrain:save-geotiff', async (event, data, options) => {
     fs.writeFileSync(result.filePath, buffer)
     return { success: true, path: result.filePath }
   } catch (err) {
+    console.error('[ogs] terrain:save-geotiff error:', err.message)
     return { success: false, error: err.message }
   }
 })
@@ -356,24 +474,45 @@ ipcMain.handle('terrain:save-geotiff', async (event, data, options) => {
 // ─── IPC: Export terrain (heightmap + albedo) ───────────────────
 ipcMain.handle('terrain:export', async (event, options) => {
   try {
-    // Show a directory picker if no outputPath is provided
+    const { executeExport } = require('./terrain/exportEngine.cjs')
+
+    // Determine output path:
+    // 1. If outputPath is provided, use it directly
+    // 2. If projectId/projectName is provided, use C:\OpenGeoStudio\projects\<dir>\exports\<exportName>
+    // 3. Otherwise show a directory picker
     let outputPath = options.outputPath
     if (!outputPath) {
-      const result = await dialog.showOpenDialog({
-        title: 'Select export folder',
-        properties: ['openDirectory', 'createDirectory'],
-      })
-      if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-        return { success: false, error: 'Cancelled' }
+      if (options.projectId && options.projectName) {
+        ensureWorkspace()
+        const projectDir = getProjectDir(options.projectId, options.projectName)
+        const exportsDir = path.join(projectDir, 'exports')
+        if (!fs.existsSync(exportsDir)) fs.mkdirSync(exportsDir, { recursive: true })
+        // Create a timestamped subfolder for this export
+        const ts = new Date().toISOString().replace(/[:.]/g, '-')
+        const exportName = `export_${ts}`
+        outputPath = path.join(exportsDir, exportName)
+        if (!fs.existsSync(outputPath)) fs.mkdirSync(outputPath, { recursive: true })
+        console.log('[ogs] Auto export path:', outputPath)
+      } else {
+        const result = await dialog.showOpenDialog({
+          title: 'Select export folder',
+          properties: ['openDirectory', 'createDirectory'],
+        })
+        if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+          return { success: false, error: 'Cancelled' }
+        }
+        outputPath = result.filePaths[0]
       }
-      outputPath = result.filePaths[0]
     }
 
     // Forward onProgress via event.reply on the 'terrain:export-progress' channel
     const opts = { ...options, outputPath, onProgress: (p) => event.sender.send('terrain:export-progress', p) }
+    console.log('[ogs] Starting export with options:', JSON.stringify({ ...opts, onProgress: undefined }, null, 2))
     const result = await executeExport(opts)
+    console.log('[ogs] Export complete:', result.manifestPath)
     return { success: true, ...result }
   } catch (err) {
+    console.error('[ogs] Export error:', err.message, err.stack)
     return { success: false, error: err.message }
   }
 })

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('ogs', {
+  // ── Terrain ──
   downloadTerrain: (bounds, options) => ipcRenderer.invoke('terrain:download', bounds, options),
   saveGeoTIFF: (data, options) => ipcRenderer.invoke('terrain:save-geotiff', data, options),
   exportTerrain: (options) => ipcRenderer.invoke('terrain:export', options),
@@ -9,4 +10,14 @@ contextBridge.exposeInMainWorld('ogs', {
     ipcRenderer.on('terrain:export-progress', handler)
     return () => ipcRenderer.removeListener('terrain:export-progress', handler)
   },
+
+  // ── Project files ──
+  saveProject: (project) => ipcRenderer.invoke('project:save', project),
+  loadProject: (projectId, projectName) => ipcRenderer.invoke('project:load', projectId, projectName),
+  listProjects: () => ipcRenderer.invoke('project:list'),
+  deleteProject: (projectId, projectName) => ipcRenderer.invoke('project:delete', projectId, projectName),
+  getExportsDir: (projectId, projectName) => ipcRenderer.invoke('project:getExportsDir', projectId, projectName),
+
+  // ── Workspace ──
+  getWorkspacePath: () => ipcRenderer.invoke('workspace:getPath'),
 })

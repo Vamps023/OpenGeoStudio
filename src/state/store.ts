@@ -38,6 +38,7 @@ interface OgsState {
   activeProjectId: string | null
   tool: Tool
   config: EditorConfig
+  workspacePath: string | null
   createProject: (name: string) => void
   openProject: (id: string) => void
   closeProject: () => void
@@ -50,11 +51,15 @@ interface OgsState {
   regenerateJunctions: () => void
   setTool: (tool: Tool) => void
   setConfig: (patch: Partial<EditorConfig>) => void
+  refreshProjects: () => Promise<void>
+  saveCurrentProject: () => Promise<void>
+  deleteProject: (id: string) => Promise<void>
 }
 
 const STORAGE_KEY = 'ogs.projects.v2'
 
-function loadProjects(): Project[] {
+// ─── localStorage fallback (used until Electron bridge is available) ───
+function loadProjectsLocal(): Project[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     const parsed = raw ? JSON.parse(raw) : []
@@ -79,8 +84,39 @@ function loadProjects(): Project[] {
   }
 }
 
-function persist(projects: Project[]) {
+function persistLocal(projects: Project[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
+}
+
+// ─── File-based persistence via Electron IPC ───
+async function saveProjectToFile(project: Project): Promise<void> {
+  if (!window.ogs?.saveProject) return
+  const result = await window.ogs.saveProject(project)
+  if (!result.success) {
+    console.error('[store] Failed to save project to file:', result.error)
+  }
+}
+
+async function loadProjectsFromDisk(): Promise<Project[]> {
+  if (!window.ogs?.listProjects) return loadProjectsLocal()
+  try {
+    const result = await window.ogs.listProjects()
+    if (!result.success || !result.projects) return loadProjectsLocal()
+    return result.projects.map((p) => {
+      const { dirName, projectDir, ...projectData } = p
+      void dirName
+      void projectDir
+      return {
+        id: projectData.id as string,
+        name: projectData.name as string,
+        createdAt: projectData.createdAt as string,
+        roads: Array.isArray(projectData.roads) ? projectData.roads as RoadData[] : [],
+        suppressedJunctions: Array.isArray(projectData.suppressedJunctions) ? projectData.suppressedJunctions as string[] : [],
+      }
+    })
+  } catch {
+    return loadProjectsLocal()
+  }
 }
 
 function updateActiveProject(
@@ -91,8 +127,11 @@ function updateActiveProject(
   const { projects, activeProjectId } = get()
   if (!activeProjectId) return
   const next = projects.map((project) => (project.id === activeProjectId ? update(project) : project))
-  persist(next)
+  persistLocal(next)
   set({ projects: next })
+  // Also save to file (async, non-blocking)
+  const active = next.find((p) => p.id === activeProjectId)
+  if (active) void saveProjectToFile(active)
 }
 
 export function uuid(): string {
@@ -100,10 +139,12 @@ export function uuid(): string {
 }
 
 export const useStore = create<OgsState>((set, get) => ({
-  projects: loadProjects(),
+  projects: loadProjectsLocal(), // Load from localStorage immediately, refresh from disk on mount
   activeProjectId: null,
   tool: 'draw-straight',
   config: { lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 50 },
+  workspacePath: null,
+
   createProject: (name) => {
     const id = uuid()
     const project: Project = {
@@ -114,11 +155,15 @@ export const useStore = create<OgsState>((set, get) => ({
       suppressedJunctions: [],
     }
     const projects = [project, ...get().projects]
-    persist(projects)
+    persistLocal(projects)
     set({ projects, activeProjectId: id })
+    // Save to C:\OpenGeoStudio
+    void saveProjectToFile(project)
   },
+
   openProject: (id) => set({ activeProjectId: id }),
   closeProject: () => set({ activeProjectId: null }),
+
   addRoad: (road) => updateActiveProject(get, set, (project) => ({ ...project, roads: [...project.roads, road] })),
   updateRoad: (roadId, patch) => updateActiveProject(get, set, (project) => ({
     ...project,
@@ -149,4 +194,39 @@ export const useStore = create<OgsState>((set, get) => ({
   regenerateJunctions: () => updateActiveProject(get, set, (project) => ({ ...project, suppressedJunctions: [] })),
   setTool: (tool) => set({ tool }),
   setConfig: (patch) => set({ config: { ...get().config, ...patch } }),
+
+  refreshProjects: async () => {
+    const projects = await loadProjectsFromDisk()
+    persistLocal(projects)
+    set({ projects })
+    // Also fetch workspace path
+    if (window.ogs?.getWorkspacePath) {
+      const ws = await window.ogs.getWorkspacePath()
+      if (ws.success) set({ workspacePath: ws.workspacePath ?? null })
+    }
+  },
+
+  saveCurrentProject: async () => {
+    const { projects, activeProjectId } = get()
+    if (!activeProjectId) return
+    const active = projects.find((p) => p.id === activeProjectId)
+    if (active) await saveProjectToFile(active)
+  },
+
+  deleteProject: async (id) => {
+    const { projects, activeProjectId } = get()
+    const project = projects.find((p) => p.id === id)
+    if (!project) return
+    // Delete from disk
+    if (window.ogs?.deleteProject) {
+      await window.ogs.deleteProject(project.id, project.name)
+    }
+    // Remove from state + localStorage
+    const next = projects.filter((p) => p.id !== id)
+    persistLocal(next)
+    set({
+      projects: next,
+      activeProjectId: activeProjectId === id ? null : activeProjectId,
+    })
+  },
 }))
