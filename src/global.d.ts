@@ -97,4 +97,10 @@ interface Window {
   ogs?: OgsBridge
 }
 
+// Vite asset URL imports (e.g. maplibre worker: '...?url')
+declare module '*?url' {
+  const src: string
+  export default src
+}
+
 export type { DEMProvider, ImagerySource, HeightmapFormat, AlbedoFormat }

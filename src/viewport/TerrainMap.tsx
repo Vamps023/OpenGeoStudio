@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { Map as MapLibreMap, NavigationControl, ScaleControl, Point, GeoJSONSource } from 'maplibre-gl'
+import { Map as MapLibreMap, NavigationControl, ScaleControl, Point, GeoJSONSource, setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { GeoBounds } from '../engine/crs'
 import type { TileGrid } from '../engine/tileGrid'
+
+// MapLibre auto-resolves its worker script only on http(s) origins — the
+// custom app:// protocol used in production returns "" and the map never
+// boots. Point it at the bundled worker explicitly (works in dev too).
+setWorkerUrl(new URL(maplibreWorkerUrl, import.meta.url).href)
 
 interface Props {
   onBoundsSelected: (bounds: GeoBounds) => void
@@ -31,7 +37,11 @@ export default function TerrainMap({
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const liveBoundsRef = useRef<GeoBounds | null>(null)
-  const [liveBounds, setLiveBounds] = useState<GeoBounds | null>(null)
+  // Pixel rect of the in-progress drag — rendered as a DOM overlay so the
+  // selection is always visible, regardless of MapLibre source/layer timing.
+  const [liveRectPx, setLiveRectPx] = useState<{ x: number; y: number; size: number } | null>(null)
+  const [mapReady, setMapReady] = useState(false)
+  const [mapError, setMapError] = useState<string | null>(null)
   const onBoundsSelectedRef = useRef(onBoundsSelected)
   onBoundsSelectedRef.current = onBoundsSelected
 
@@ -67,8 +77,8 @@ export default function TerrainMap({
           },
         ],
       },
-      center: [0, 20],
-      zoom: 2,
+      center: [-112.1129, 36.1069],
+      zoom: 11,
       maxZoom: 22,
       attributionControl: false,
     })
@@ -76,25 +86,50 @@ export default function TerrainMap({
     map.boxZoom.disable()
     map.addControl(new NavigationControl(), 'top-right')
     map.addControl(new ScaleControl(), 'bottom-left')
+    map.on('load', () => {
+      setMapReady(true)
+      ;(window as unknown as Record<string, unknown>).__ogsMapReady = true
+    })
+    map.on('error', (event) => {
+      const message = (event as { error?: { message?: string } }).error?.message
+      setMapError(message || 'The map failed to load')
+    })
+    // If the container settled its layout after mount, make sure the canvas matches
+    const resizeTimer = window.setTimeout(() => {
+      if (mapRef.current === map) map.resize()
+    }, 150)
+
+    // Debug handle for diagnostics (used by OGS_TEST end-to-end runs)
+    ;(window as unknown as Record<string, unknown>).__ogsMap = map
 
     const canvas = map.getCanvas()
+    const container = containerRef.current!
+
+    // Coords helper — works regardless of pointer events captured by MapLibre
+    const canvasPoint = (clientX: number, clientY: number) => {
+      const r = canvas.getBoundingClientRect()
+      return { x: clientX - r.left, y: clientY - r.top }
+    }
 
     const onMouseDown = (e: MouseEvent) => {
       if (!e.shiftKey) return
       e.preventDefault()
       e.stopPropagation()
       map.dragPan.disable()
+      const p = canvasPoint(e.clientX, e.clientY)
       isDraggingRef.current = true
-      dragStartRef.current = { x: e.offsetX, y: e.offsetY }
+      dragStartRef.current = p
       canvas.style.cursor = 'crosshair'
+      setLiveRectPx({ x: p.x, y: p.y, size: 0 })
     }
 
     const onMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current || !dragStartRef.current) return
       e.preventDefault()
       const start = dragStartRef.current
-      const dX = e.offsetX - start.x
-      const dY = e.offsetY - start.y
+      const cur = canvasPoint(e.clientX, e.clientY)
+      const dX = cur.x - start.x
+      const dY = cur.y - start.y
       const size = Math.max(Math.abs(dX), Math.abs(dY))
       const signX = dX >= 0 ? 1 : -1
       const signY = dY >= 0 ? 1 : -1
@@ -111,7 +146,10 @@ export default function TerrainMap({
         north: Math.max(startLngLat.lat, endLngLat.lat),
       }
       liveBoundsRef.current = bounds
-      setLiveBounds(bounds)
+      // Live pixel rect for the DOM overlay (drawn at the smallest enclosing square)
+      const left = Math.min(start.x, endX)
+      const top = Math.min(start.y, endY)
+      setLiveRectPx({ x: left, y: top, size })
     }
 
     const onMouseUp = (e: MouseEvent) => {
@@ -125,12 +163,15 @@ export default function TerrainMap({
       }
       dragStartRef.current = null
       liveBoundsRef.current = null
-      setLiveBounds(null)
+      setLiveRectPx(null)
     }
 
-    canvas.addEventListener('mousedown', onMouseDown)
-    canvas.addEventListener('mousemove', onMouseMove)
-    canvas.addEventListener('mouseup', onMouseUp)
+    // Bind to the container, not the canvas — MapLibre's pointer handling
+    // can swallow events on the canvas itself, but the wrapper div always
+    // receives them and we can still derive canvas-local coords above.
+    container.addEventListener('mousedown', onMouseDown)
+    container.addEventListener('mousemove', onMouseMove)
+    container.addEventListener('mouseup', onMouseUp)
     window.addEventListener('mouseup', onMouseUp)
 
     mapRef.current = map
@@ -140,9 +181,9 @@ export default function TerrainMap({
 
     return () => {
       resizeObserver.disconnect()
-      canvas.removeEventListener('mousedown', onMouseDown)
-      canvas.removeEventListener('mousemove', onMouseMove)
-      canvas.removeEventListener('mouseup', onMouseUp)
+      container.removeEventListener('mousedown', onMouseDown)
+      container.removeEventListener('mousemove', onMouseMove)
+      container.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('mouseup', onMouseUp)
       map.remove()
       mapRef.current = null
@@ -175,7 +216,7 @@ export default function TerrainMap({
     }
 
     function updateSelection() {
-      const bounds = liveBounds || selectedBounds
+      const bounds = selectedBounds
       if (!map.loaded()) return
       try {
         ensureSelectionLayer()
@@ -210,7 +251,7 @@ export default function TerrainMap({
     } else {
       map.once('load', updateSelection)
     }
-  }, [liveBounds, selectedBounds])
+  }, [selectedBounds])
 
   // ─── Tile grid overlay ───────────────────────────────────────
   useEffect(() => {
@@ -352,6 +393,28 @@ export default function TerrainMap({
   return (
     <div className="terrain-map-container">
       <div ref={containerRef} className="terrain-map-canvas" />
+      {/* Live drag selection rectangle (DOM overlay) */}
+      {liveRectPx && (
+        <div
+          className="pointer-events-none absolute z-20 border-2 border-green-400 bg-green-400/15"
+          style={{
+            left: liveRectPx.x,
+            top: liveRectPx.y,
+            width: liveRectPx.size,
+            height: liveRectPx.size,
+          }}
+        />
+      )}
+      {!mapReady && !mapError && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full border border-border bg-card/85 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-lg backdrop-blur">
+          Loading map…
+        </div>
+      )}
+      {mapError && (
+        <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-lg backdrop-blur">
+          Map error: {mapError}
+        </div>
+      )}
       <div className="terrain-map-hint">Hold Shift + Drag to draw a square selection</div>
     </div>
   )

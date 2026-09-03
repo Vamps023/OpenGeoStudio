@@ -3,6 +3,8 @@ import EditorPage from './pages/EditorPage'
 import LoginPage from './pages/LoginPage'
 import ProjectsPage from './pages/ProjectsPage'
 import TerrainPage from './pages/TerrainPage'
+import { Toaster } from './components/ui/sonner'
+import { TooltipProvider } from './components/ui/tooltip'
 import { useStore } from './state/store'
 
 export default function App() {
@@ -15,30 +17,39 @@ export default function App() {
 
   if (workspace === 'terrain' && activeProjectId) {
     return (
-      <TerrainPage
-        onBack={() => {
-          closeProject()
-          setWorkspace('projects')
-        }}
-      />
+      <TooltipProvider>
+        <TerrainPage
+          onBack={() => {
+            closeProject()
+            setWorkspace('projects')
+          }}
+        />
+        <Toaster position="bottom-right" />
+      </TooltipProvider>
     )
   }
 
   if (workspace === 'editor' && activeProjectId) {
     return (
-      <EditorPage
-        onBack={() => {
-          closeProject()
-          setWorkspace('projects')
-        }}
-      />
+      <TooltipProvider>
+        <EditorPage
+          onBack={() => {
+            closeProject()
+            setWorkspace('projects')
+          }}
+        />
+        <Toaster position="bottom-right" />
+      </TooltipProvider>
     )
   }
 
   return (
-    <ProjectsPage
-      onOpenEditor={() => setWorkspace('editor')}
-      onOpenTerrain={() => setWorkspace('terrain')}
-    />
+    <TooltipProvider>
+      <ProjectsPage
+        onOpenEditor={() => setWorkspace('editor')}
+        onOpenTerrain={() => setWorkspace('terrain')}
+      />
+      <Toaster position="bottom-right" />
+    </TooltipProvider>
   )
 }

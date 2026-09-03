@@ -1,4 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  GitMerge,
+  MousePointer2,
+  Move,
+  MoveDiagonal,
+  PenLine,
+  RefreshCw,
+  Scissors,
+  Slash,
+  Spline,
+  Trash2,
+} from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
 import { evaluateElevation, evaluateGrade, normalizeElevationProfile } from '../engine/elevation'
@@ -8,6 +20,15 @@ import type { ElevationPoint } from '../engine/elevation'
 import type { Vec2 } from '../engine/types'
 import { useStore, uuid } from '../state/store'
 import type { RoadData, RoadGeometryType, Tool } from '../state/store'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import AppHeader from '@/components/layout/AppHeader'
 import RoadViewport from '../viewport/RoadViewport'
 import ElevationProfileEditor from '../elevation/ElevationProfileEditor'
 
@@ -22,16 +43,23 @@ interface ExtendSession {
   start: Vec2
 }
 
-const TOOL_ITEMS: { tool: Tool; label: string }[] = [
-  { tool: 'select', label: 'Select' },
-  { tool: 'draw-straight', label: 'Straight' },
-  { tool: 'draw-polyline', label: 'Polyline' },
-  { tool: 'draw-arc', label: 'Arc' },
-  { tool: 'move', label: 'Move End' },
-  { tool: 'extend', label: 'Extend' },
-  { tool: 'split', label: 'Split' },
-  { tool: 'delete', label: 'Delete' },
-  { tool: 'junction', label: 'Junction' },
+const TOOL_ITEMS: { tool: Tool; label: string; icon: typeof MousePointer2 }[] = [
+  { tool: 'select', label: 'Select', icon: MousePointer2 },
+  { tool: 'draw-straight', label: 'Straight', icon: Slash },
+  { tool: 'draw-polyline', label: 'Polyline', icon: PenLine },
+  { tool: 'draw-arc', label: 'Arc', icon: Spline },
+  { tool: 'move', label: 'Move End', icon: Move },
+  { tool: 'extend', label: 'Extend', icon: MoveDiagonal },
+  { tool: 'split', label: 'Split', icon: Scissors },
+  { tool: 'delete', label: 'Delete', icon: Trash2 },
+  { tool: 'junction', label: 'Junction', icon: GitMerge },
+]
+
+const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
+  { label: 'Select', tools: ['select'] },
+  { label: 'Draw', tools: ['draw-straight', 'draw-polyline', 'draw-arc'] },
+  { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
+  { label: 'Network', tools: ['junction'] },
 ]
 
 export default function EditorPage({ onBack }: { onBack: () => void }) {
@@ -342,160 +370,324 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     : []
 
   return (
-    <div className="editor-page">
-      <header className="editor-topbar">
-        <button type="button" className="btn-ghost" onClick={onBack}>← Projects</button>
-        <div className="editor-title">
-          <strong>{project.name}</strong>
-          <span>{project.roads.length} roads · {activeJunctions.length} junctions</span>
-        </div>
-        <div className="mode-toggle">
-          <button type="button" className={mode === '2d' ? 'active' : ''} onClick={() => setMode('2d')}>2D</button>
-          <button type="button" className={mode === '3d' ? 'active' : ''} onClick={() => setMode('3d')}>3D</button>
-        </div>
-      </header>
-
-      <nav className="map-toolbar" aria-label="Road tools">
-        {TOOL_ITEMS.map((item) => (
-          <button
-            type="button"
-            key={item.tool}
-            className={tool === item.tool ? 'active' : ''}
-            onClick={() => chooseTool(item.tool)}
+    <div className="flex h-screen min-h-0 flex-col bg-background">
+      <AppHeader
+        projectName={project.name}
+        subtitle={`${project.roads.length} roads · ${activeJunctions.length} junctions`}
+        onBack={onBack}
+      >
+        <div className="flex items-center rounded-md border border-border bg-background p-0.5">
+          <Button
+            size="sm"
+            variant={mode === '2d' ? 'default' : 'ghost'}
+            className="h-7 px-3"
+            onClick={() => setMode('2d')}
           >
-            {item.label}
-          </button>
-        ))}
-        {tool === 'draw-polyline' && draftPoints.length > 0 && (
-          <>
-            <button type="button" disabled={draftPoints.length < 2} onClick={finishPolyline}>Finish</button>
-            <button type="button" onClick={() => { setDraftPoints([]); setHoverPoint(null) }}>Cancel</button>
-          </>
-        )}
-        <span className="toolbar-spacer" />
-        <button type="button" onClick={regenerateJunctions}>Regenerate Junctions</button>
-      </nav>
+            2D
+          </Button>
+          <Button
+            size="sm"
+            variant={mode === '3d' ? 'default' : 'ghost'}
+            className="h-7 px-3"
+            onClick={() => setMode('3d')}
+          >
+            3D
+          </Button>
+        </div>
+      </AppHeader>
 
-      <div className="editor-body">
-        <RoadViewport
-          meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes]}
-          highlightMeshes={highlightMeshes}
-          draftMesh={draftMesh}
-          draftPoints={previewPoints}
-          interaction={interaction}
-          onDragStart={handleDragStart}
-          onDragMove={handleDragMove}
-          onDragEnd={handleDragEnd}
-          onDragCancel={handleDragCancel}
-          onGroundClick={handleGroundClick}
-          onGroundHover={handleGroundHover}
-          mode={mode}
-          hint={toolHint(tool)}
-        />
+      <div className="flex min-h-0 flex-1">
+        {/* Tool rail */}
+        <nav
+          aria-label="Road tools"
+          className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 border-r border-border bg-card/60 py-3"
+        >
+          {TOOL_GROUPS.map((group, groupIndex) => (
+            <div key={group.label} className="flex flex-col items-center gap-0.5">
+              {groupIndex > 0 && <Separator className="my-2 w-6" />}
+              {group.tools.map((toolId) => {
+                const item = TOOL_ITEMS.find((entry) => entry.tool === toolId)
+                if (!item) return null
+                const Icon = item.icon
+                const active = tool === item.tool
+                return (
+                  <Tooltip key={item.tool}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant={active ? 'default' : 'ghost'}
+                        size="icon-sm"
+                        aria-label={item.label}
+                        aria-pressed={active}
+                        onClick={() => chooseTool(item.tool)}
+                      >
+                        <Icon className="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">{item.label}</TooltipContent>
+                  </Tooltip>
+                )
+              })}
+            </div>
+          ))}
+        </nav>
 
-        <aside className="editor-panel">
-          {selectedRoad ? (
-            <>
-              <h3>Selected Road</h3>
-              <div className="stat-row"><span>Name</span><b>{selectedRoad.name}</b></div>
-              <div className="stat-row"><span>Length</span><b>{(roadLengths.get(selectedRoad.id) ?? 0).toFixed(1)} m</b></div>
-              <label className="field">
-                <span>Lanes left</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={6}
-                  value={selectedRoad.lanesLeft}
-                  onChange={(event) => updateRoad(selectedRoad.id, { lanesLeft: clampInt(event.target.value, 0, 6, 0) })}
-                />
-              </label>
-              <label className="field">
-                <span>Lanes right</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={6}
-                  value={selectedRoad.lanesRight}
-                  onChange={(event) => updateRoad(selectedRoad.id, { lanesRight: clampInt(event.target.value, 0, 6, 0) })}
-                />
-              </label>
-              <label className="field">
-                <span>Lane width (m)</span>
-                <input
-                  type="number"
-                  min={2}
-                  max={5}
-                  step={0.25}
-                  value={selectedRoad.laneWidth}
-                  onChange={(event) => updateRoad(selectedRoad.id, { laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })}
-                />
-              </label>
-              <button type="button" className="btn-ghost" onClick={reverseSelectedRoad}>Reverse Direction</button>
-            </>
-          ) : (
-            <>
-              <h3>New Road</h3>
-              <label className="field">
-                <span>Lanes left</span>
-                <input type="number" min={0} max={6} value={config.lanesLeft} onChange={(event) => setConfig({ lanesLeft: clampInt(event.target.value, 0, 6, 1) })} />
-              </label>
-              <label className="field">
-                <span>Lanes right</span>
-                <input type="number" min={0} max={6} value={config.lanesRight} onChange={(event) => setConfig({ lanesRight: clampInt(event.target.value, 0, 6, 1) })} />
-              </label>
-              <label className="field">
-                <span>Lane width (m)</span>
-                <input type="number" min={2} max={5} step={0.25} value={config.laneWidth} onChange={(event) => setConfig({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
-              </label>
-              <label className="field">
-                <span>Corner radius (m)</span>
-                <input type="number" min={5} max={300} step={5} value={config.filletRadius} onChange={(event) => setConfig({ filletRadius: clampNumber(event.target.value, 5, 300, 50) })} />
-              </label>
-            </>
-          )}
+        {/* Canvas */}
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <RoadViewport
+            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes]}
+            highlightMeshes={highlightMeshes}
+            draftMesh={draftMesh}
+            draftPoints={previewPoints}
+            interaction={interaction}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+            onGroundClick={handleGroundClick}
+            onGroundHover={handleGroundHover}
+            mode={mode}
+            hint={toolHint(tool)}
+          />
 
-          <h3>Tool</h3>
-          <p className="empty-note draw-instruction">{toolHint(tool)}</p>
-          {draftPath && <div className="stat-row"><span>Draft length</span><b>{draftPath.length.toFixed(1)} m</b></div>}
-
-          <h3>Roads</h3>
-          <ul className="road-list">
-            {project.roads.map((road) => (
-              <li
-                key={road.id}
-                className={selectedRoadId === road.id ? 'selected' : ''}
-                onClick={() => setSelectedRoadId(road.id)}
+          {tool === 'draw-polyline' && draftPoints.length > 0 && (
+            <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur">
+              <span className="pl-1 text-xs text-muted-foreground">
+                {draftPoints.length} point{draftPoints.length === 1 ? '' : 's'}
+              </span>
+              <Button size="sm" className="h-7" disabled={draftPoints.length < 2} onClick={finishPolyline}>
+                Finish
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7"
+                onClick={() => {
+                  setDraftPoints([])
+                  setHoverPoint(null)
+                }}
               >
-                <span>{road.name}</span>
-                <b>{(roadLengths.get(road.id) ?? 0).toFixed(1)} m</b>
-              </li>
-            ))}
-          </ul>
-
-          <h3>Junctions</h3>
-          {junctions.length === 0 ? (
-            <p className="empty-note">No road overlaps detected.</p>
-          ) : (
-            <ul className="junction-list">
-              {junctions.map((junction) => (
-                <li key={junction.id}>
-                  <div><span>{junction.id}</span><b>{junction.connectingRoads.length} connections</b></div>
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key)}
-                  >
-                    {junction.suppressed ? 'Create' : 'Detach'}
-                  </button>
-                </li>
-              ))}
-            </ul>
+                Cancel
+              </Button>
+            </div>
           )}
+        </div>
+
+        {/* Sidebar */}
+        <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-card/60">
+          <Tabs defaultValue="model" className="flex min-h-0 flex-1 flex-col gap-0">
+            <div className="shrink-0 border-b border-border p-3">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="model">Model</TabsTrigger>
+                <TabsTrigger value="roads">Roads</TabsTrigger>
+                <TabsTrigger value="junctions">Junctions</TabsTrigger>
+              </TabsList>
+            </div>
+
+            <ScrollArea className="min-h-0 flex-1">
+              <TabsContent value="model" className="grid gap-4 p-4">
+                {selectedRoad ? (
+                  <div className="grid gap-3">
+                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                      Selected Road
+                    </h3>
+                    <div className="grid gap-1.5 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Name</span>
+                        <b className="font-medium">{selectedRoad.name}</b>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Length</span>
+                        <b className="font-medium">{(roadLengths.get(selectedRoad.id) ?? 0).toFixed(1)} m</b>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="lanes-left">Lanes left</Label>
+                        <Input
+                          id="lanes-left"
+                          type="number"
+                          min={0}
+                          max={6}
+                          value={selectedRoad.lanesLeft}
+                          onChange={(event) => updateRoad(selectedRoad.id, { lanesLeft: clampInt(event.target.value, 0, 6, 0) })}
+                        />
+                      </div>
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="lanes-right">Lanes right</Label>
+                        <Input
+                          id="lanes-right"
+                          type="number"
+                          min={0}
+                          max={6}
+                          value={selectedRoad.lanesRight}
+                          onChange={(event) => updateRoad(selectedRoad.id, { lanesRight: clampInt(event.target.value, 0, 6, 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="lane-width">Lane width (m)</Label>
+                      <Input
+                        id="lane-width"
+                        type="number"
+                        min={2}
+                        max={5}
+                        step={0.25}
+                        value={selectedRoad.laneWidth}
+                        onChange={(event) => updateRoad(selectedRoad.id, { laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })}
+                      />
+                    </div>
+                    <Button variant="outline" size="sm" onClick={reverseSelectedRoad}>
+                      Reverse Direction
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                      New Road
+                    </h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="new-lanes-left">Lanes left</Label>
+                        <Input
+                          id="new-lanes-left"
+                          type="number"
+                          min={0}
+                          max={6}
+                          value={config.lanesLeft}
+                          onChange={(event) => setConfig({ lanesLeft: clampInt(event.target.value, 0, 6, 1) })}
+                        />
+                      </div>
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="new-lanes-right">Lanes right</Label>
+                        <Input
+                          id="new-lanes-right"
+                          type="number"
+                          min={0}
+                          max={6}
+                          value={config.lanesRight}
+                          onChange={(event) => setConfig({ lanesRight: clampInt(event.target.value, 0, 6, 1) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="new-lane-width">Lane width (m)</Label>
+                      <Input
+                        id="new-lane-width"
+                        type="number"
+                        min={2}
+                        max={5}
+                        step={0.25}
+                        value={config.laneWidth}
+                        onChange={(event) => setConfig({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="new-fillet">Corner radius (m)</Label>
+                      <Input
+                        id="new-fillet"
+                        type="number"
+                        min={5}
+                        max={300}
+                        step={5}
+                        value={config.filletRadius}
+                        onChange={(event) => setConfig({ filletRadius: clampNumber(event.target.value, 5, 300, 50) })}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <Separator />
+
+                <div className="grid gap-2">
+                  <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                    Tool
+                  </h3>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{toolHint(tool)}</p>
+                  {draftPath && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Draft length</span>
+                      <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="roads" className="grid gap-1.5 p-4">
+                {project.roads.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No roads yet. Pick a draw tool and drag on the canvas.
+                  </p>
+                ) : (
+                  <ul className="grid gap-1">
+                    {project.roads.map((road) => (
+                      <li key={road.id}>
+                        <button
+                          type="button"
+                          className={
+                            selectedRoadId === road.id
+                              ? 'flex w-full items-center justify-between rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-left text-xs'
+                              : 'flex w-full items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-xs hover:bg-accent'
+                          }
+                          onClick={() => setSelectedRoadId(road.id)}
+                        >
+                          <span className="truncate font-medium">{road.name}</span>
+                          <span className="ml-2 shrink-0 text-muted-foreground">
+                            {(roadLengths.get(road.id) ?? 0).toFixed(1)} m
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </TabsContent>
+
+              <TabsContent value="junctions" className="grid gap-2 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <Badge variant="muted">{activeJunctions.length} active</Badge>
+                  <Button size="sm" variant="outline" onClick={regenerateJunctions}>
+                    <RefreshCw className="size-3.5" />
+                    Regenerate
+                  </Button>
+                </div>
+                {junctions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No road overlaps detected.</p>
+                ) : (
+                  <ul className="grid gap-1.5">
+                    {junctions.map((junction) => (
+                      <li
+                        key={junction.id}
+                        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2"
+                      >
+                        <div className="grid min-w-0 flex-1 gap-0.5 text-xs">
+                          <span className="truncate font-medium">{junction.id}</span>
+                          <span className="text-muted-foreground">
+                            {junction.connectingRoads.length} connections
+                          </span>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant={junction.suppressed ? 'default' : 'ghost'}
+                          className="h-7 px-2.5 text-xs"
+                          onClick={() =>
+                            junction.suppressed
+                              ? restoreJunction(junction.key)
+                              : suppressJunction(junction.key)
+                          }
+                        >
+                          {junction.suppressed ? 'Create' : 'Detach'}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </TabsContent>
+            </ScrollArea>
+          </Tabs>
         </aside>
       </div>
 
       {selectedRoad && (
-        <footer className="elevation-footer">
+        <footer className="shrink-0 border-t border-border bg-card/60">
           <ElevationProfileEditor
             road={selectedRoad}
             length={roadLengths.get(selectedRoad.id) ?? 0}
