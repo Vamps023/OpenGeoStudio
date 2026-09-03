@@ -55,7 +55,7 @@ Exposed via `OGS_VERSION` compile definition. Used in:
 | `test_houston_roundtrip` | Houston OSM round-trip tests | 56/56 pass |
 | `test_geotiff_writer` | GeoTIFF writer tests | WGS84 + UTM metadata checks |
 | `test_gpxz_download` | GPXZ elevation API tests | Requires `GPXZ_API_KEY`; skips without it |
-| `test_road_studio` | Road Studio feature tests | 388 pass (signs, markings, furniture, snapping, measurement, persistence, templates, road creation, multi-lane, lane width, cross-section, mesh generation, junctions). 4 tests catch and ignore LaneMaker SEH exceptions in test mode. |
+| `test_road_studio` | Road Studio feature tests | 335 checks pass, 0 fail (signs, markings, furniture incl. turn-radius filter, snapping, measurement, persistence, templates, road creation, multi-lane, lane width, cross-section, mesh generation, junctions). 4 tests catch and ignore LaneMaker SEH exceptions in test mode. |
 | `test_road_studio_ui` | Road Studio UI smoke test (headless) | 12/12 pass — tests LaneConfigWidget, profile switching, ActionManager, Preference system. Runs in 0.08s. |
 | `test_asset_import` | Assimp model import tests (3D Studio) | 42/42 pass — OBJ/STL geometry, UV flip, generated normals, unit-scale heuristic, materials + texture resolution, failure paths, .ogsmat round-trip, Actor PBR field persistence |
 

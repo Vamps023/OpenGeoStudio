@@ -2,6 +2,7 @@
 #include "curve_fitting.h"
 #include "Geometries/Line.h"
 #include "Geometries/Arc.h"
+#include "Geometries/Spiral.h"
 #include "Geometries/ParamPoly3.h"
 #include "LaneConfigWidget.h"
 #include "map_view_gl.h"
@@ -9,6 +10,133 @@
 #include "constants.h"
 #include "road_overlaps.h"
 
+
+void RoadCreationSession::SetGeometryMode(GeometryMode mode)
+{
+	geometryMode = mode;
+	autoCompleteAfterFirstSegment = mode != GeometryMode::Automatic;
+}
+
+void RoadCreationSession::SetArcParameters(double radius, int direction)
+{
+	arcRadius = std::max(1.0, std::abs(radius));
+	turnDirection = direction < 0 ? -1 : 1;
+}
+
+void RoadCreationSession::SetClothoidParameters(double startCurvature, double endCurvature)
+{
+	clothoidStartCurvature = startCurvature;
+	clothoidEndCurvature = endCurvature;
+}
+
+std::unique_ptr<odr::RoadGeometry> RoadCreationSession::BuildExplicitGeometry(
+	GeometryMode mode, const odr::Vec2D& start, const odr::Vec2D& startDirection,
+	const odr::Vec2D& target, bool constrainStartDirection, double radius,
+	int direction, double startCurvature, double endCurvature)
+{
+	const auto chord = odr::sub(target, start);
+	const double chordLength = odr::norm(chord);
+	if (chordLength < 1e-3)
+	{
+		return nullptr;
+	}
+
+	if (mode == GeometryMode::Segment)
+	{
+		const double heading = std::atan2(chord[1], chord[0]);
+		return std::make_unique<odr::Line>(0, start[0], start[1], heading, chordLength);
+	}
+
+	if (mode == GeometryMode::Arc)
+	{
+		direction = direction < 0 ? -1 : 1;
+		odr::Vec2D center;
+		if (constrainStartDirection)
+		{
+			const auto tangent = odr::normalize(startDirection);
+			const double curvature = 2.0 * (tangent[0] * chord[1] - tangent[1] * chord[0]) /
+				(chordLength * chordLength);
+			if (std::abs(curvature) < 1e-9 || (curvature < 0 ? -1 : 1) != direction)
+			{
+				return nullptr;
+			}
+			radius = 1.0 / std::abs(curvature);
+			center = odr::add(start, odr::Vec2D{
+				-direction * radius * tangent[1], direction * radius * tangent[0] });
+		}
+		else
+		{
+			radius = std::max(std::abs(radius), chordLength * 0.5 + 1e-3);
+			const odr::Vec2D midpoint{ (start[0] + target[0]) * 0.5, (start[1] + target[1]) * 0.5 };
+			const double centerOffset = std::sqrt(std::max(0.0,
+				radius * radius - chordLength * chordLength * 0.25));
+			const odr::Vec2D leftNormal{ -chord[1] / chordLength, chord[0] / chordLength };
+			center = odr::add(midpoint, odr::mut(direction * centerOffset, leftNormal));
+		}
+
+		const double startAngle = std::atan2(start[1] - center[1], start[0] - center[0]);
+		const double targetAngle = std::atan2(target[1] - center[1], target[0] - center[0]);
+		double sweep = targetAngle - startAngle;
+		if (direction > 0)
+		{
+			while (sweep <= 0) sweep += 2 * M_PI;
+		}
+		else
+		{
+			while (sweep >= 0) sweep -= 2 * M_PI;
+		}
+		const double heading = startAngle + direction * M_PI * 0.5;
+		return std::make_unique<odr::Arc>(0, start[0], start[1], heading,
+			std::abs(sweep) * radius, static_cast<double>(direction) / radius);
+	}
+
+	if (mode == GeometryMode::Clothoid)
+	{
+		if (std::abs(endCurvature - startCurvature) < 1e-9)
+		{
+			if (std::abs(startCurvature) < 1e-9)
+			{
+				const double heading = std::atan2(chord[1], chord[0]);
+				return std::make_unique<odr::Line>(0, start[0], start[1], heading, chordLength);
+			}
+			return BuildExplicitGeometry(GeometryMode::Arc, start, startDirection, target,
+				constrainStartDirection, 1.0 / std::abs(startCurvature),
+				startCurvature < 0 ? -1 : 1, 0, 0);
+		}
+
+		double length = chordLength;
+		double heading = std::atan2(chord[1], chord[0]);
+		if (!constrainStartDirection)
+		{
+			double low = chordLength;
+			double high = chordLength;
+			auto chordAt = [&](double candidate) {
+				odr::Spiral spiral(0, 0, 0, 0, candidate, startCurvature, endCurvature);
+				return odr::norm(spiral.get_xy(candidate));
+			};
+			for (int i = 0; i < 8 && chordAt(high) < chordLength; ++i)
+				high *= 1.5;
+			for (int i = 0; i < 32; ++i)
+			{
+				const double mid = (low + high) * 0.5;
+				if (chordAt(mid) < chordLength) low = mid;
+				else high = mid;
+			}
+			length = (low + high) * 0.5;
+			odr::Spiral local(0, 0, 0, 0, length, startCurvature, endCurvature);
+			const auto localEnd = local.get_xy(length);
+			heading -= std::atan2(localEnd[1], localEnd[0]);
+		}
+		else
+		{
+			heading = std::atan2(startDirection[1], startDirection[0]);
+		}
+		return std::make_unique<odr::Spiral>(0, start[0], start[1], heading,
+			length, startCurvature, endCurvature);
+	}
+
+	return nullptr;
+}
 
 RoadCreationSession::DirectionHandle::DirectionHandle(const odr::Vec3D& aCenter, double aAngle) :
 	center(aCenter), angle(aAngle)
@@ -199,6 +327,13 @@ RoadDrawingSession::SnapResult RoadCreationSession::SnapFirstPointToExisting(odr
 
 RoadDrawingSession::SnapResult RoadCreationSession::SnapLastPointToExisting(odr::Vec2D& point)
 {
+	if (geometryMode == GeometryMode::Clothoid)
+	{
+		joinAtEnd.reset();
+		cursorItem->EnableHighlight(false);
+		return Snap_Nothing;
+	}
+
 	auto pointerRoad = GetPointerRoad();
 	if (pointerRoad == nullptr || pointerRoad->IsConnectingRoad()) return Snap_Nothing;
 
@@ -616,12 +751,12 @@ void RoadCreationSession::UpdateFlexGeometry()
 		}
 		localStartDir = odr::normalize(localStartDir);
 
-		if (forceStraightLine)
+		if (geometryMode != GeometryMode::Automatic)
 		{
-			// Always create a straight Line — ignore direction
-			double length = odr::euclDistance(localStartPos, snappedPos);
-			double hdg = std::atan2(snappedPos[1] - localStartPos[1], snappedPos[0] - localStartPos[0]);
-			flexGeo = std::make_unique<odr::Line>(0, localStartPos[0], localStartPos[1], hdg, length);
+			const bool constrainStartDirection = !stagedGeometries.empty() || !extendFromStart.expired();
+			flexGeo = BuildExplicitGeometry(geometryMode, localStartPos, localStartDir, snappedPos,
+				constrainStartDirection, arcRadius, turnDirection,
+				clothoidStartCurvature, clothoidEndCurvature);
 		}
 		else if (joinAtEnd.expired())
 		{
@@ -633,7 +768,7 @@ void RoadCreationSession::UpdateFlexGeometry()
 		}
 		flexEndElevation = CursorElevation();
 
-		if (flexGeo->length > 0)
+		if (flexGeo != nullptr && flexGeo->length > 0)
 		{
 			auto elevationProfile = LM::CubicSplineGenerator::FromControlPoints(
 				std::map<double, double>{{0, localStartZ}, { flexGeo->length, flexEndElevation }}

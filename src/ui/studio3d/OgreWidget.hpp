@@ -76,7 +76,15 @@ public:
     float sampleTerrainHeight(float x, float z) const;
 
     // ─── Road loading ───
-    void loadRoads(const QString& xodrPath);
+    // Geographic extent of the loaded terrain (degrees). When provided and
+    // the .xodr carries a geoReference, roads are geolocated onto the mesh;
+    // otherwise the network is centered on the terrain as a fallback.
+    struct GeoBoundsDeg {
+        double minLat = 0, maxLat = 0, minLon = 0, maxLon = 0;
+        bool valid = false;
+    };
+    void loadRoads(const QString& xodrPath,
+                   const GeoBoundsDeg& terrainBounds = GeoBoundsDeg{});
     void clearRoads();
 
     // ─── Actor placement (delegates to World + syncs rendering) ───
@@ -140,6 +148,7 @@ public:
     // ─── Camera framing ───
     void frameSelected();
     void frameAll();
+    void frameRoads();
 
     // ─── Transform mode ───
     void setTransformMode(TransformMode mode);
@@ -327,6 +336,10 @@ private:
     Ogre::Item* m_roadItem = nullptr;
     Ogre::SceneNode* m_roadNode = nullptr;
     QString m_xodrPath;
+    // Terrain-frame bounding box of the loaded road network (for framing)
+    bool m_hasRoadBounds = false;
+    float m_roadBoundsMinX = 0, m_roadBoundsMinY = 0, m_roadBoundsMinZ = 0;
+    float m_roadBoundsMaxX = 0, m_roadBoundsMaxY = 0, m_roadBoundsMaxZ = 0;
 
     // Lighting — real scene lights, not just world-model entries
     Ogre::Light* m_sunLight = nullptr;

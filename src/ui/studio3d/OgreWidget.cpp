@@ -10,13 +10,17 @@
 #include <QTimer>
 #include <QDir>
 #include <QFile>
+#include <QXmlStreamReader>
 #include "../../core/logger/Logger.hpp"
+#include "../../gis/crs/CRSManager.hpp"
+#include "../../gis/crs/CoordinateTransform.hpp"
 #include <QImage>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QUuid>
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include "../terrain/DemDecoder.hpp"
 
 // OGRE-Next headers
@@ -687,7 +691,8 @@ float OgreWidget::sampleTerrainHeight(float x, float z) const
 // Road loading
 // ============================================================
 
-void OgreWidget::loadRoads(const QString& xodrPath)
+void OgreWidget::loadRoads(const QString& xodrPath,
+                           const GeoBoundsDeg& terrainBounds)
 {
     m_xodrPath = xodrPath;
 
@@ -715,6 +720,37 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     clearRoads();
 
+    // ─── Extract the .xodr geoReference (PROJ string) ───
+    // OpenDRIVE stores its projected CRS in <geoReference><![CDATA[...]]>.
+    // Roads are authored in that CRS; the terrain mesh lives in a local
+    // frame derived from the project's geographic bounds. To align them
+    // we transform every centerline sample: xodr CRS → WGS84 → local.
+    QString geoRefProj;
+    {
+        QXmlStreamReader xml(QString::fromUtf8(xodrContent));
+        while (!xml.atEnd()) {
+            xml.readNext();
+            if (xml.isStartElement() && xml.name() == QLatin1String("geoReference")) {
+                geoRefProj = xml.readElementText().trimmed();
+                break;
+            }
+        }
+    }
+
+    // ─── Build the xodr-CRS → WGS84 transform (PROJ) ───
+    std::unique_ptr<gis::CoordinateTransform> toWgs84;
+    if (!geoRefProj.isEmpty()) {
+        auto srcCrs = gis::CRSManager::instance().fromAny(geoRefProj.toStdString());
+        auto dstCrs = gis::CRSManager::instance().fromEPSG(4326);
+        if (srcCrs && dstCrs) {
+            toWgs84 = std::make_unique<gis::CoordinateTransform>(*srcCrs, *dstCrs);
+            if (!toWgs84->isValid()) toWgs84.reset();
+        }
+    }
+    const bool geolocated = toWgs84 && terrainBounds.valid;
+    if (!geolocated)
+        appLog().info("Roads: no geoReference/terrain bounds match — centering network on terrain");
+
     odr::OpenDriveMap odrMap;
     bool loaded = false;
     try {
@@ -741,6 +777,64 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     appLog().info("Loading", roads.size(), "roads from", xodrPath);
 
+    // ─── Terrain frame parameters ───
+    // The terrain mesh spans [-halfSize, +halfSize] on X (east) and Z
+    // (north = -Z, matching heightmap row 0 = north). Roads must land in
+    // that same frame.
+    const float halfSize = m_terrainSize * 0.5f;
+    const double latMid = terrainBounds.valid
+        ? (terrainBounds.minLat + terrainBounds.maxLat) * 0.5 : 0.0;
+    const double metersPerDegLat = 111320.0;
+    const double metersPerDegLon = 111320.0 * std::cos(latMid * 3.14159265358979 / 180.0);
+
+    // Fallback frame: center the road network's bounding box on the terrain.
+    // Pass 1 (only when not geolocated): compute the bbox in ODR meters.
+    double bboxMinX = 0, bboxMaxX = 0, bboxMinY = 0, bboxMaxY = 0;
+    bool hasBbox = false;
+    if (!geolocated) {
+        for (const auto& road : roads) {
+            if (road.length <= 0) continue;
+            for (int i = 0; i <= 32; ++i) {
+                try {
+                    const auto p = road.ref_line.get_xyz(road.length * i / 32.0);
+                    if (!hasBbox) {
+                        bboxMinX = bboxMaxX = p[0];
+                        bboxMinY = bboxMaxY = p[1];
+                        hasBbox = true;
+                    } else {
+                        bboxMinX = std::min(bboxMinX, p[0]);
+                        bboxMaxX = std::max(bboxMaxX, p[0]);
+                        bboxMinY = std::min(bboxMinY, p[1]);
+                        bboxMaxY = std::max(bboxMaxY, p[1]);
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+    const double bboxCenterX = hasBbox ? (bboxMinX + bboxMaxX) * 0.5 : 0.0;
+    const double bboxCenterY = hasBbox ? (bboxMinY + bboxMaxY) * 0.5 : 0.0;
+
+    // Local-frame mapper for one ODR plan-view point (x=east, y=north).
+    auto toTerrainFrame = [&](double ox, double oy, float& outX, float& outZ) {
+        if (geolocated) {
+            // xodr CRS → WGS84
+            const auto r = toWgs84->transform(ox, oy);
+            if (!r.success) {
+                outX = 0.0f; outZ = 0.0f;
+                return;
+            }
+            // WGS84 → terrain-local meters (west/south edges at -halfSize)
+            const double eastM = (r.point.x - terrainBounds.minLon) * metersPerDegLon;
+            const double northM = (r.point.y - terrainBounds.minLat) * metersPerDegLat;
+            outX = static_cast<float>(-halfSize + eastM);
+            outZ = static_cast<float>(halfSize - northM);  // north = -Z
+        } else {
+            // Center the network; ODR +Y (north) → terrain -Z
+            outX = static_cast<float>(ox - bboxCenterX);
+            outZ = static_cast<float>(-(oy - bboxCenterY));
+        }
+    };
+
     Ogre::ManualObject* manual = m_sceneManager->createManualObject();
     manual->setName("RoadMesh");
 
@@ -758,7 +852,7 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     manual->begin(dblockName, Ogre::OT_TRIANGLE_LIST);
 
-    const float roadYOffset = 2.0f;
+    const float roadYOffset = 0.5f;   // drape offset above the terrain surface
     const double sampleEps = 1.0;
     const float defaultHalfWidth = 4.0f;
 
@@ -815,37 +909,63 @@ void OgreWidget::loadRoads(const QString& xodrPath)
                 }
             }
 
+            // ─── Transform both endpoints into the terrain frame ───
+            float cx0, cz0, cx1, cz1;
+            toTerrainFrame(p0[0], p0[1], cx0, cz0);
+            toTerrainFrame(p1[0], p1[1], cx1, cz1);
+
+            // Perpendicular in the XZ plane from the ODR heading.
+            // ODR heading is CCW from +X (east) toward +Y (north); north is
+            // -Z here, so the CCW rotation in XZ is (sinH, +cosH).
             float cosH = static_cast<float>(cos(hdg0));
             float sinH = static_cast<float>(sin(hdg0));
             float perpX = sinH;
-            float perpZ = -cosH;
+            float perpZ = cosH;
 
-            float lx0 = static_cast<float>(p0[0]) + perpX * halfWidth;
-            float lz0 = static_cast<float>(p0[2]) + perpZ * halfWidth;
-            float ly0 = static_cast<float>(p0[1]) + roadYOffset;
-            float rx0 = static_cast<float>(p0[0]) - perpX * halfWidth;
-            float rz0 = static_cast<float>(p0[2]) - perpZ * halfWidth;
-            float ry0 = static_cast<float>(p0[1]) + roadYOffset;
-            float lx1 = static_cast<float>(p1[0]) + perpX * halfWidth;
-            float lz1 = static_cast<float>(p1[2]) + perpZ * halfWidth;
-            float ly1 = static_cast<float>(p1[1]) + roadYOffset;
-            float rx1 = static_cast<float>(p1[0]) - perpX * halfWidth;
-            float rz1 = static_cast<float>(p1[2]) - perpZ * halfWidth;
-            float ry1 = static_cast<float>(p1[1]) + roadYOffset;
+            // Drape onto the terrain surface (relative heights, like the mesh)
+            const float y0 = sampleTerrainHeight(cx0, cz0) + roadYOffset;
+            const float y1 = sampleTerrainHeight(cx1, cz1) + roadYOffset;
 
-            manual->position(lx0, ly0, lz0);
+            float lx0 = cx0 + perpX * halfWidth;
+            float lz0 = cz0 + perpZ * halfWidth;
+            float rx0 = cx0 - perpX * halfWidth;
+            float rz0 = cz0 - perpZ * halfWidth;
+            float lx1 = cx1 + perpX * halfWidth;
+            float lz1 = cz1 + perpZ * halfWidth;
+            float rx1 = cx1 - perpX * halfWidth;
+            float rz1 = cz1 - perpZ * halfWidth;
+
+            // Track the network bounds in the terrain frame (for framing)
+            if (!m_hasRoadBounds) {
+                m_roadBoundsMinX = m_roadBoundsMaxX = cx0;
+                m_roadBoundsMinY = m_roadBoundsMaxY = y0;
+                m_roadBoundsMinZ = m_roadBoundsMaxZ = cz0;
+                m_hasRoadBounds = true;
+            }
+            m_roadBoundsMinX = std::min(m_roadBoundsMinX, std::min(lx0, rx0));
+            m_roadBoundsMaxX = std::max(m_roadBoundsMaxX, std::max(lx0, rx0));
+            m_roadBoundsMinX = std::min(m_roadBoundsMinX, std::min(lx1, rx1));
+            m_roadBoundsMaxX = std::max(m_roadBoundsMaxX, std::max(lx1, rx1));
+            m_roadBoundsMinZ = std::min(m_roadBoundsMinZ, std::min(lz0, rz0));
+            m_roadBoundsMaxZ = std::max(m_roadBoundsMaxZ, std::max(lz0, rz0));
+            m_roadBoundsMinZ = std::min(m_roadBoundsMinZ, std::min(lz1, rz1));
+            m_roadBoundsMaxZ = std::max(m_roadBoundsMaxZ, std::max(lz1, rz1));
+            m_roadBoundsMinY = std::min(m_roadBoundsMinY, std::min(y0, y1));
+            m_roadBoundsMaxY = std::max(m_roadBoundsMaxY, std::max(y0, y1));
+
+            manual->position(lx0, y0, lz0);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(0.0f, 0.0f);
 
-            manual->position(rx0, ry0, rz0);
+            manual->position(rx0, y0, rz0);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(1.0f, 0.0f);
 
-            manual->position(lx1, ly1, lz1);
+            manual->position(lx1, y1, lz1);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(0.0f, 1.0f);
 
-            manual->position(rx1, ry1, rz1);
+            manual->position(rx1, y1, rz1);
             manual->normal(0.0f, 1.0f, 0.0f);
             manual->textureCoord(1.0f, 1.0f);
 
@@ -873,7 +993,29 @@ void OgreWidget::loadRoads(const QString& xodrPath)
 
     m_sceneManager->destroyManualObject(manual);
 
-    appLog().info("Road mesh created with", vertexOffset, "vertices");
+    appLog().info("Road mesh created:", roads.size(), "roads,",
+                  geolocated ? "geolocated onto terrain" : "centered on terrain");
+
+    // Point the camera at the freshly loaded network so it is immediately
+    // visible instead of leaving the viewport wherever the user last flew.
+    frameRoads();
+}
+
+void OgreWidget::frameRoads()
+{
+    if (m_hasRoadBounds) {
+        frameBox(Ogre::Vector3(m_roadBoundsMinX, m_roadBoundsMinY, m_roadBoundsMinZ),
+                 Ogre::Vector3(m_roadBoundsMaxX, m_roadBoundsMaxY, m_roadBoundsMaxZ));
+        return;
+    }
+    // No roads loaded — fall back to the terrain extent.
+    if (m_hasHeightmap) {
+        m_camTargetX = 0;
+        m_camTargetY = m_heightScale * 0.3f;
+        m_camTargetZ = 0;
+        m_camDist = Ogre::Math::Clamp(m_terrainSize * 0.9f, 12.0f, 10000.0f);
+        resetCamera();
+    }
 }
 
 void OgreWidget::clearRoads()
@@ -887,6 +1029,7 @@ void OgreWidget::clearRoads()
         m_sceneManager->destroyItem(m_roadItem);
         m_roadItem = nullptr;
     }
+    m_hasRoadBounds = false;
 }
 
 // ============================================================
@@ -3034,6 +3177,10 @@ void OgreWidget::frameAll()
         any = true;
     }
     if (!any) {
+        if (m_hasRoadBounds) {
+            frameRoads();
+            return;
+        }
         if (m_hasHeightmap) {
             m_camTargetX = 0;
             m_camTargetY = m_heightScale * 0.3f;

@@ -679,6 +679,7 @@ QJsonObject PlacedFurniture::toJson() const
     obj["side"] = static_cast<int>(side);
     obj["repeatCount"] = repeatCount;
     obj["repeatSpacing"] = repeatSpacing;
+    obj["minTurnRadius"] = minTurnRadius;
     return obj;
 }
 
@@ -695,6 +696,7 @@ PlacedFurniture PlacedFurniture::fromJson(const QJsonObject& json)
     f.side = static_cast<SignSide>(json["side"].toInt());
     f.repeatCount = json["repeatCount"].toInt();
     f.repeatSpacing = json["repeatSpacing"].toDouble();
+    f.minTurnRadius = json["minTurnRadius"].toDouble(0.0);
     return f;
 }
 

@@ -27,8 +27,180 @@
 #include "../logger/Logger.hpp"
 #include <functional>
 #include <memory>
+#include <queue>
+#include <limits>
 
 namespace osm {
+
+struct OsmPreprocessResult {
+    int constructionWaysNormalized = 0;
+    int disconnectedWaysRemoved = 0;
+    int endpointGapsSnapped = 0;
+    QStringList log;
+};
+
+class OsmPreprocessor {
+public:
+    struct Params {
+        bool normalizeConstruction = true;
+        bool removeDisconnectedComponents = false;
+        bool snapEndpointGaps = true;
+        double snapDistance = 5.0;
+    };
+
+    static OsmPreprocessResult process(OsmData& data, const CoordinateConverter& converter,
+                                       const Params& params = {})
+    {
+        OsmPreprocessResult result;
+        if (params.normalizeConstruction) normalizeConstruction(data, result);
+        if (params.removeDisconnectedComponents) removeDisconnectedComponents(data, result);
+        if (params.snapEndpointGaps && params.snapDistance > 0)
+            snapEndpointGaps(data, converter, params.snapDistance, result);
+        return result;
+    }
+
+private:
+    static bool isDrivable(const Way& way)
+    {
+        if (!way.visible || way.isArea() || !way.isHighway()) return false;
+        return RoadClassifier::isDrivable(RoadClassifier::classifyAndGet(way.highwayType()).cls);
+    }
+
+    static void setTag(Way& way, const QString& key, const QString& value)
+    {
+        for (auto& tag : way.tags) {
+            if (tag.key == key) {
+                tag.value = value;
+                return;
+            }
+        }
+        way.tags.append({key, value});
+    }
+
+    static QString constructionFallback(const Way& way)
+    {
+        const int lanes = way.lanes();
+        if (lanes >= 4) return "primary";
+        if (lanes >= 3) return "secondary";
+        if (lanes >= 2) return way.name().isEmpty() ? "residential" : "tertiary";
+        return way.name().isEmpty() ? "service" : "residential";
+    }
+
+    static void normalizeConstruction(OsmData& data, OsmPreprocessResult& result)
+    {
+        static const std::unordered_set<std::string> supported {
+            "motorway", "trunk", "primary", "secondary", "tertiary", "residential",
+            "unclassified", "living_street", "service"
+        };
+        for (auto& [id, way] : data.ways) {
+            if (way.highwayType() != "construction") continue;
+            QString type = way.tag("construction");
+            if (supported.find(type.toStdString()) == supported.end())
+                type = constructionFallback(way);
+            setTag(way, "highway", type);
+            result.constructionWaysNormalized++;
+            result.log.append(QString("Normalized construction way %1 to %2").arg(id).arg(type));
+        }
+    }
+
+    static void removeDisconnectedComponents(OsmData& data, OsmPreprocessResult& result)
+    {
+        std::unordered_map<qint64, std::vector<qint64>> nodeWays;
+        std::unordered_set<qint64> drivableWays;
+        for (const auto& [id, way] : data.ways) {
+            if (!isDrivable(way)) continue;
+            drivableWays.insert(id);
+            for (qint64 node : way.nodeRefs) nodeWays[node].push_back(id);
+        }
+        if (drivableWays.empty()) return;
+
+        std::vector<std::unordered_set<qint64>> components;
+        while (!drivableWays.empty()) {
+            std::unordered_set<qint64> component;
+            std::queue<qint64> pending;
+            pending.push(*drivableWays.begin());
+            while (!pending.empty()) {
+                const qint64 id = pending.front();
+                pending.pop();
+                if (!component.insert(id).second) continue;
+                const auto it = data.ways.find(id);
+                if (it == data.ways.end()) continue;
+                for (qint64 node : it->second.nodeRefs)
+                    for (qint64 neighbour : nodeWays[node])
+                        if (!component.contains(neighbour)) pending.push(neighbour);
+            }
+            for (qint64 id : component) drivableWays.erase(id);
+            components.push_back(std::move(component));
+        }
+        const auto largest = std::max_element(components.begin(), components.end(),
+            [](const auto& a, const auto& b) { return a.size() < b.size(); });
+        for (auto it = components.begin(); it != components.end(); ++it) {
+            if (it == largest) continue;
+            for (qint64 id : *it) {
+                data.ways[id].visible = false;
+                result.disconnectedWaysRemoved++;
+            }
+        }
+        if (result.disconnectedWaysRemoved > 0)
+            result.log.append(QString("Removed %1 ways outside the largest road component")
+                              .arg(result.disconnectedWaysRemoved));
+    }
+
+    static void snapEndpointGaps(OsmData& data, const CoordinateConverter& converter,
+                                 double snapDistance, OsmPreprocessResult& result)
+    {
+        struct ProjectedNode { qint64 id; double x; double y; };
+        std::unordered_map<qint64, std::vector<qint64>> nodeWays;
+        std::vector<ProjectedNode> candidates;
+        for (const auto& [wayId, way] : data.ways) {
+            if (!isDrivable(way)) continue;
+            for (qint64 nodeId : way.nodeRefs) nodeWays[nodeId].push_back(wayId);
+        }
+        candidates.reserve(nodeWays.size());
+        for (const auto& [nodeId, ways] : nodeWays) {
+            const Node* node = data.getNode(nodeId);
+            if (!node) continue;
+            double x, y;
+            converter.toLocal(node->lat, node->lon, x, y);
+            candidates.push_back({nodeId, x, y});
+        }
+
+        for (auto& [wayId, way] : data.ways) {
+            if (!isDrivable(way) || way.nodeRefs.size() < 2) continue;
+            for (bool atStart : {true, false}) {
+                const qsizetype endpoint = atStart ? 0 : way.nodeRefs.size() - 1;
+                const qint64 sourceId = way.nodeRefs[endpoint];
+                if (nodeWays[sourceId].size() != 1) continue;
+                const Node* source = data.getNode(sourceId);
+                if (!source) continue;
+                double sourceX, sourceY;
+                converter.toLocal(source->lat, source->lon, sourceX, sourceY);
+                qint64 bestId = 0;
+                double bestDistance = snapDistance;
+                for (const auto& candidate : candidates) {
+                    if (candidate.id == sourceId) continue;
+                    bool belongsToOtherWay = false;
+                    for (qint64 candidateWay : nodeWays[candidate.id])
+                        if (candidateWay != wayId) { belongsToOtherWay = true; break; }
+                    if (!belongsToOtherWay) continue;
+                    const double distance = std::hypot(candidate.x - sourceX, candidate.y - sourceY);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestId = candidate.id;
+                    }
+                }
+                if (bestId == 0) continue;
+                way.nodeRefs[endpoint] = bestId;
+                nodeWays[sourceId].erase(std::remove(nodeWays[sourceId].begin(), nodeWays[sourceId].end(), wayId),
+                                         nodeWays[sourceId].end());
+                nodeWays[bestId].push_back(wayId);
+                result.endpointGapsSnapped++;
+                result.log.append(QString("Snapped endpoint of way %1 by %2 m")
+                                  .arg(wayId).arg(bestDistance, 0, 'f', 2));
+            }
+        }
+    }
+};
 
 // ─── ImportSettings ───
 struct ImportSettings {
@@ -51,6 +223,11 @@ struct ImportSettings {
     bool importCycleways = true;
     bool importServiceRoads = true;
     bool importTracks = false;
+
+    bool normalizeConstruction = true;
+    bool removeDisconnectedComponents = false;
+    bool snapEndpointGaps = true;
+    double endpointSnapDistance = 5.0;
 
     // Validation
     bool runValidation = true;
@@ -82,6 +259,7 @@ struct ImportResult {
 
     // Repair results
     RoadValidator::RepairResult repairResult;
+    OsmPreprocessResult preprocessResult;
 
     // Statistics
     struct Stats {
@@ -95,6 +273,9 @@ struct ImportResult {
         int validationErrors = 0;
         int validationWarnings = 0;
         int repairsApplied = 0;
+        int constructionWaysNormalized = 0;
+        int disconnectedWaysRemoved = 0;
+        int endpointGapsSnapped = 0;
         double totalRoadLength = 0.0;  // meters
     } stats;
 
@@ -127,6 +308,9 @@ struct ImportResult {
         s["validationErrors"] = stats.validationErrors;
         s["validationWarnings"] = stats.validationWarnings;
         s["repairsApplied"] = stats.repairsApplied;
+        s["constructionWaysNormalized"] = stats.constructionWaysNormalized;
+        s["disconnectedWaysRemoved"] = stats.disconnectedWaysRemoved;
+        s["endpointGapsSnapped"] = stats.endpointGapsSnapped;
         s["totalRoadLength"] = stats.totalRoadLength;
         j["stats"] = s;
 
@@ -176,6 +360,9 @@ struct ImportResult {
             r.stats.validationErrors = s["validationErrors"].toInt();
             r.stats.validationWarnings = s["validationWarnings"].toInt();
             r.stats.repairsApplied = s["repairsApplied"].toInt();
+            r.stats.constructionWaysNormalized = s["constructionWaysNormalized"].toInt();
+            r.stats.disconnectedWaysRemoved = s["disconnectedWaysRemoved"].toInt();
+            r.stats.endpointGapsSnapped = s["endpointGapsSnapped"].toInt();
             r.stats.totalRoadLength = s["totalRoadLength"].toDouble();
         }
 
@@ -234,6 +421,18 @@ public:
             result.converter.setReference(settings.refLat, settings.refLon,
                                            settings.projectionMethod);
         }
+
+        report(0.35, "Repairing OSM topology...");
+        OsmPreprocessor::Params preprocessParams;
+        preprocessParams.normalizeConstruction = settings.normalizeConstruction;
+        preprocessParams.removeDisconnectedComponents = settings.removeDisconnectedComponents;
+        preprocessParams.snapEndpointGaps = settings.snapEndpointGaps;
+        preprocessParams.snapDistance = settings.endpointSnapDistance;
+        result.preprocessResult = OsmPreprocessor::process(
+            result.osmData, result.converter, preprocessParams);
+        result.stats.constructionWaysNormalized = result.preprocessResult.constructionWaysNormalized;
+        result.stats.disconnectedWaysRemoved = result.preprocessResult.disconnectedWaysRemoved;
+        result.stats.endpointGapsSnapped = result.preprocessResult.endpointGapsSnapped;
 
         // ─── Step 3: Build road network ───
         report(0.4, "Building road network...");

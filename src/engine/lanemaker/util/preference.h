@@ -5,9 +5,9 @@
 
 struct UserPreference
 {
-    bool showWelcome;
-    bool alwaysVerify;
-    bool antiAlias;
+    bool showWelcome = true;
+    bool alwaysVerify = false;
+    bool antiAlias = true;
 
     template<class Archive>
     void serialize(Archive& archive)

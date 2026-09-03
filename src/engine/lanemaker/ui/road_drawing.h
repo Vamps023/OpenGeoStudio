@@ -84,13 +84,28 @@ private:
 class RoadCreationSession : public RoadDrawingSession
 {
 public:
+    enum class GeometryMode
+    {
+        Automatic,
+        Segment,
+        Arc,
+        Clothoid
+    };
+
     virtual bool Update(const LM::MouseAction&) override;
 
     virtual bool Complete() override;
     virtual bool Cancel() override;
 
-    // Straight line mode: always create Line geometry, auto-complete after 2 clicks
-    bool forceStraightLine = false;
+    void SetGeometryMode(GeometryMode mode);
+    void SetArcParameters(double radius, int turnDirection);
+    void SetClothoidParameters(double startCurvature, double endCurvature);
+
+    static std::unique_ptr<odr::RoadGeometry> BuildExplicitGeometry(
+        GeometryMode mode, const odr::Vec2D& start, const odr::Vec2D& startDirection,
+        const odr::Vec2D& target, bool constrainStartDirection, double arcRadius,
+        int turnDirection, double clothoidStartCurvature, double clothoidEndCurvature);
+
     bool autoCompleteAfterFirstSegment = false;
 
 protected:
@@ -158,6 +173,12 @@ private:
 
     std::unique_ptr<odr::RoadGeometry> flexGeo;
     double flexEndElevation;
+
+    GeometryMode geometryMode = GeometryMode::Automatic;
+    double arcRadius = 100.0;
+    int turnDirection = 1;
+    double clothoidStartCurvature = 0.0;
+    double clothoidEndCurvature = 0.01;
 
     std::unique_ptr<DirectionHandle> directionHandle;
 

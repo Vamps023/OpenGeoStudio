@@ -21,6 +21,7 @@
 #include "../../core/osm/OsmProjectSerializer.hpp"
 #include "../../core/osm/OsmExporter.hpp"
 #include "../../core/osm/DemElevationSampler.hpp"
+#include "../../core/lanelet2/Lanelet2IO.hpp"
 #include "../../core/ApplicationContext.hpp"
 
 #include <QDialog>
@@ -116,6 +117,10 @@ private slots:
         settings.minSegmentLength = m_minSegSpin->value();
         settings.runValidation = m_validateCheck->isChecked();
         settings.autoRepair = m_repairCheck->isChecked();
+        settings.normalizeConstruction = m_normalizeConstructionCheck->isChecked();
+        settings.removeDisconnectedComponents = m_removeDisconnectedCheck->isChecked();
+        settings.snapEndpointGaps = m_snapGapsCheck->isChecked();
+        settings.endpointSnapDistance = m_snapDistanceSpin->value();
 
         // Atomic progress for thread-safe updates from the worker thread.
         // The worker thread updates these atomics; a QTimer on the UI thread
@@ -234,6 +239,9 @@ private slots:
         if (path.isEmpty()) return;
 
         OsmExporter::OpenDriveParams params;
+        params.revisionMinor = m_openDriveVersion->currentData().toInt();
+        params.markings = &m_markings;
+        params.signs = &m_signs;
         if (m_elevationCheck->isChecked() && m_elevation.valid())
             params.elevation = &m_elevation;
         QString error;
@@ -243,6 +251,40 @@ private slots:
             m_lastExportedXodr = path;
             QMessageBox::information(this, "Exported",
                 QString("OpenDRIVE exported to %1").arg(path));
+        } else {
+            QMessageBox::critical(this, "Export Failed", error);
+        }
+    }
+
+    void onExportLanelet2() {
+        QString path = QFileDialog::getSaveFileName(
+            this, "Export Lanelet2",
+            "export_lanelet2.osm",
+            "Lanelet2 Map (*.osm);;All Files (*.*)");
+        if (path.isEmpty()) return;
+        const auto map = lanelet2io::Lanelet2IO::fromRoadNetwork(
+            m_result.network, m_result.converter);
+        QString error;
+        if (lanelet2io::Lanelet2IO::save(path, map, &error)) {
+            QMessageBox::information(this, "Exported",
+                QString("Lanelet2 map exported to %1").arg(path));
+        } else {
+            QMessageBox::critical(this, "Export Failed", error);
+        }
+    }
+
+    void onExportSumo() {
+        QString path = QFileDialog::getSaveFileName(
+            this, "Export SUMO Network",
+            "export.net.xml",
+            "SUMO Network (*.net.xml);;XML Files (*.xml);;All Files (*.*)");
+        if (path.isEmpty()) return;
+
+        QString error;
+        if (OsmExporter::exportToSumo(path, m_result.network,
+                                      m_result.junctions, {}, &error)) {
+            QMessageBox::information(this, "Exported",
+                QString("SUMO network exported to %1").arg(path));
         } else {
             QMessageBox::critical(this, "Export Failed", error);
         }
@@ -304,6 +346,11 @@ private:
         m_minSegSpin->setSuffix(" m");
         formLayout->addRow("Minimum segment length:", m_minSegSpin);
 
+        m_openDriveVersion = new QComboBox();
+        m_openDriveVersion->addItem("OpenDRIVE 1.6 (SCANeR compatible)", 6);
+        m_openDriveVersion->addItem("OpenDRIVE 1.8", 8);
+        formLayout->addRow("OpenDRIVE export:", m_openDriveVersion);
+
         m_validateCheck = new QCheckBox("Run validation");
         m_validateCheck->setChecked(true);
         formLayout->addRow(m_validateCheck);
@@ -311,6 +358,24 @@ private:
         m_repairCheck = new QCheckBox("Auto-repair issues");
         m_repairCheck->setChecked(true);
         formLayout->addRow(m_repairCheck);
+
+        m_normalizeConstructionCheck = new QCheckBox("Normalize roads under construction");
+        m_normalizeConstructionCheck->setChecked(true);
+        formLayout->addRow(m_normalizeConstructionCheck);
+
+        m_snapGapsCheck = new QCheckBox("Snap nearby road endpoint gaps");
+        m_snapGapsCheck->setChecked(true);
+        formLayout->addRow(m_snapGapsCheck);
+
+        m_snapDistanceSpin = new QDoubleSpinBox();
+        m_snapDistanceSpin->setRange(0.1, 25.0);
+        m_snapDistanceSpin->setValue(5.0);
+        m_snapDistanceSpin->setSuffix(" m");
+        formLayout->addRow("Endpoint snap distance:", m_snapDistanceSpin);
+
+        m_removeDisconnectedCheck = new QCheckBox("Keep only largest connected road component");
+        m_removeDisconnectedCheck->setChecked(false);
+        formLayout->addRow(m_removeDisconnectedCheck);
 
         // Elevation sampling from project DEM
         m_elevationCheck = new QCheckBox("Sample elevation from project terrain");
@@ -385,6 +450,16 @@ private:
         connect(m_exportGeoButton, &QPushButton::clicked, this, &OsmImportDialog::onExportGeoJson);
         exportLayout->addWidget(m_exportGeoButton);
 
+        m_exportSumoButton = new QPushButton("Export SUMO...");
+        m_exportSumoButton->setVisible(false);
+        connect(m_exportSumoButton, &QPushButton::clicked, this, &OsmImportDialog::onExportSumo);
+        exportLayout->addWidget(m_exportSumoButton);
+
+        m_exportLaneletButton = new QPushButton("Export Lanelet2...");
+        m_exportLaneletButton->setVisible(false);
+        connect(m_exportLaneletButton, &QPushButton::clicked, this, &OsmImportDialog::onExportLanelet2);
+        exportLayout->addWidget(m_exportLaneletButton);
+
         mainLayout->addLayout(exportLayout);
 
         // Load exported network into the Road Studio editor after this dialog closes
@@ -409,6 +484,8 @@ private:
         m_saveButton->setVisible(true);
         m_exportOdrButton->setVisible(true);
         m_exportGeoButton->setVisible(true);
+        m_exportSumoButton->setVisible(true);
+        m_exportLaneletButton->setVisible(true);
 
         // Summary
         m_summaryText->setHtml(
@@ -426,6 +503,9 @@ private:
                     "<tr><td>Validation errors:</td><td>%10</td></tr>"
                     "<tr><td>Validation warnings:</td><td>%11</td></tr>"
                     "<tr><td>Repairs applied:</td><td>%12</td></tr>"
+                    "<tr><td>Construction roads normalized:</td><td>%13</td></tr>"
+                    "<tr><td>Endpoint gaps snapped:</td><td>%14</td></tr>"
+                    "<tr><td>Disconnected ways removed:</td><td>%15</td></tr>"
                     "</table>")
             .arg(m_result.stats.osmNodes)
             .arg(m_result.stats.osmWays)
@@ -438,7 +518,10 @@ private:
             .arg(m_result.stats.totalRoadLength, 0, 'f', 1)
             .arg(m_result.stats.validationErrors)
             .arg(m_result.stats.validationWarnings)
-            .arg(m_result.stats.repairsApplied));
+            .arg(m_result.stats.repairsApplied)
+            .arg(m_result.stats.constructionWaysNormalized)
+            .arg(m_result.stats.endpointGapsSnapped)
+            .arg(m_result.stats.disconnectedWaysRemoved));
 
         // Roads table
         m_roadsTable->setRowCount(int(m_result.network.roads.size()));
@@ -491,6 +574,10 @@ private:
     QDoubleSpinBox* m_minSegSpin = nullptr;
     QCheckBox* m_validateCheck = nullptr;
     QCheckBox* m_repairCheck = nullptr;
+    QCheckBox* m_normalizeConstructionCheck = nullptr;
+    QCheckBox* m_removeDisconnectedCheck = nullptr;
+    QCheckBox* m_snapGapsCheck = nullptr;
+    QDoubleSpinBox* m_snapDistanceSpin = nullptr;
     QPushButton* m_importButton = nullptr;
     QProgressBar* m_progressBar = nullptr;
     QLabel* m_progressLabel = nullptr;
@@ -502,6 +589,9 @@ private:
     QPushButton* m_saveButton = nullptr;
     QPushButton* m_exportOdrButton = nullptr;
     QPushButton* m_exportGeoButton = nullptr;
+    QPushButton* m_exportSumoButton = nullptr;
+    QPushButton* m_exportLaneletButton = nullptr;
+    QComboBox* m_openDriveVersion = nullptr;
 
     // Elevation sampling
     QCheckBox* m_elevationCheck = nullptr;

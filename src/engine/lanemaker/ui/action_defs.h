@@ -20,7 +20,9 @@ namespace LM
         Mode_PlaceMarking,
         Mode_CreateRoundabout,
         Mode_PlaceFurniture,
-        Mode_Measure
+        Mode_Measure,
+        Mode_Arc,
+        Mode_Clothoid
     };
 
     enum ActionType

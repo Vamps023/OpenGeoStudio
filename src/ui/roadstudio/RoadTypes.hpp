@@ -34,6 +34,27 @@ struct RoadProfile {
     double speedLimit = 50;  // km/h
     QString description;
 
+    // ─── Road style classification (RoadBuilder-inspired) ───
+    // Controls prop generation, mesh style, and visualization.
+    enum class Style { AtGrade, Elevated, Tunnel, Bridge };
+    Style style = Style::AtGrade;
+
+    // Elevated road parameters
+    double elevatedHeight = 8.0;       // deck height above ground (m)
+    double pillarSpacing = 30.0;       // center-to-center pillar spacing (m)
+    double pillarWidth = 1.2;          // pillar cross-section width (m)
+
+    // Tunnel parameters
+    double tunnelClearance = 5.5;      // interior clearance height (m)
+    double tunnelWidth = 12.0;         // interior width (m)
+    bool tunnelLighting = true;        // generate tunnel light props
+
+    // Prop generation flags
+    bool generateGuardrails = false;
+    bool generateStreetlights = false;
+    bool generatePillars = false;      // elevated
+    bool generateTunnelShell = false;  // tunnel
+
     QJsonObject toJson() const {
         return {
             {"type", type}, {"surfaceTexture", surfaceTexture},
@@ -41,7 +62,16 @@ struct RoadProfile {
             {"hasSidewalk", hasSidewalk}, {"hasCurb", hasCurb},
             {"leftLanes", leftLanes}, {"rightLanes", rightLanes},
             {"leftOffsetX2", leftOffsetX2}, {"rightOffsetX2", rightOffsetX2},
-            {"speedLimit", speedLimit}, {"description", description}
+            {"speedLimit", speedLimit}, {"description", description},
+            {"style", int(style)},
+            {"elevatedHeight", elevatedHeight}, {"pillarSpacing", pillarSpacing},
+            {"pillarWidth", pillarWidth},
+            {"tunnelClearance", tunnelClearance}, {"tunnelWidth", tunnelWidth},
+            {"tunnelLighting", tunnelLighting},
+            {"generateGuardrails", generateGuardrails},
+            {"generateStreetlights", generateStreetlights},
+            {"generatePillars", generatePillars},
+            {"generateTunnelShell", generateTunnelShell}
         };
     }
 
@@ -59,6 +89,17 @@ struct RoadProfile {
         p.rightOffsetX2 = j["rightOffsetX2"].toInt(0);
         p.speedLimit = j["speedLimit"].toDouble(50);
         p.description = j["description"].toString();
+        p.style = Style(j["style"].toInt(int(Style::AtGrade)));
+        p.elevatedHeight = j["elevatedHeight"].toDouble(8.0);
+        p.pillarSpacing = j["pillarSpacing"].toDouble(30.0);
+        p.pillarWidth = j["pillarWidth"].toDouble(1.2);
+        p.tunnelClearance = j["tunnelClearance"].toDouble(5.5);
+        p.tunnelWidth = j["tunnelWidth"].toDouble(12.0);
+        p.tunnelLighting = j["tunnelLighting"].toBool(true);
+        p.generateGuardrails = j["generateGuardrails"].toBool(false);
+        p.generateStreetlights = j["generateStreetlights"].toBool(false);
+        p.generatePillars = j["generatePillars"].toBool(false);
+        p.generateTunnelShell = j["generateTunnelShell"].toBool(false);
         return p;
     }
 };
@@ -252,6 +293,50 @@ struct RoadProfileCatalog {
                 false, false, 4, 4, 1, 1, 110,
                 "Expressway — 4 lanes each way, 1m median"
             }},
+
+            // ─── Elevated / Viaduct ─────────────────────
+            {"elevated_2x2", {
+                "elevated_2x2", "asphalt", "marking", 3.75,
+                false, false, 2, 2, 0, 0, 80,
+                "Elevated viaduct — 2 lanes each way on pillars"
+            }},
+            {"elevated_2x3", {
+                "elevated_2x3", "asphalt", "marking", 3.75,
+                false, false, 3, 3, 0, 0, 80,
+                "Elevated viaduct — 3 lanes each way on pillars"
+            }},
+            {"elevated_ramp_1x1", {
+                "elevated_ramp_1x1", "asphalt", "marking", 4.0,
+                false, false, 1, 0, 0, 0, 50,
+                "Elevated ramp — 1 lane on pillars, 4.0m width"
+            }},
+            {"elevated_2x4", {
+                "elevated_2x4", "asphalt", "marking", 3.75,
+                false, false, 4, 4, 0, 0, 100,
+                "Elevated highway — 4 lanes each way on pillars"
+            }},
+
+            // ─── Tunnel ─────────────────────────────────
+            {"tunnel_2x2", {
+                "tunnel_2x2", "asphalt", "marking", 3.75,
+                false, false, 2, 2, 0, 0, 80,
+                "Tunnel — 2 lanes each way, enclosed, lit"
+            }},
+            {"tunnel_2x3", {
+                "tunnel_2x3", "asphalt", "marking", 3.75,
+                false, false, 3, 3, 0, 0, 80,
+                "Tunnel — 3 lanes each way, enclosed, lit"
+            }},
+            {"tunnel_ramp_1x1", {
+                "tunnel_ramp_1x1", "asphalt", "marking", 4.0,
+                false, false, 1, 0, 0, 0, 50,
+                "Tunnel ramp — 1 lane, enclosed, 4.0m width"
+            }},
+            {"tunnel_narrow_2x1", {
+                "tunnel_narrow_2x1", "asphalt", "marking", 3.25,
+                false, false, 1, 1, 0, 0, 60,
+                "Narrow tunnel — 1 lane each way, 3.25m, lit"
+            }},
         };
     }
 
@@ -268,8 +353,29 @@ struct RoadProfileCatalog {
     // Get profile by key, returns custom if not found
     static RoadProfile get(const QString& key) {
         auto profiles = all();
-        if (profiles.contains(key)) return profiles[key];
-        return profiles["custom"];
+        if (!profiles.contains(key)) return profiles["custom"];
+        RoadProfile p = profiles[key];
+        // Auto-classify style and props from type name prefix
+        // (RoadBuilder-inspired elevated/tunnel/bridge styles)
+        if (key.startsWith("elevated_")) {
+            p.style = RoadProfile::Style::Elevated;
+            p.generatePillars = true;
+            p.generateGuardrails = true;
+            p.generateStreetlights = true;
+        } else if (key.startsWith("tunnel_")) {
+            p.style = RoadProfile::Style::Tunnel;
+            p.generateTunnelShell = true;
+            p.tunnelLighting = true;
+            p.generateStreetlights = true;
+        } else if (key.startsWith("highway_") || key.startsWith("expressway_")) {
+            p.style = RoadProfile::Style::AtGrade;
+            p.generateGuardrails = true;
+            p.generateStreetlights = true;
+        } else if (key.startsWith("ramp_")) {
+            p.style = RoadProfile::Style::AtGrade;
+            p.generateGuardrails = true;
+        }
+        return p;
     }
 
     // Get human-readable label for dropdown

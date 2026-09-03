@@ -32,6 +32,7 @@
 #include "../logger/Logger.hpp"
 #include <vector>
 #include <cmath>
+#include <unordered_map>
 
 namespace osm {
 
@@ -48,7 +49,9 @@ enum class MarkingType {
     Chevron,            // chevron marking
     BikeLaneSymbol,     // bicycle symbol
     BusLaneSymbol,      // bus lane symbol
-    ParkingMarking      // parking space
+    ParkingMarking,     // parking space
+    GoreArea,           // hatched gore area at ramp divergence
+    RampArrow           // exit/entry ramp directional arrow
 };
 
 // ─── MarkingStyle ───
@@ -125,6 +128,8 @@ struct RoadMarking {
         case MarkingType::BikeLaneSymbol:   return "BikeLaneSymbol";
         case MarkingType::BusLaneSymbol:    return "BusLaneSymbol";
         case MarkingType::ParkingMarking:   return "ParkingMarking";
+        case MarkingType::GoreArea:         return "GoreArea";
+        case MarkingType::RampArrow:        return "RampArrow";
         }
         return "Unknown";
     }
@@ -142,6 +147,9 @@ public:
         double stopLineDistance = 5.0;  // meters before junction
         bool generateCrosswalks = true;
         bool generateTurnArrows = true;
+        bool generateGoreAreas = true;  // RoadBuilder-inspired gore area generation
+        double goreLength = 30.0;       // gore area length (m)
+        double goreWidth = 2.0;         // gore area width at widest point (m)
     };
 
     // Generate markings for a single road
@@ -309,6 +317,98 @@ public:
         return markings;
     }
 
+    // ─── Generate gore areas at ramp divergence points ───────
+    // A gore area is the hatched/chevroned triangular zone where
+    // a ramp diverges from or merges into the main road. It is
+    // generated at junction points where a main road meets a
+    // ramp-type road, placed on the main road just before the
+    // divergence point.
+    static std::vector<RoadMarking> generateGoreAreas(
+        const RoadNetworkBuilder::Result& network,
+        const std::vector<DetectedJunction>& junctions,
+        const Params& params = {})
+    {
+        std::vector<RoadMarking> gores;
+        if (!params.generateGoreAreas) return gores;
+
+        // Build road lookup
+        std::unordered_map<std::string, const geo::RoadV2*> roadById;
+        for (const auto& r : network.roads)
+            roadById[r.id] = &r;
+
+        for (const auto& j : junctions) {
+            if (j.type == JunctionType::Overpass) continue;
+            if (j.roadIds.size() < 2) continue;
+
+            // Find the main road (longest) and ramp (shortest, or named "ramp")
+            const geo::RoadV2* mainRoad = nullptr;
+            const geo::RoadV2* rampRoad = nullptr;
+            double mainLen = 0, rampLen = 1e18;
+            for (const auto& rid : j.roadIds) {
+                auto it = roadById.find(rid.toStdString());
+                if (it == roadById.end()) continue;
+                const auto* r = it->second;
+                const double len = r->totalLength();
+                const auto* meta = RoadNetworkBuilder::getMetadata(r->id);
+                const bool isRamp = (meta && meta->highwayType.contains("ramp")) ||
+                                     r->id.find("ramp") != std::string::npos ||
+                                     r->name.find("ramp") != std::string::npos ||
+                                    (j.roadIds.size() == 2 && len < mainLen * 0.3);
+                if (isRamp) {
+                    if (len < rampLen) { rampRoad = r; rampLen = len; }
+                } else {
+                    if (len > mainLen) { mainRoad = r; mainLen = len; }
+                }
+            }
+            if (!mainRoad || !rampRoad) continue;
+
+            // Find the divergence point on the main road (closest to junction center)
+            const double mainTotal = mainRoad->totalLength();
+            double bestS = 0, bestDist = 1e18;
+            for (int i = 0; i <= 50; ++i) {
+                const double s = mainTotal * i / 50.0;
+                const auto p = mainRoad->geometry().positionAt(s);
+                const double d = p.distanceTo(j.center);
+                if (d < bestDist) { bestDist = d; bestS = s; }
+            }
+
+            // Place gore area just before the divergence point
+            const double goreStart = std::max(0.0, bestS - params.goreLength);
+            const double goreEnd = bestS;
+
+            // Determine which side the ramp diverges
+            const auto mainPt = mainRoad->geometry().positionAt(bestS);
+            const auto rampPt = rampRoad->geometry().positionAt(
+                rampRoad->totalLength() * 0.1);
+            const auto mainNormal = mainRoad->geometry().normalAt(bestS);
+            const double side = (rampPt.x - mainPt.x) * mainNormal.x +
+                                (rampPt.y - mainPt.y) * mainNormal.y;
+            const double lateralOffset = (side > 0 ? 1.0 : -1.0) * params.goreWidth * 0.5;
+
+            RoadMarking gore;
+            gore.type = MarkingType::GoreArea;
+            gore.style = MarkingStyle::BoldDashed;  // hatched
+            gore.roadId = QString::fromStdString(mainRoad->id);
+            gore.startS = goreStart;
+            gore.endS = goreEnd;
+            gore.lateralOffset = lateralOffset;
+            gore.width = params.goreWidth;
+            gore.color = "white";
+            gores.push_back(gore);
+
+            // Add a ramp arrow at the gore point
+            RoadMarking arrow;
+            arrow.type = MarkingType::RampArrow;
+            arrow.roadId = QString::fromStdString(mainRoad->id);
+            arrow.isPointMarking = true;
+            arrow.position = goreEnd;
+            arrow.lateralOffset = lateralOffset;
+            arrow.color = "white";
+            gores.push_back(arrow);
+        }
+        return gores;
+    }
+
     // Generate markings for the entire network
     static std::vector<RoadMarking> generateAll(
         const RoadNetworkBuilder::Result& network,
@@ -322,6 +422,12 @@ public:
             auto roadMarkings = generateForRoad(road, params);
             allMarkings.insert(allMarkings.end(),
                                roadMarkings.begin(), roadMarkings.end());
+        }
+
+        // Gore areas at ramp divergence points (RoadBuilder-inspired)
+        if (params.generateGoreAreas) {
+            auto gores = generateGoreAreas(network, junctions, params);
+            allMarkings.insert(allMarkings.end(), gores.begin(), gores.end());
         }
 
         // Junction markings (stop lines, yield lines, crosswalks)

@@ -46,6 +46,22 @@
 #include <cmath>
 #include <cstdlib>
 
+// Geographic extent of the current project, used to geolocate roads onto
+// the terrain mesh (matches the project-bounds math used for terrain size).
+static OgreWidget::GeoBoundsDeg projectTerrainBoundsFor(ApplicationContext* ctx)
+{
+    OgreWidget::GeoBoundsDeg b;
+    if (!ctx || !ctx->projects().hasProject()) return b;
+    const auto& pb = ctx->projects().current().bounds;
+    if (!pb.valid) return b;
+    b.minLat = pb.minLat;
+    b.maxLat = pb.maxLat;
+    b.minLon = pb.minLon;
+    b.maxLon = pb.maxLon;
+    b.valid = true;
+    return b;
+}
+
 Studio3DWidget::Studio3DWidget(ApplicationContext* ctx, QWidget* parent)
     : QMainWindow(parent), m_ctx(ctx)
 {
@@ -745,7 +761,7 @@ void Studio3DWidget::onLoadRoads()
     appendLog("  XODR: " + xodrPath);
 
     setStatus("Loading roads...");
-    m_ogreWidget->loadRoads(xodrPath);
+    m_ogreWidget->loadRoads(xodrPath, projectTerrainBoundsFor(m_ctx));
 
     setStatus("Roads loaded");
     appendLog("Roads loaded successfully.");
@@ -1006,7 +1022,7 @@ void Studio3DWidget::loadMissingProjectAssets()
     if (!m_ogreWidget->hasRoads()) {
         const QString xodrPath = findXodrInProject();
         if (!xodrPath.isEmpty()) {
-            m_ogreWidget->loadRoads(xodrPath);
+            m_ogreWidget->loadRoads(xodrPath, projectTerrainBoundsFor(m_ctx));
             appendLog("Roads auto-loaded from project: " + xodrPath);
         }
     }

@@ -15,6 +15,8 @@
 #include "RoadNetworkBuilder.hpp"
 #include "JunctionDetector.hpp"
 #include "RoundaboutGenerator.hpp"
+#include "RoadMarkingGenerator.hpp"
+#include "TrafficSignGenerator.hpp"
 #include "CoordinateConverter.hpp"
 #include "DemElevationSampler.hpp"
 
@@ -24,6 +26,8 @@
 
 #include <QFile>
 #include <QTextStream>
+#include <QXmlStreamReader>
+#include <QSet>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -34,6 +38,7 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
+#include <map>
 
 namespace osm {
 
@@ -44,8 +49,12 @@ public:
     struct OpenDriveParams {
         int geoSamples = 100;       // samples per road geometry
         double defaultLaneWidth = 3.5;
+        int revisionMinor = 6;
         bool includeJunctions = true;
         bool includeSignals = true;
+        bool includeRoadMarks = true;
+        const std::vector<RoadMarking>* markings = nullptr;
+        const std::vector<TrafficSign>* signs = nullptr;
         // Optional DEM sampler (project heightmap) for real elevation profiles
         const DemElevationSampler* elevation = nullptr;
     };
@@ -82,7 +91,8 @@ public:
                 }
             }
         }
-        xml << "  <header revMajor=\"1\" revMinor=\"6\" name=\"OSM Export\""
+        const int revisionMinor = params.revisionMinor >= 8 ? 8 : 6;
+        xml << "  <header revMajor=\"1\" revMinor=\"" << revisionMinor << "\" name=\"OSM Export\""
             << " version=\"1.00\""
             << " north=\"" << (hasBounds ? maxY : 0.0)
             << "\" south=\"" << (hasBounds ? minY : 0.0)
@@ -309,6 +319,8 @@ public:
                 xml << "        <center>\n";
                 xml << "          <lane id=\"0\" type=\"border\" level=\"0\">\n";
                 xml << "            <width sOffset=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                if (params.includeRoadMarks)
+                    xml << "            <roadMark sOffset=\"0\" type=\"solid\" weight=\"standard\" color=\"white\" material=\"standard\" width=\"0.15\" laneChange=\"none\" height=\"0\"/>\n";
                 xml << "          </lane>\n";
                 xml << "        </center>\n";
 
@@ -323,6 +335,8 @@ public:
                             << "\" level=\"0\">\n";
                         xml << "            <width sOffset=\"0\" a=\"" << w
                             << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                        if (params.includeRoadMarks)
+                            xml << "            <roadMark sOffset=\"0\" type=\"broken\" weight=\"standard\" color=\"white\" material=\"standard\" width=\"0.15\" laneChange=\"both\" height=\"0\"/>\n";
                         xml << "          </lane>\n";
                     }
                 }
@@ -346,6 +360,8 @@ public:
                                     << "\" level=\"0\">\n";
                                 xml << "            <width sOffset=\"0\" a=\"" << w
                                     << "\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                                if (params.includeRoadMarks)
+                                    xml << "            <roadMark sOffset=\"0\" type=\"broken\" weight=\"standard\" color=\"white\" material=\"standard\" width=\"0.15\" laneChange=\"both\" height=\"0\"/>\n";
                                 xml << "          </lane>\n";
                             }
                         }
@@ -360,6 +376,8 @@ public:
                 xml << "        <center>\n";
                 xml << "          <lane id=\"0\" type=\"border\" level=\"0\">\n";
                 xml << "            <width sOffset=\"0\" a=\"0\" b=\"0\" c=\"0\" d=\"0\"/>\n";
+                if (params.includeRoadMarks)
+                    xml << "            <roadMark sOffset=\"0\" type=\"solid\" weight=\"standard\" color=\"white\" material=\"standard\" width=\"0.15\" laneChange=\"none\" height=\"0\"/>\n";
                 xml << "          </lane>\n";
                 xml << "        </center>\n";
                 xml << "      </laneSection>\n";
@@ -368,28 +386,71 @@ public:
 
             // LaneMaker custom profile (required by libOpenDRIVE's loader)
             // Stores lane plans (count + offset) for left and right sides
-            xml << "    <roadRunnerProfile>\n";
-            if (road.numLaneSections() > 0) {
-                const auto& ls = road.laneSection(0);
-                int rightLanes = 0, leftLanes = 0;
-                for (const auto& lane : ls.lanes()) {
-                    if (lane.id > 0) rightLanes++;
-                    else if (lane.id < 0) leftLanes++;
+            if (revisionMinor <= 6) {
+                xml << "    <roadRunnerProfile>\n";
+                if (road.numLaneSections() > 0) {
+                    const auto& ls = road.laneSection(0);
+                    int rightLanes = 0, leftLanes = 0;
+                    for (const auto& lane : ls.lanes()) {
+                        if (lane.id > 0) rightLanes++;
+                        else if (lane.id < 0) leftLanes++;
+                    }
+                    if (leftLanes > 0) {
+                        xml << "      <left>\n";
+                        xml << "        <section type_s=\"0\" laneCount=\""
+                            << leftLanes << "\" offsetX2=\"0\"/>\n";
+                        xml << "      </left>\n";
+                    }
+                    if (rightLanes > 0) {
+                        xml << "      <right>\n";
+                        xml << "        <section type_s=\"0\" laneCount=\""
+                            << rightLanes << "\" offsetX2=\"0\"/>\n";
+                        xml << "      </right>\n";
+                    }
                 }
-                if (leftLanes > 0) {
-                    xml << "      <left>\n";
-                    xml << "        <section type_s=\"0\" laneCount=\""
-                        << leftLanes << "\" offsetX2=\"0\"/>\n";
-                    xml << "      </left>\n";
-                }
-                if (rightLanes > 0) {
-                    xml << "      <right>\n";
-                    xml << "        <section type_s=\"0\" laneCount=\""
-                        << rightLanes << "\" offsetX2=\"0\"/>\n";
-                    xml << "      </right>\n";
-                }
+                xml << "    </roadRunnerProfile>\n";
             }
-            xml << "    </roadRunnerProfile>\n";
+
+            if (revisionMinor >= 8 && params.markings) {
+                bool opened = false;
+                int objectId = 0;
+                for (const auto& marking : *params.markings) {
+                    if (marking.roadId.toStdString() != road.id ||
+                        (!marking.isPointMarking && marking.type != MarkingType::Crosswalk &&
+                         marking.type != MarkingType::ParkingMarking)) continue;
+                    if (!opened) { xml << "    <objects>\n"; opened = true; }
+                    const double sPosition = marking.isPointMarking ? marking.position : marking.startS;
+                    xml << "      <object id=\"mark_" << r << '_' << objectId++
+                        << "\" name=\"" << escapeXml(marking.typeString().toStdString())
+                        << "\" type=\"roadMark\" s=\"" << sPosition
+                        << "\" t=\"" << marking.lateralOffset
+                        << "\" zOffset=\"0.01\" hdg=\"0\" pitch=\"0\" roll=\"0\""
+                        << " length=\"" << std::max(0.1, marking.endS - marking.startS)
+                        << "\" width=\"" << marking.width
+                        << "\" height=\"0.01\" orientation=\"none\"/>\n";
+                }
+                if (opened) xml << "    </objects>\n";
+            }
+
+            if (revisionMinor >= 8 && params.includeSignals && params.signs) {
+                bool opened = false;
+                int signalId = 0;
+                for (const auto& sign : *params.signs) {
+                    if (sign.roadId.toStdString() != road.id) continue;
+                    if (!opened) { xml << "    <signals>\n"; opened = true; }
+                    const bool dynamic = sign.type == SignType::TrafficSignal ||
+                                         sign.type == SignType::PedestrianSignal;
+                    xml << "      <signal id=\"signal_" << r << '_' << signalId++
+                        << "\" name=\"" << escapeXml(sign.typeString().toStdString())
+                        << "\" s=\"" << sign.sPosition << "\" t=\"" << sign.lateralOffset
+                        << "\" dynamic=\"" << (dynamic ? "yes" : "no")
+                        << "\" orientation=\"" << (sign.side == "left" ? "+" : "-")
+                        << "\" zOffset=\"0\" country=\"OpenGeoStudio\" type=\"1000001\" subtype=\""
+                        << int(sign.type) << "\" value=\"" << (sign.value.isEmpty() ? "-1" : sign.value.toStdString())
+                        << "\" unit=\"km/h\" height=\"" << sign.height << "\" width=\"0.6\"/>\n";
+                }
+                if (opened) xml << "    </signals>\n";
+            }
 
             xml << "  </road>\n";
         }
@@ -456,16 +517,18 @@ public:
             }
             xml << "      </laneSection>\n";
             xml << "    </lanes>\n";
-            xml << "    <roadRunnerProfile>\n";
-            if (cr.hasLeft) {
-                xml << "      <left>\n";
+            if (revisionMinor <= 6) {
+                xml << "    <roadRunnerProfile>\n";
+                if (cr.hasLeft) {
+                    xml << "      <left>\n";
+                    xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
+                    xml << "      </left>\n";
+                }
+                xml << "      <right>\n";
                 xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
-                xml << "      </left>\n";
+                xml << "      </right>\n";
+                xml << "    </roadRunnerProfile>\n";
             }
-            xml << "      <right>\n";
-            xml << "        <section type_s=\"0\" laneCount=\"1\" offsetX2=\"0\"/>\n";
-            xml << "      </right>\n";
-            xml << "    </roadRunnerProfile>\n";
             xml << "  </road>\n";
         }
 
@@ -505,6 +568,149 @@ public:
                       network.roads.size(), "roads,",
                       connectingRoads.size(), "connecting roads,",
                       junctionOuts.size(), "junctions");
+        return true;
+    }
+
+    struct SumoParams {
+        int geometrySamples = 32;
+        double defaultSpeedKmh = 50.0;
+        bool includeConnections = true;
+    };
+
+    static bool exportToSumo(const QString& path,
+                             const RoadNetworkBuilder::Result& network,
+                             const std::vector<DetectedJunction>& junctions,
+                             const SumoParams& params = {},
+                             QString* errorMsg = nullptr)
+    {
+        std::ostringstream xml;
+        xml << std::fixed << std::setprecision(3);
+        xml << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+        xml << "<net version=\"1.16\" junctionCornerDetail=\"5\" limitTurnSpeed=\"5.50\">\n";
+
+        using NodeKey = std::pair<long long, long long>;
+        std::map<NodeKey, std::string> nodeIds;
+        std::map<std::string, geo::Point2D> nodePositions;
+        std::map<std::string, int> nodeDegrees;
+        std::unordered_map<std::string, int> laneCounts;
+        int nextNodeId = 0;
+        auto nodeIdFor = [&](const geo::Point2D& point) {
+            const NodeKey key {std::llround(point.x * 100.0), std::llround(point.y * 100.0)};
+            auto it = nodeIds.find(key);
+            if (it != nodeIds.end()) return it->second;
+            const std::string id = "n" + std::to_string(nextNodeId++);
+            nodeIds.emplace(key, id);
+            nodePositions.emplace(id, point);
+            return id;
+        };
+
+        struct EdgeInfo {
+            const geo::RoadV2* road = nullptr;
+            std::string from;
+            std::string to;
+        };
+        std::vector<EdgeInfo> edges;
+        for (const auto& road : network.roads) {
+            const double length = road.totalLength();
+            if (length <= 0 || road.numLaneSections() == 0) continue;
+            const auto start = road.geometry().positionAt(0);
+            const auto end = road.geometry().positionAt(length);
+            EdgeInfo edge {&road, nodeIdFor(start), nodeIdFor(end)};
+            nodeDegrees[edge.from]++;
+            nodeDegrees[edge.to]++;
+            edges.push_back(edge);
+        }
+
+        for (const auto& edge : edges) {
+            const auto& road = *edge.road;
+            const double length = road.totalLength();
+            const auto& lanes = road.laneSection(0).lanes();
+            std::vector<const geo::Lane*> exportedLanes;
+            for (const auto& lane : lanes)
+                if (lane.id != 0 && lane.type != geo::LaneType::None)
+                    exportedLanes.push_back(&lane);
+            if (exportedLanes.empty()) continue;
+            laneCounts[road.id] = int(exportedLanes.size());
+
+            xml << "  <edge id=\"" << escapeXml(road.id) << "\" from=\"" << edge.from
+                << "\" to=\"" << edge.to << "\" name=\"" << escapeXml(road.name) << "\">\n";
+            const auto* metadata = RoadNetworkBuilder::getMetadata(road.id);
+            const double speedKmh = metadata && metadata->maxspeed > 0
+                ? metadata->maxspeed : params.defaultSpeedKmh;
+            std::ostringstream shape;
+            shape << std::fixed << std::setprecision(3);
+            const int samples = std::max(2, params.geometrySamples);
+            for (int sample = 0; sample <= samples; ++sample) {
+                if (sample > 0) shape << ' ';
+                const auto point = road.geometry().positionAt(length * sample / samples);
+                shape << point.x << ',' << point.y;
+            }
+
+            for (int index = 0; index < int(exportedLanes.size()); ++index) {
+                const auto& lane = *exportedLanes[index];
+                xml << "    <lane id=\"" << escapeXml(road.id) << '_' << index
+                    << "\" index=\"" << index << "\" speed=\"" << speedKmh / 3.6
+                    << "\" length=\"" << length << "\" width=\"" << lane.widthAt(0)
+                    << "\" shape=\"" << shape.str() << "\"";
+                const std::string type = laneTypeToString(lane.type);
+                if (type == "biking") xml << " allow=\"bicycle\"";
+                else if (type == "bus" || type == "stop") xml << " allow=\"bus\"";
+                else if (type == "sidewalk") xml << " allow=\"pedestrian\"";
+                else if (type == "tram") xml << " allow=\"tram\"";
+                else if (type == "shoulder") xml << " allow=\"emergency\"";
+                else if (type == "restricted" || type == "border") xml << " disallow=\"all\"";
+                xml << "/>\n";
+            }
+            xml << "  </edge>\n";
+        }
+
+        for (const auto& [id, point] : nodePositions) {
+            const char* type = nodeDegrees[id] > 1 ? "priority" : "dead_end";
+            xml << "  <junction id=\"" << id << "\" type=\"" << type
+                << "\" x=\"" << point.x << "\" y=\"" << point.y
+                << "\" incLanes=\"\" intLanes=\"\" shape=\"" << point.x << ',' << point.y << "\"/>\n";
+        }
+
+        if (params.includeConnections) {
+            std::unordered_map<std::string, const geo::RoadV2*> roadsById;
+            for (const auto& road : network.roads) roadsById[road.id] = &road;
+            for (const auto& junction : junctions) {
+                std::vector<const geo::RoadV2*> incoming;
+                std::vector<const geo::RoadV2*> outgoing;
+                for (const auto& roadId : junction.roadIds) {
+                    auto it = roadsById.find(roadId.toStdString());
+                    if (it == roadsById.end()) continue;
+                    const auto* road = it->second;
+                    const auto start = road->geometry().positionAt(0);
+                    const auto end = road->geometry().positionAt(road->totalLength());
+                    const double startDistance = std::hypot(start.x - junction.center.x, start.y - junction.center.y);
+                    const double endDistance = std::hypot(end.x - junction.center.x, end.y - junction.center.y);
+                    if (endDistance <= startDistance) incoming.push_back(road);
+                    if (startDistance <= endDistance) outgoing.push_back(road);
+                }
+                for (const auto* from : incoming) {
+                    for (const auto* to : outgoing) {
+                        if (from == to) continue;
+                        const int count = std::min(laneCounts[from->id], laneCounts[to->id]);
+                        for (int lane = 0; lane < count; ++lane)
+                            xml << "  <connection from=\"" << escapeXml(from->id)
+                                << "\" to=\"" << escapeXml(to->id)
+                                << "\" fromLane=\"" << lane << "\" toLane=\"" << lane
+                                << "\" dir=\"s\" state=\"M\"/>\n";
+                    }
+                }
+            }
+        }
+
+        xml << "</net>\n";
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            if (errorMsg) *errorMsg = QString("Cannot write SUMO file: %1").arg(path);
+            return false;
+        }
+        file.write(QByteArray::fromStdString(xml.str()));
+        file.close();
+        appLog().info("[OsmExporter] Exported SUMO network to", path, "—", edges.size(), "edges");
         return true;
     }
 
@@ -638,6 +844,79 @@ public:
         return true;
     }
 
+    static bool validateOpenDriveStructure(const QString& path, QStringList* issues = nullptr)
+    {
+        QStringList localIssues;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            localIssues.append(QString("Cannot open OpenDRIVE file: %1").arg(path));
+            if (issues) *issues = localIssues;
+            return false;
+        }
+        QXmlStreamReader xml(&file);
+        bool hasRoot = false;
+        bool hasHeader = false;
+        bool inRoad = false;
+        bool roadHasPlanView = false;
+        bool roadHasLanes = false;
+        QString currentRoad;
+        QSet<QString> roadIds;
+        QSet<QString> junctionIds;
+        std::vector<std::pair<QString, QString>> junctionRoadRefs;
+        while (!xml.atEnd()) {
+            xml.readNext();
+            if (xml.isStartElement()) {
+                const auto name = xml.name();
+                if (name == QLatin1String("OpenDRIVE")) hasRoot = true;
+                else if (name == QLatin1String("header")) {
+                    hasHeader = true;
+                    const int major = xml.attributes().value("revMajor").toInt();
+                    const int minor = xml.attributes().value("revMinor").toInt();
+                    if (major != 1 || (minor != 6 && minor != 8))
+                        localIssues.append(QString("Unsupported OpenDRIVE revision %1.%2").arg(major).arg(minor));
+                } else if (name == QLatin1String("road")) {
+                    inRoad = true;
+                    roadHasPlanView = false;
+                    roadHasLanes = false;
+                    currentRoad = xml.attributes().value("id").toString();
+                    if (currentRoad.isEmpty()) localIssues.append("Road without id");
+                    else if (roadIds.contains(currentRoad)) localIssues.append(QString("Duplicate road id %1").arg(currentRoad));
+                    else roadIds.insert(currentRoad);
+                    if (xml.attributes().value("length").toDouble() <= 0)
+                        localIssues.append(QString("Road %1 has non-positive length").arg(currentRoad));
+                } else if (inRoad && name == QLatin1String("planView")) roadHasPlanView = true;
+                else if (inRoad && name == QLatin1String("lanes")) roadHasLanes = true;
+                else if (name == QLatin1String("geometry") &&
+                         xml.attributes().value("length").toDouble() <= 0)
+                    localIssues.append(QString("Road %1 contains non-positive geometry length").arg(currentRoad));
+                else if (name == QLatin1String("junction")) {
+                    const QString id = xml.attributes().value("id").toString();
+                    if (junctionIds.contains(id)) localIssues.append(QString("Duplicate junction id %1").arg(id));
+                    junctionIds.insert(id);
+                } else if (name == QLatin1String("connection")) {
+                    junctionRoadRefs.emplace_back(xml.attributes().value("incomingRoad").toString(),
+                                                  xml.attributes().value("connectingRoad").toString());
+                }
+            } else if (xml.isEndElement() && xml.name() == QLatin1String("road")) {
+                if (!roadHasPlanView) localIssues.append(QString("Road %1 has no planView").arg(currentRoad));
+                if (!roadHasLanes) localIssues.append(QString("Road %1 has no lanes").arg(currentRoad));
+                inRoad = false;
+            }
+        }
+        if (xml.hasError()) localIssues.append(xml.errorString());
+        if (!hasRoot) localIssues.append("Missing OpenDRIVE root element");
+        if (!hasHeader) localIssues.append("Missing OpenDRIVE header");
+        if (roadIds.isEmpty()) localIssues.append("OpenDRIVE document contains no roads");
+        for (const auto& [incoming, connecting] : junctionRoadRefs) {
+            if (!roadIds.contains(incoming))
+                localIssues.append(QString("Junction references missing incoming road %1").arg(incoming));
+            if (!roadIds.contains(connecting))
+                localIssues.append(QString("Junction references missing connecting road %1").arg(connecting));
+        }
+        if (issues) *issues = localIssues;
+        return localIssues.empty();
+    }
+
     // ─── Validate exported file can be re-imported ───
     static bool validateExport(const QString& path, QString* errorMsg = nullptr) {
         QFile file(path);
@@ -667,10 +946,14 @@ public:
 
         // Try as OpenDRIVE XML
         if (data.contains("<?xml") && data.contains("<OpenDRIVE>")) {
-            if (data.contains("<road") && data.contains("</OpenDRIVE>")) {
+            QStringList issues;
+            const bool valid = validateOpenDriveStructure(path, &issues);
+            if (valid) {
                 appLog().info("[OsmExporter] Validation: OpenDRIVE XML OK");
                 return true;
             }
+            if (errorMsg) *errorMsg = issues.join("; ");
+            return false;
         }
 
         if (errorMsg) *errorMsg = "Unknown export format";

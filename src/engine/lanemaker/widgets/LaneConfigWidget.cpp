@@ -854,6 +854,33 @@ void LaneConfigWidget::SetRailProfile(int trackCount, double gauge, double track
 
 // ── Cross-Section Studio: profile integration ──────────────────────
 
+QMap<QString, roads::RoadProfile> LaneConfigWidget::customProfiles()
+{
+    // Load user-saved custom presets (written by OnSaveAsPreset) from QSettings.
+    QMap<QString, roads::RoadProfile> out;
+    QSettings settings("OpenGeoStudio", "LaneMaker");
+    const int count = settings.value("profiles/customCount", 0).toInt();
+    for (int i = 1; i <= count; ++i)
+    {
+        const QString key = QString("custom_%1").arg(i);
+        settings.beginGroup("profiles/" + key);
+        roads::RoadProfile p;
+        p.type = key;
+        p.laneWidth = settings.value("laneWidth", 3.5).toDouble();
+        p.speedLimit = settings.value("speedLimit", 50).toDouble();
+        p.hasSidewalk = settings.value("hasSidewalk", false).toBool();
+        p.hasCurb = settings.value("hasCurb", false).toBool();
+        p.leftLanes = settings.value("leftLanes", 1).toInt();
+        p.rightLanes = settings.value("rightLanes", 1).toInt();
+        p.leftOffsetX2 = settings.value("leftOffsetX2", 0).toInt();
+        p.rightOffsetX2 = settings.value("rightOffsetX2", 0).toInt();
+        p.description = settings.value("description").toString();
+        settings.endGroup();
+        out[key] = p;
+    }
+    return out;
+}
+
 void LaneConfigWidget::PopulateRoadProfiles()
 {
     {
@@ -861,6 +888,10 @@ void LaneConfigWidget::PopulateRoadProfiles()
         profileCombo->clear();
         auto profiles = roads::RoadProfileCatalog::all();
         for (auto it = profiles.begin(); it != profiles.end(); ++it)
+            profileCombo->addItem(it.key(), it.key());
+        // User-saved custom presets after the built-in catalog
+        const auto customs = customProfiles();
+        for (auto it = customs.begin(); it != customs.end(); ++it)
             profileCombo->addItem(it.key(), it.key());
         profileCombo->setCurrentText("city_2x1");
         profileCombo->setToolTip("Select a road profile preset");
@@ -914,7 +945,12 @@ void LaneConfigWidget::LoadProfile(const QString& key)
     }
     else
     {
-        loadedProfile = roads::RoadProfileCatalog::get(key);
+        // Custom presets (QSettings) take priority over the built-in catalog
+        const auto customs = customProfiles();
+        if (customs.contains(key))
+            loadedProfile = customs[key];
+        else
+            loadedProfile = roads::RoadProfileCatalog::get(key);
 
         LM::LaneWidth = loadedProfile.laneWidth;
 
@@ -1005,21 +1041,35 @@ void LaneConfigWidget::OnResetToProfile()
 void LaneConfigWidget::OnSaveAsPreset()
 {
     // Save the current configuration as a custom preset in QSettings.
-    // The preset is persisted per-user and can be recalled later.
+    // The preset is persisted per-user, appears in the profile combo on
+    // the next PopulateRoadProfiles(), and can be recalled via LoadProfile().
     if (currentProfileKey.isEmpty()) return;
+    if (visual->IsRailMode()) return;  // custom presets are road-mode only
+
+    const auto lPlan = LeftResult();
+    const auto rPlan = RightResult();
 
     QSettings settings("OpenGeoStudio", "LaneMaker");
-    int customCount = settings.value("profiles/customCount", 0).toInt();
-    QString customKey = QString("custom_%1").arg(customCount + 1);
+    const int customCount = settings.value("profiles/customCount", 0).toInt();
+    const QString customKey = QString("custom_%1").arg(customCount + 1);
 
     settings.beginGroup("profiles/" + customKey);
     settings.setValue("laneWidth", laneWidthSpinner->value());
     settings.setValue("speedLimit", speedLimitSpinner->value());
     settings.setValue("hasSidewalk", sidewalkCheck->isChecked());
     settings.setValue("hasCurb", curbCheck->isChecked());
+    settings.setValue("leftLanes", static_cast<int>(lPlan.laneCount));
+    settings.setValue("rightLanes", static_cast<int>(rPlan.laneCount));
+    settings.setValue("leftOffsetX2", static_cast<int>(lPlan.offsetx2));
+    settings.setValue("rightOffsetX2", static_cast<int>(rPlan.offsetx2));
+    settings.setValue("description", QString("Custom — saved from %1").arg(currentProfileKey));
     settings.endGroup();
     settings.setValue("profiles/customCount", customCount + 1);
 
-    // Reload to clear modified state
-    LoadProfile(currentProfileKey);
+    // Add to the combo and load it (clears the modified state)
+    {
+        QSignalBlocker blocker(profileCombo);
+        profileCombo->addItem(customKey, customKey);
+    }
+    LoadProfile(customKey);
 }

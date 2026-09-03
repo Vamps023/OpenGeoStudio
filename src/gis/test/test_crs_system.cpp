@@ -8,9 +8,11 @@
 #include "CRSManager.hpp"
 #include "CoordinateTransform.hpp"
 #include "CRSSearch.hpp"
+#include "georef/ImageGeoreferencer.hpp"
 
 #include <cmath>
 #include <QString>
+#include <QTemporaryDir>
 #include <iostream>
 
 using namespace gis;
@@ -548,6 +550,88 @@ void testAutoUtm_MultipleZones() {
     }
 }
 
+void testImageGeoreference_Affine() {
+    std::vector<ImageControlPoint> points;
+    auto add = [&](double u, double v, bool validation = false) {
+        points.push_back({u, v, 2.0 * u + 3.0 * v + 100.0,
+                         -u + 4.0 * v + 50.0, validation});
+    };
+    add(0, 0);
+    add(100, 0);
+    add(0, 100);
+    add(100, 100);
+    add(40, 60, true);
+
+    const auto result = ImageGeoreferencer::fit(points, ImageTransformMethod::Affine);
+    VERIFY(result.success, "ImageGeoref: Affine fit", result.error.toStdString());
+    const auto world = ImageGeoreferencer::pixelToWorld(result, 25, 30);
+    VERIFY(approxEqual(world.x, 240.0, 1e-7), "ImageGeoref: Affine X", "Wrong world X");
+    VERIFY(approxEqual(world.y, 145.0, 1e-7), "ImageGeoref: Affine Y", "Wrong world Y");
+    const auto pixel = ImageGeoreferencer::worldToPixel(result, world.x, world.y);
+    VERIFY(approxEqual(pixel.x, 25.0, 1e-7) && approxEqual(pixel.y, 30.0, 1e-7),
+           "ImageGeoref: Affine inverse", "Round-trip failed");
+    VERIFY(result.validationRmseWorld < 1e-7,
+           "ImageGeoref: Validation RMSE", "Unexpected validation error");
+    const auto worldFile = ImageGeoreferencer::worldFileCoefficients(result);
+    VERIFY(approxEqual(worldFile[0], 2.0) && approxEqual(worldFile[2], 3.0),
+           "ImageGeoref: World file", "Wrong world-file coefficients");
+    const auto json = ImageGeoreferencer::toJson(result, points, "EPSG:32643");
+    VERIFY(json["controlPoints"].toArray().size() == 5,
+           "ImageGeoref: JSON controls", "Control points not persisted");
+
+    QTemporaryDir directory;
+    const QString projectPath = directory.filePath("image.georef.json");
+    const QString worldPath = directory.filePath("image.pgw");
+    QString error;
+    VERIFY(ImageGeoreferencer::save(projectPath, result, points, "EPSG:32643", &error),
+           "ImageGeoref: Save", error.toStdString());
+    ImageGeoreferenceResult restored;
+    std::vector<ImageControlPoint> restoredPoints;
+    QString restoredCrs;
+    VERIFY(ImageGeoreferencer::load(projectPath, restored, restoredPoints, restoredCrs, &error),
+           "ImageGeoref: Load", error.toStdString());
+    VERIFY(restoredCrs == "EPSG:32643" && restoredPoints.size() == points.size(),
+           "ImageGeoref: Persistence", "Restored metadata differs");
+    VERIFY(ImageGeoreferencer::writeWorldFile(worldPath, restored, &error),
+           "ImageGeoref: World file write", error.toStdString());
+}
+
+void testImageGeoreference_Homography() {
+    const std::array<double, 9> expected {2.0, 0.1, 100.0, 0.2, 3.0, 50.0,
+                                          0.001, 0.0005, 1.0};
+    auto transform = [&](double u, double v) {
+        const double scale = expected[6] * u + expected[7] * v + 1.0;
+        return ImageTransformPoint{(expected[0] * u + expected[1] * v + expected[2]) / scale,
+                                   (expected[3] * u + expected[4] * v + expected[5]) / scale};
+    };
+    std::vector<ImageControlPoint> points;
+    for (const auto& pixel : std::vector<std::array<double, 2>>{
+             {0, 0}, {200, 0}, {0, 150}, {200, 150}, {80, 40}, {120, 100}}) {
+        const auto world = transform(pixel[0], pixel[1]);
+        points.push_back({pixel[0], pixel[1], world.x, world.y, false});
+    }
+    const auto validationWorld = transform(55, 75);
+    points.push_back({55, 75, validationWorld.x, validationWorld.y, true});
+
+    const auto result = ImageGeoreferencer::fit(points, ImageTransformMethod::Homography);
+    VERIFY(result.success, "ImageGeoref: Homography fit", result.error.toStdString());
+    const auto world = ImageGeoreferencer::pixelToWorld(result, 35, 90);
+    const auto expectedWorld = transform(35, 90);
+    VERIFY(approxEqual(world.x, expectedWorld.x, 1e-6) &&
+           approxEqual(world.y, expectedWorld.y, 1e-6),
+           "ImageGeoref: Homography transform", "Projective mapping failed");
+    VERIFY(result.validationRmsePixels < 1e-6,
+           "ImageGeoref: Homography validation", "Validation round-trip failed");
+}
+
+void testImageGeoreference_Degenerate() {
+    const std::vector<ImageControlPoint> points {
+        {0, 0, 0, 0, false}, {1, 1, 2, 2, false}, {2, 2, 4, 4, false}
+    };
+    const auto result = ImageGeoreferencer::fit(points, ImageTransformMethod::Affine);
+    VERIFY(!result.success, "ImageGeoref: Degenerate rejected", "Collinear points must fail");
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -605,6 +689,11 @@ int main(int argc, char* argv[]) {
     testSearch_EPSG32615_ByName();
     testSearch_EPSG32615_ByAuthId();
     testAutoUtm_MultipleZones();
+
+    std::cout << "\n--- Image Georeferencing Tests ---" << std::endl;
+    testImageGeoreference_Affine();
+    testImageGeoreference_Homography();
+    testImageGeoreference_Degenerate();
 
     std::cout << "\n=== Results ===" << std::endl;
     std::cout << "Passed: " << g_testsPassed << std::endl;

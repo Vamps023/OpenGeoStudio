@@ -266,6 +266,9 @@ struct PlacedFurniture {
     SignSide side = SignSide::Right;
     int repeatCount = 1;     // for repeated objects (e.g., bollards)
     double repeatSpacing = 10.0; // spacing between repeats
+    // Skip repeated instances on curves tighter than this radius (m).
+    // 0 = disabled (place everywhere). Point objects only.
+    double minTurnRadius = 0.0;
 
     QJsonObject toJson() const;
     static PlacedFurniture fromJson(const QJsonObject& json);

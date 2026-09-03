@@ -25,6 +25,7 @@
 #include "../../core/osm/TrafficSignGenerator.hpp"
 #include "../../core/osm/OsmProjectSerializer.hpp"
 #include "../../core/osm/OsmExporter.hpp"
+#include "../../core/lanelet2/Lanelet2IO.hpp"
 
 #include <QCoreApplication>
 #include <QTemporaryFile>
@@ -996,6 +997,106 @@ TEST(test_geojson_export) {
 }
 
 // ─── Test 33: Complete end-to-end workflow ───
+TEST(test_osm_preprocessing) {
+    OsmData data;
+    data.nodes[1] = Node{1, 0.0, 0.0};
+    data.nodes[2] = Node{2, 0.0, 0.0010};
+    data.nodes[3] = Node{3, 0.0, 0.00103};
+    data.nodes[4] = Node{4, 0.0, 0.0020};
+    data.nodes[5] = Node{5, 0.01, 0.01};
+    data.nodes[6] = Node{6, 0.01, 0.011};
+
+    Way mainRoad;
+    mainRoad.id = 10;
+    mainRoad.nodeRefs = {1, 2};
+    mainRoad.tags = {{"highway", "primary"}};
+    data.ways[10] = mainRoad;
+
+    Way construction;
+    construction.id = 20;
+    construction.nodeRefs = {3, 4};
+    construction.tags = {{"highway", "construction"}, {"construction", "secondary"}};
+    data.ways[20] = construction;
+
+    Way isolated;
+    isolated.id = 30;
+    isolated.nodeRefs = {5, 6};
+    isolated.tags = {{"highway", "service"}};
+    data.ways[30] = isolated;
+
+    CoordinateConverter converter;
+    converter.setReference(0.0, 0.0);
+    OsmPreprocessor::Params params;
+    params.snapDistance = 5.0;
+    auto repair = OsmPreprocessor::process(data, converter, params);
+
+    CHECK_EQ(repair.constructionWaysNormalized, 1, "Construction road should be normalized");
+    CHECK_EQ(data.ways[20].highwayType(), "secondary", "Construction type should be preserved");
+    CHECK_EQ(repair.endpointGapsSnapped, 1, "Nearby endpoint gap should be snapped");
+    CHECK_EQ(data.ways[20].nodeRefs.front(), data.ways[10].nodeRefs.back(),
+             "Road endpoints should share a topology node");
+
+    params.normalizeConstruction = false;
+    params.snapEndpointGaps = false;
+    params.removeDisconnectedComponents = true;
+    repair = OsmPreprocessor::process(data, converter, params);
+    CHECK_EQ(repair.disconnectedWaysRemoved, 1, "Disconnected road component should be removed");
+    CHECK(!data.ways[30].visible, "Disconnected way should be hidden from network build");
+}
+
+TEST(test_sumo_export) {
+    QString xml = createSimpleOsmXml();
+    OsmData data;
+    OsmXmlParser::parseContent(xml, data);
+    CoordinateConverter conv;
+    conv.setReferenceFromBounds(data.minLat, data.minLon, data.maxLat, data.maxLon);
+    auto network = RoadNetworkBuilder::build(data, conv);
+    auto junctions = JunctionDetector::detect(network, data);
+
+    QTemporaryDir tmpDir;
+    QString exportPath = tmpDir.filePath("export.net.xml");
+    QString error;
+    CHECK(OsmExporter::exportToSumo(exportPath, network, junctions, {}, &error),
+          "SUMO export should succeed");
+    QFile file(exportPath);
+    CHECK(file.open(QIODevice::ReadOnly | QIODevice::Text), "SUMO export should be readable");
+    const QByteArray content = file.readAll();
+    CHECK(content.contains("<net version=\"1.16\""), "SUMO root should be present");
+    CHECK(content.contains("<edge id=\"osm_way_100\""), "SUMO roads should be exported as edges");
+    CHECK(content.contains("<lane id=\"osm_way_100_0\""), "SUMO lanes should be exported");
+    CHECK(content.contains("<junction id=\"n"), "SUMO endpoint junctions should be exported");
+}
+
+TEST(test_lanelet2_roundtrip) {
+    QString xml = createSimpleOsmXml();
+    OsmData data;
+    OsmXmlParser::parseContent(xml, data);
+    CoordinateConverter converter;
+    converter.setReferenceFromBounds(data.minLat, data.minLon, data.maxLat, data.maxLon);
+    const auto network = RoadNetworkBuilder::build(data, converter);
+
+    const auto laneletMap = lanelet2io::Lanelet2IO::fromRoadNetwork(network, converter, 8);
+    CHECK(!laneletMap.nodes.empty(), "Lanelet2 nodes should be generated");
+    CHECK(!laneletMap.ways.empty(), "Lanelet2 boundaries should be generated");
+    CHECK(!laneletMap.relations.empty(), "Lanelet2 lanelet relations should be generated");
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath("network.osm");
+    QString error;
+    CHECK(lanelet2io::Lanelet2IO::save(path, laneletMap, &error),
+          "Lanelet2 save should succeed");
+    lanelet2io::Map restored;
+    CHECK(lanelet2io::Lanelet2IO::load(path, restored, &error),
+          "Lanelet2 load should succeed");
+    CHECK_EQ(restored.relations.size(), laneletMap.relations.size(),
+             "Lanelet2 relations should survive round-trip");
+
+    const auto restoredNetwork = lanelet2io::Lanelet2IO::toRoadNetwork(restored, converter);
+    CHECK(!restoredNetwork.roads.empty(), "Lanelet2 should convert back to editable roads");
+    CHECK(restoredNetwork.roads.front().numLaneSections() > 0,
+          "Converted Lanelet2 road should have a lane section");
+}
+
 TEST(test_end_to_end_workflow) {
     // 1. Import
     QString xml = createSimpleOsmXml();

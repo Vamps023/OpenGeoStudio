@@ -313,7 +313,13 @@ MainWidget::MainWidget(QWidget* parent)
     // ── CREATE ──
     addCaption("Create");
     makeModeButton(createModeButton, "road_mode", tr("Road"),
-                   tr("Draw new roads"));
+                   tr("Draw automatically fitted roads"));
+    makeModeButton(straightLineModeButton, "straight_line", tr("Segment"),
+                   tr("Draw straight road segments"));
+    makeModeButton(arcModeButton, "roundabout_mode", tr("Arc"),
+                   tr("Draw constant-radius circular arcs"));
+    makeModeButton(clothoidModeButton, "road_mode", tr("Clothoid"),
+                   tr("Draw curvature-transition spirals"));
 
     // ── NAVIGATE ──
     addCaption("Navigate");
@@ -323,6 +329,9 @@ MainWidget::MainWidget(QWidget* parent)
     pointerModeGroup = new QButtonGroup(this);
     pointerModeGroup->setExclusive(true);
     pointerModeGroup->addButton(createModeButton);
+    pointerModeGroup->addButton(straightLineModeButton);
+    pointerModeGroup->addButton(arcModeButton);
+    pointerModeGroup->addButton(clothoidModeButton);
     pointerModeGroup->addButton(dragModeButton);
 
     // Keyboard shortcuts — single letters while the canvas has focus.
@@ -340,10 +349,16 @@ MainWidget::MainWidget(QWidget* parent)
         });
         btn->setToolTip(QString("%1 (%2)").arg(tip, key));
     };
-    addModeShortcut("R", createModeButton,      tr("Draw new roads"));
-    addModeShortcut("V", dragModeButton,        tr("Select / pan / zoom"));
+    addModeShortcut("R", createModeButton,       tr("Draw automatically fitted roads"));
+    addModeShortcut("L", straightLineModeButton, tr("Draw straight road segments"));
+    addModeShortcut("C", arcModeButton,          tr("Draw constant-radius circular arcs"));
+    addModeShortcut("T", clothoidModeButton,     tr("Draw curvature-transition spirals"));
+    addModeShortcut("V", dragModeButton,         tr("Select / pan / zoom"));
 
     sidebarLayout->addWidget(createModeButton);
+    sidebarLayout->addWidget(straightLineModeButton);
+    sidebarLayout->addWidget(arcModeButton);
+    sidebarLayout->addWidget(clothoidModeButton);
     sidebarLayout->addWidget(dragModeButton);
 
     // Esc always returns to the safe View mode (but not while typing)
@@ -532,6 +547,44 @@ MainWidget::MainWidget(QWidget* parent)
     rightLayout->setContentsMargins(6, 6, 6, 6);
     rightLayout->setSpacing(4);
 
+    geometrySection = new CollapsibleSection(tr("Geometry Tool"), true, this);
+    auto* geometryArea = geometrySection->content();
+
+    arcOptions = new QWidget;
+    auto* arcForm = new QFormLayout(arcOptions);
+    arcForm->setContentsMargins(0, 0, 0, 0);
+    arcRadius = new QDoubleSpinBox;
+    arcRadius->setRange(1.0, 100000.0);
+    arcRadius->setValue(100.0);
+    arcRadius->setDecimals(2);
+    arcRadius->setSuffix(" m");
+    arcRadius->setToolTip(tr("Radius for standalone arcs; tangent-connected arcs derive the exact radius from the target"));
+    arcDirection = new QComboBox;
+    arcDirection->addItem(tr("Left"), 1);
+    arcDirection->addItem(tr("Right"), -1);
+    arcForm->addRow(tr("Radius:"), arcRadius);
+    arcForm->addRow(tr("Turn:"), arcDirection);
+    geometryArea->addWidget(arcOptions);
+
+    clothoidOptions = new QWidget;
+    auto* clothoidForm = new QFormLayout(clothoidOptions);
+    clothoidForm->setContentsMargins(0, 0, 0, 0);
+    clothoidStartCurvature = new QDoubleSpinBox;
+    clothoidStartCurvature->setRange(-0.2, 0.2);
+    clothoidStartCurvature->setDecimals(5);
+    clothoidStartCurvature->setSingleStep(0.001);
+    clothoidStartCurvature->setSuffix(" 1/m");
+    clothoidEndCurvature = new QDoubleSpinBox;
+    clothoidEndCurvature->setRange(-0.2, 0.2);
+    clothoidEndCurvature->setDecimals(5);
+    clothoidEndCurvature->setSingleStep(0.001);
+    clothoidEndCurvature->setValue(0.01);
+    clothoidEndCurvature->setSuffix(" 1/m");
+    clothoidForm->addRow(tr("Start curvature:"), clothoidStartCurvature);
+    clothoidForm->addRow(tr("End curvature:"), clothoidEndCurvature);
+    geometryArea->addWidget(clothoidOptions);
+    rightLayout->addWidget(geometrySection);
+
     // ── Inspector section — contextual: placeholder when nothing selected ──
     inspectorSection = new CollapsibleSection(tr("Road Properties"), true, this);
     auto* inspectorArea = inspectorSection->content();
@@ -694,7 +747,18 @@ MainWidget::MainWidget(QWidget* parent)
     setLayout(mainLayout);
 
     connect(createModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoCreateRoadMode);
+    connect(straightLineModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoStraightLineMode);
+    connect(arcModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoArcMode);
+    connect(clothoidModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoClothoidMode);
     connect(dragModeButton, &QAbstractButton::toggled, this, &MainWidget::gotoDragMode);
+    connect(arcRadius, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double) { applyGeometryParameters(); });
+    connect(arcDirection, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) { applyGeometryParameters(); });
+    connect(clothoidStartCurvature, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double) { applyGeometryParameters(); });
+    connect(clothoidEndCurvature, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double) { applyGeometryParameters(); });
     connect(mapViewGL, &LM::MapViewGL::MousePerformedAction, this, &MainWidget::OnMouseAction);
     connect(mapViewGL, &LM::MapViewGL::KeyPerformedAction, this, &MainWidget::OnKeyPress);
 
@@ -888,7 +952,23 @@ void MainWidget::gotoStraightLineMode(bool checked)
 {
     if (!checked) return;
     SetEditMode(LM::Mode_StraightLine);
-    LM::ActionManager::Instance()->Record(LM::Mode_Create);
+    LM::ActionManager::Instance()->Record(LM::Mode_StraightLine);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoArcMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_Arc);
+    LM::ActionManager::Instance()->Record(LM::Mode_Arc);
+    laneConfig->GotoRoadMode();
+}
+
+void MainWidget::gotoClothoidMode(bool checked)
+{
+    if (!checked) return;
+    SetEditMode(LM::Mode_Clothoid);
+    LM::ActionManager::Instance()->Record(LM::Mode_Clothoid);
     laneConfig->GotoRoadMode();
 }
 
@@ -2065,6 +2145,11 @@ void MainWidget::editFurniture(const std::string& furnitureId)
     form->addRow("Repeat Count:", repeatSpin);
     auto* spacingSpin = new QDoubleSpinBox; spacingSpin->setRange(0.5, 200); spacingSpin->setValue(furniture->repeatSpacing); spacingSpin->setSuffix(" m");
     form->addRow("Repeat Spacing:", spacingSpin);
+    auto* minRadiusSpin = new QDoubleSpinBox; minRadiusSpin->setRange(0, 500); minRadiusSpin->setSingleStep(5);
+    minRadiusSpin->setValue(furniture->minTurnRadius); minRadiusSpin->setSuffix(" m");
+    minRadiusSpin->setSpecialValueText(QStringLiteral("Off — place everywhere"));
+    minRadiusSpin->setToolTip(QStringLiteral("Skip repeated instances on curves tighter than this radius (point objects only)"));
+    form->addRow("Skip on tight curves:", minRadiusSpin);
     layout->addLayout(form);
     auto* btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     layout->addWidget(btnBox);
@@ -2087,6 +2172,7 @@ void MainWidget::editFurniture(const std::string& furnitureId)
         furniture->height = heightSpin->value();
         furniture->repeatCount = repeatSpin->value();
         furniture->repeatSpacing = spacingSpin->value();
+        furniture->minTurnRadius = minRadiusSpin->value();
         reg->updateFurniture(*furniture);
         refreshCustomGraphics(furniture->roadID);
         mapViewGL->update();
@@ -2746,6 +2832,15 @@ void MainWidget::SetModeFromReplay(int mode)
     case LM::Mode_Create:
         createModeButton->setChecked(true);
         break;
+    case LM::Mode_StraightLine:
+        straightLineModeButton->setChecked(true);
+        break;
+    case LM::Mode_Arc:
+        arcModeButton->setChecked(true);
+        break;
+    case LM::Mode_Clothoid:
+        clothoidModeButton->setChecked(true);
+        break;
     default:
         dragModeButton->setChecked(true);
         break;
@@ -2765,8 +2860,27 @@ void MainWidget::GoToSimulationMode(bool enabled)
     }
 }
 
+void MainWidget::updateGeometryOptions(LM::EditMode mode)
+{
+    const bool arcActive = mode == LM::Mode_Arc;
+    const bool clothoidActive = mode == LM::Mode_Clothoid;
+    if (geometrySection) geometrySection->setVisible(arcActive || clothoidActive);
+    if (arcOptions) arcOptions->setVisible(arcActive);
+    if (clothoidOptions) clothoidOptions->setVisible(clothoidActive);
+}
+
+void MainWidget::applyGeometryParameters()
+{
+    auto* session = dynamic_cast<RoadCreationSession*>(drawingSession);
+    if (!session) return;
+    session->SetArcParameters(arcRadius->value(), arcDirection->currentData().toInt());
+    session->SetClothoidParameters(clothoidStartCurvature->value(), clothoidEndCurvature->value());
+    if (mapViewGL) mapViewGL->update();
+}
+
 void MainWidget::SetEditMode(LM::EditMode aMode)
 {
+    updateGeometryOptions(aMode);
     // Don't enter drawing modes if GL isn't initialized — would crash
     if (!mapViewGL || !mapViewGL->isGLInitialized()) {
         editMode = LM::Mode_None;
@@ -2780,7 +2894,9 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
         switch (aMode)
         {
         case LM::Mode_Create:          statusTool->setText("Tool: Road"); break;
-        case LM::Mode_StraightLine:    statusTool->setText("Tool: Line"); break;
+        case LM::Mode_StraightLine:    statusTool->setText("Tool: Segment"); break;
+        case LM::Mode_Arc:             statusTool->setText("Tool: Arc"); break;
+        case LM::Mode_Clothoid:        statusTool->setText("Tool: Clothoid"); break;
         case LM::Mode_CreateLanes:     statusTool->setText("Tool: Lane"); break;
         case LM::Mode_Modify:          statusTool->setText("Tool: Modify"); break;
         case LM::Mode_Destroy:         statusTool->setText("Tool: Delete"); break;
@@ -2807,8 +2923,21 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
     case LM::Mode_StraightLine:
         {
             auto* session = new RoadCreationSession();
-            session->forceStraightLine = true;
-            session->autoCompleteAfterFirstSegment = true;
+            session->SetGeometryMode(RoadCreationSession::GeometryMode::Segment);
+            drawingSession = session;
+        }
+        break;
+    case LM::Mode_Arc:
+        {
+            auto* session = new RoadCreationSession();
+            session->SetGeometryMode(RoadCreationSession::GeometryMode::Arc);
+            drawingSession = session;
+        }
+        break;
+    case LM::Mode_Clothoid:
+        {
+            auto* session = new RoadCreationSession();
+            session->SetGeometryMode(RoadCreationSession::GeometryMode::Clothoid);
             drawingSession = session;
         }
         break;
@@ -2834,6 +2963,7 @@ void MainWidget::SetEditMode(LM::EditMode aMode)
     default:
         break;
     }
+    applyGeometryParameters();
 }
 
 LM::EditMode MainWidget::GetEditMode() const

@@ -10,22 +10,49 @@ namespace LM
     std::filesystem::path DefaultSaveFolder()
     {
         std::filesystem::path fullPath;
-    
+
 #ifdef _WIN32
-        fullPath = std::getenv("HOMEDRIVE");
-        fullPath /= std::getenv("HOMEPATH");
-        fullPath /= "LaneMakerData";
+        // std::getenv returns nullptr when the variable is unset —
+        // constructing a path from nullptr is undefined behavior (crash).
+        // Guard every lookup and fall back to the executable folder.
+        const char* homeDrive = std::getenv("HOMEDRIVE");
+        const char* homePath = std::getenv("HOMEPATH");
+        if (homeDrive && *homeDrive && homePath && *homePath)
+        {
+            fullPath = homeDrive;
+            fullPath /= homePath;
+            fullPath /= "LaneMakerData";
+        }
+        else
+        {
+            const char* userProfile = std::getenv("USERPROFILE");
+            if (userProfile && *userProfile)
+            {
+                fullPath = userProfile;
+                fullPath /= "LaneMakerData";
+            }
+        }
 #elif __linux__
-        fullPath = std::getenv("HOME");
-        fullPath /= "LaneMakerData";
+        const char* home = std::getenv("HOME");
+        if (home && *home)
+        {
+            fullPath = home;
+            fullPath /= "LaneMakerData";
+        }
 #else
 #endif
+        if (fullPath.empty())
+        {
+            // Final fallback: current working directory
+            fullPath = ".";
+            fullPath /= "LaneMakerData";
+        }
         bool success = true;
         try
         {
             std::filesystem::create_directories(fullPath);
         }
-        catch (std::filesystem::filesystem_error)
+        catch (const std::filesystem::filesystem_error&)
         {
             success = false;
         }
@@ -34,9 +61,10 @@ namespace LM
         {
             // Fallback to executable folder
             fullPath = "";
-            std::filesystem::create_directories(fullPath);
+            std::error_code ec;
+            std::filesystem::create_directories(fullPath, ec);
         }
-        
+
         return fullPath;
     }
 

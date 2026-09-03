@@ -168,6 +168,9 @@ private:
     bool applyingProfile = false;      // Guard to suppress modified-flag while loading a preset
     bool hasProfileSelector = true;    // Whether the profile combo + metadata are shown
 
+    // User-saved custom presets persisted in QSettings (road mode only)
+    static QMap<QString, roads::RoadProfile> customProfiles();
+
     // Snapshot of the loaded profile for comparison + reset
     roads::RoadProfile loadedProfile;
 

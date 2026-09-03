@@ -74,6 +74,12 @@ private:
     void saveProjectState();
     void loadProjectState();
 
+    // Write the current Road Studio network to {project}/Roads/road.xodr
+    QString exportRoadToProjectFolder();
+
+    // Focus a LaneMaker window on the currently selected terrain area
+    void syncLaneMakerViewToTerrain(class MainWindow* laneMaker);
+
     // ── Members ─────────────────────────────────────────────────
     ApplicationContext* m_ctx = nullptr;
     QLabel* m_statusLabel = nullptr;

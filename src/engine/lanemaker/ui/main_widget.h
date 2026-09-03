@@ -135,6 +135,8 @@ private slots:
     void gotoModifyMode(bool);
     void gotoDragMode(bool c=true);
     void gotoStraightLineMode(bool);
+    void gotoArcMode(bool);
+    void gotoClothoidMode(bool);
     void gotoFlipLaneMode(bool);
     void gotoPlaceSignMode(bool);
     void gotoPlaceMarkingMode(bool);
@@ -162,6 +164,8 @@ private:
     static MainWidget* instance;
 
     void SetEditMode(LM::EditMode aMode);
+    void updateGeometryOptions(LM::EditMode mode);
+    void applyGeometryParameters();
 
     void showObjectTreeContextMenu(QTreeWidgetItem* item, QPoint globalPos);
     void editMarking(const std::string& markingId);
@@ -193,7 +197,7 @@ protected:
     DrapeProvider m_drapeProvider;
 
     QButtonGroup* pointerModeGroup;
-    QToolButton* createModeButton, * dragModeButton;
+    QToolButton* createModeButton, * straightLineModeButton, * arcModeButton, * clothoidModeButton, * dragModeButton;
     QToolButton* viewModeButton;   // 2D/3D toggle
     QToolButton* loadMapButton;    // Load satellite map background
     QToolButton* zoomInButton;     // Zoom in
@@ -260,6 +264,13 @@ protected:
     QLabel* inspectorPlaceholder = nullptr;   // shown when nothing is selected
     QLineEdit* treeFilterEdit = nullptr;      // object tree search box
     QLabel* validationSummary = nullptr;      // compact validation status line
+    CollapsibleSection* geometrySection = nullptr;
+    QWidget* arcOptions = nullptr;
+    QWidget* clothoidOptions = nullptr;
+    QDoubleSpinBox* arcRadius = nullptr;
+    QComboBox* arcDirection = nullptr;
+    QDoubleSpinBox* clothoidStartCurvature = nullptr;
+    QDoubleSpinBox* clothoidEndCurvature = nullptr;
     CollapsibleSection* inspectorSection = nullptr;
     CollapsibleSection* crossSectionSection = nullptr;
     CollapsibleSection* elevationSection = nullptr;

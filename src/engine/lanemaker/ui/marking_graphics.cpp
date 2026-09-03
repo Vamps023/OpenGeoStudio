@@ -2,6 +2,7 @@
 #include "map_view_gl.h"
 #include "world.h"
 #include "constants.h"
+#include "road_curvature.h"
 
 #include <cmath>
 
@@ -534,6 +535,12 @@ FurnitureGraphics::FurnitureGraphics(const std::shared_ptr<Road>& road)
             {
                 double s = item.sStart + i * item.repeatSpacing;
                 if (s < 0 || s > gen.ref_line.length) break;
+
+                // Turn-radius filter (simple-road-system style): skip
+                // instances on curves tighter than the configured radius.
+                if (item.minTurnRadius > 0.0 &&
+                    turnRadiusAt(gen.ref_line, s) < item.minTurnRadius)
+                    continue;
 
                 auto pos = gen.get_xyz(s, item.tOffset, 0);
                 double w = def->defaultWidth / 2.0;

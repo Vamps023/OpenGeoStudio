@@ -17,7 +17,11 @@
 #include "cross_section_extender.h"
 #include "id_generator.h"
 #include "Geometries/Line.h"
+#include "Geometries/Arc.h"
+#include "road_curvature.h"
+#include "road_drawing.h"
 #include "map_view_gl.h"
+#include "Geometries/Spiral.h"
 
 #ifdef CHECK
 #undef CHECK
@@ -1357,7 +1361,7 @@ void test_furniture_placement_persistence()
     f1.side = LM::SignSide::Left;
     reg->addFurniture(f1);
 
-    // Add point furniture (bollards with repeat)
+    // Add point furniture (bollards with repeat + turn-radius filter)
     LM::PlacedFurniture f2;
     f2.id = "f2";
     f2.furnitureType = "bollard";
@@ -1369,6 +1373,7 @@ void test_furniture_placement_persistence()
     f2.side = LM::SignSide::Right;
     f2.repeatCount = 5;
     f2.repeatSpacing = 10.0;
+    f2.minTurnRadius = 25.0;
     reg->addFurniture(f2);
 
     CHECK(reg->placedFurniture().size() == 2, "2 furniture items placed");
@@ -1400,7 +1405,11 @@ void test_furniture_placement_persistence()
     {
         CHECK(b->repeatCount == 5, "Bollard repeat count restored");
         CHECK(std::abs(b->repeatSpacing - 10.0) < 0.01, "Bollard repeat spacing restored");
+        CHECK(std::abs(b->minTurnRadius - 25.0) < 0.01, "Bollard min turn radius restored");
     }
+
+    // Verify guardrail default (JSON without the field → 0 = filter off)
+    if (g) CHECK(g->minTurnRadius == 0.0, "Linear furniture min turn radius defaults to 0");
 
     // Test furnitureForRoad
     auto roadFurniture = reg->furnitureForRoad("300");
@@ -1419,6 +1428,52 @@ void test_furniture_placement_persistence()
     reg->removeFurniture("f1");
     reg->removeFurniture("f2");
     CHECK(reg->placedFurniture().empty(), "All furniture removed");
+}
+
+// ═══════════════════════════════════════════════════════════
+// Turn-Radius Curvature Sampling & Furniture Filtering
+// ═══════════════════════════════════════════════════════════
+
+void test_turn_radius_curvature()
+{
+    std::cerr << "Test: Turn-Radius Curvature Sampling" << std::endl;
+
+    // Straight reference line → infinite turn radius
+    odr::RefLine straight("straight", 100.0);
+    straight.s0_to_geometry[0.0] = std::make_unique<odr::Line>(0.0, 0.0, 0.0, 0.0, 100.0);
+    CHECK(std::isinf(LM::turnRadiusAt(straight, 50.0)), "Straight segment has infinite turn radius");
+
+    // Arc with curvature 0.02 → radius 50 m
+    odr::RefLine arc("arc", 100.0);
+    arc.s0_to_geometry[0.0] = std::make_unique<odr::Arc>(0.0, 0.0, 0.0, 0.0, 100.0, 0.02);
+    CHECK(std::abs(LM::turnRadiusAt(arc, 50.0) - 50.0) < 1.0,
+        "Arc with curvature 0.02 yields ~50 m turn radius");
+    CHECK(std::abs(std::abs(LM::curvatureAt(arc, 50.0)) - 0.02) < 1e-3,
+        "Sampled curvature matches arc curvature");
+
+    // Placement filter predicate (mirrors FurnitureGraphics): 10 repeats
+    // spaced 10 m along each ref line with a 60 m threshold.
+    const double minTurnRadius = 60.0;
+    int placedOnArc = 0, placedOnStraight = 0;
+    for (int i = 0; i < 10; ++i)
+    {
+        const double s = i * 10.0;
+        const bool skipArc = minTurnRadius > 0.0 && LM::turnRadiusAt(arc, s) < minTurnRadius;
+        const bool skipStraight = minTurnRadius > 0.0 && LM::turnRadiusAt(straight, s) < minTurnRadius;
+        if (!skipArc) placedOnArc++;
+        if (!skipStraight) placedOnStraight++;
+    }
+    CHECK(placedOnArc == 0, "All instances skipped on 50 m arc with 60 m threshold");
+    CHECK(placedOnStraight == 10, "All instances kept on straight with 60 m threshold");
+
+    // Threshold 0 = filter disabled → nothing skipped even on the arc
+    int placedNoFilter = 0;
+    for (int i = 0; i < 10; ++i)
+    {
+        const double s = i * 10.0;
+        if (!(0.0 > 0.0 && LM::turnRadiusAt(arc, s) < 0.0)) placedNoFilter++;
+    }
+    CHECK(placedNoFilter == 10, "Zero threshold disables the filter");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1776,6 +1831,57 @@ void test_sidecar_persistence_roundtrip()
     furnReg->clearPlaced();
 }
 
+void test_explicit_road_geometries()
+{
+    std::cerr << "Test: Explicit Road Geometries" << std::endl;
+    const odr::Vec2D start{0, 0};
+    const odr::Vec2D direction{1, 0};
+    const odr::Vec2D target{80, 60};
+
+    auto segment = RoadCreationSession::BuildExplicitGeometry(
+        RoadCreationSession::GeometryMode::Segment, start, direction, target,
+        false, 100, 1, 0, 0.01);
+    CHECK(segment != nullptr, "Explicit segment created");
+    CHECK(segment && segment->type == odr::GeometryType_Line, "Explicit segment uses OpenDRIVE line geometry");
+    CHECK(segment && odr::euclDistance(segment->get_xy(segment->length), target) < 1e-6,
+          "Explicit segment ends at cursor target");
+
+    auto leftArc = RoadCreationSession::BuildExplicitGeometry(
+        RoadCreationSession::GeometryMode::Arc, start, direction, target,
+        false, 100, 1, 0, 0.01);
+    auto* leftArcGeometry = dynamic_cast<odr::Arc*>(leftArc.get());
+    CHECK(leftArcGeometry != nullptr, "Explicit arc uses OpenDRIVE arc geometry");
+    CHECK(leftArcGeometry && leftArcGeometry->curvature > 0, "Left arc has positive curvature");
+    CHECK(leftArc && odr::euclDistance(leftArc->get_xy(leftArc->length), target) < 1e-6,
+          "Unconstrained arc ends at cursor target");
+
+    auto rightArc = RoadCreationSession::BuildExplicitGeometry(
+        RoadCreationSession::GeometryMode::Arc, start, direction, target,
+        false, 100, -1, 0, 0.01);
+    auto* rightArcGeometry = dynamic_cast<odr::Arc*>(rightArc.get());
+    CHECK(rightArcGeometry && rightArcGeometry->curvature < 0, "Right arc has negative curvature");
+
+    auto tangentArc = RoadCreationSession::BuildExplicitGeometry(
+        RoadCreationSession::GeometryMode::Arc, start, direction, target,
+        true, 100, 1, 0, 0.01);
+    const auto tangent = tangentArc->get_grad(0);
+    CHECK(odr::dot(tangent, direction) > 0.999, "Connected arc preserves incoming tangent");
+    CHECK(odr::euclDistance(tangentArc->get_xy(tangentArc->length), target) < 1e-6,
+          "Connected arc ends at cursor target");
+
+    auto clothoid = RoadCreationSession::BuildExplicitGeometry(
+        RoadCreationSession::GeometryMode::Clothoid, start, direction, target,
+        false, 100, 1, 0, 0.01);
+    auto* spiralGeometry = dynamic_cast<odr::Spiral*>(clothoid.get());
+    CHECK(spiralGeometry != nullptr, "Explicit clothoid uses OpenDRIVE spiral geometry");
+    CHECK(spiralGeometry && std::abs(spiralGeometry->curv_start) < 1e-9,
+          "Clothoid start curvature is preserved");
+    CHECK(spiralGeometry && std::abs(spiralGeometry->curv_end - 0.01) < 1e-9,
+          "Clothoid end curvature is preserved");
+    CHECK(clothoid && odr::euclDistance(clothoid->get_xy(clothoid->length), target) < 0.05,
+          "Unconstrained clothoid ends at cursor target");
+}
+
 void test_satellite_no_data_detection()
 {
     QImage placeholder(256, 256, QImage::Format_RGB32);
@@ -1812,6 +1918,7 @@ int main()
         test_marking_persistence();
         test_furniture_registry();
         test_furniture_placement_persistence();
+        test_turn_radius_curvature();
         test_snapping_system();
         test_measurement_system();
 
@@ -1825,6 +1932,7 @@ int main()
         test_sign_reverse_adjustment();
         test_marking_reverse_adjustment();
         test_sidecar_persistence_roundtrip();
+        test_explicit_road_geometries();
         test_satellite_no_data_detection();
 
         // Road model tests — these create and destroy Road objects

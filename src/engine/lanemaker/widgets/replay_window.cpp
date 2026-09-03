@@ -171,7 +171,15 @@ void ReplayWindow::FillHistoryTable()
 				icon = QIcon(QPixmap(":/icons/road_mode.png"));
 				break;
 			case LM::Mode_StraightLine:
-				desc += " straight";
+				desc += " segment";
+				icon = QIcon(QPixmap(":/icons/road_mode.png"));
+				break;
+			case LM::Mode_Arc:
+				desc += " arc";
+				icon = QIcon(QPixmap(":/icons/road_mode.png"));
+				break;
+			case LM::Mode_Clothoid:
+				desc += " clothoid";
 				icon = QIcon(QPixmap(":/icons/road_mode.png"));
 				break;
 			case LM::Mode_CreateLanes:
@@ -325,17 +333,19 @@ void ReplayWindow::SingleStep()
 		const auto& action = fullHistory[nextToReplay];
 		if (action.type == LM::Action_Mouse)
 		{
-			mouseStatus->setPixmap(replayingItem->icon().pixmap(replayingItem->icon().availableSizes().first()));
+			const auto sizes = replayingItem->icon().availableSizes();
+			if (!sizes.isEmpty())
+				mouseStatus->setPixmap(replayingItem->icon().pixmap(sizes.first()));
 		}
 
 		QImage kbImage(":/icons/keyboard.png");
 		if (action.type == LM::Action_KeyPress)
 		{
-			QPainter* p = new QPainter(&kbImage);
-			p->setPen(Qt::black);
-			p->setFont(QFont("Arial", 10));
+			QPainter p(&kbImage);
+			p.setPen(Qt::black);
+			p.setFont(QFont("Arial", 10));
 
-			p->drawText(kbImage.rect(), Qt::AlignHCenter, action.detail.keyPress.ToString());
+			p.drawText(kbImage.rect(), Qt::AlignHCenter, action.detail.keyPress.ToString());
 		}
 		keyStatus->setPixmap(QPixmap::fromImage(kbImage));
 	}

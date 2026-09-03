@@ -462,6 +462,10 @@ void AppMainWindow::onWorkspaceActivated(const Workspace& ws) {
         m_centerStack->setCurrentIndex(2); // Road Studio (LaneMaker)
         if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow())
             m_roadStudioWidget->laneMakerWindow()->triggerGLInitialization();
+        // Re-sync the map view to the current terrain selection so the
+        // editor focuses on the area the user prepared in Terrain Studio
+        // (terrain can change after the project was opened).
+        syncLaneMakerViewToTerrain(m_roadStudioWidget->laneMakerWindow());
         appLog().info("Activating Road Studio: hiding docks...");
         // LaneMaker's MainWindow has its own toolbar, lane config, etc.
         m_leftDock->setVisible(false);
@@ -488,8 +492,10 @@ void AppMainWindow::onWorkspaceActivated(const Workspace& ws) {
         appLog().info("Activating Road Studio: done");
     } else if (ws.id == "train-studio") {
         m_centerStack->setCurrentIndex(3); // Train Studio
-        if (m_trainStudioWidget && m_trainStudioWidget->laneMakerWindow())
+        if (m_trainStudioWidget && m_trainStudioWidget->laneMakerWindow()) {
             m_trainStudioWidget->laneMakerWindow()->triggerGLInitialization();
+            syncLaneMakerViewToTerrain(m_trainStudioWidget->laneMakerWindow());
+        }
         // Train Studio: no docks
         m_leftDock->setVisible(false);
         m_rightDock->setVisible(false);
@@ -499,6 +505,10 @@ void AppMainWindow::onWorkspaceActivated(const Workspace& ws) {
         m_leftDock->setVisible(false);
         m_rightDock->setVisible(false);
         showRoadStudioMenus(false);
+        // Persist the current road network into the project's Roads folder
+        // BEFORE entering 3D Studio, so auto-load can find the latest roads
+        // even if the user never pressed "Save Project".
+        exportRoadToProjectFolder();
         // Auto-load saved scene when entering 3D Studio
         if (m_studio3DWidget) m_studio3DWidget->onProjectOpened();
     }
@@ -556,6 +566,28 @@ void AppMainWindow::propagateProjectCrs() {
 // ─── Project state save/load ─────────────────────────────────────
 // Serializes TerrainStore + road .xodr into the project folder
 // and .ogproj moduleState so all studios share the same project.
+
+// Write the current Road Studio network to {project}/Roads/road.xodr.
+// Returns the written path, or empty when there is nothing to save.
+QString AppMainWindow::exportRoadToProjectFolder() {
+    if (!m_ctx->projects().hasProject()) return QString();
+    if (!m_roadStudioWidget || !m_roadStudioWidget->laneMakerWindow())
+        return QString();
+
+    const QString basePath = m_ctx->projects().current().basePath;
+    const QString roadsDir = basePath + "/Roads";
+    QDir().mkpath(roadsDir);
+    const QString roadFile = roadsDir + "/road.xodr";
+    m_roadStudioWidget->laneMakerWindow()->saveToPath(roadFile);
+    if (QFile::exists(roadFile)) {
+        appLog().info("exportRoadToProjectFolder: saved", roadFile,
+                      "size:", QFileInfo(roadFile).size());
+        return roadFile;
+    }
+    appLog().warn("exportRoadToProjectFolder: road file was NOT created:", roadFile);
+    return QString();
+}
+
 void AppMainWindow::saveProjectState() {
     if (!m_ctx->projects().hasProject()) {
         QMessageBox::warning(this, tr("No Project"),
@@ -570,25 +602,11 @@ void AppMainWindow::saveProjectState() {
     moduleState["terrain"] = m_ctx->terrain().toJson();
 
     // ── Road network → {project}/Roads/road.xodr ──
-    if (m_roadStudioWidget && m_roadStudioWidget->laneMakerWindow()) {
-        auto* lmw = m_roadStudioWidget->laneMakerWindow();
-
-        // Save the road file directly to the project's Roads folder
-        QString roadsDir = basePath + "/Roads";
-        QDir().mkpath(roadsDir);
-        QString roadFile = roadsDir + "/road.xodr";
-        lmw->saveToPath(roadFile);
-
-        // Verify the file was actually created
-        if (QFile::exists(roadFile)) {
-            QJsonObject roadState;
-            roadState["xodrFile"] = roadFile;
-            moduleState["road-studio"] = roadState;
-            appLog().info("saveProjectState: road file saved:", roadFile,
-                          "size:", QFileInfo(roadFile).size());
-        } else {
-            appLog().warn("saveProjectState: WARNING - road file was NOT created:", roadFile);
-        }
+    const QString roadFile = exportRoadToProjectFolder();
+    if (!roadFile.isEmpty()) {
+        QJsonObject roadState;
+        roadState["xodrFile"] = roadFile;
+        moduleState["road-studio"] = roadState;
     } else {
         appLog().warn("saveProjectState: road studio widget not available");
     }
@@ -661,6 +679,22 @@ void AppMainWindow::loadProjectState() {
         if (m_trainStudioWidget && m_trainStudioWidget->laneMakerWindow())
             m_trainStudioWidget->laneMakerWindow()->useSharedSatelliteView(centerLat, centerLon, zoom);
     }
+}
+
+// Focus a LaneMaker window on the currently selected terrain area.
+// Called when activating Road/Train Studio so the editor always shows
+// the region the user prepared in Terrain Studio, even if the terrain
+// selection changed after the project was opened.
+void AppMainWindow::syncLaneMakerViewToTerrain(MainWindow* laneMaker) {
+    if (!laneMaker || !m_ctx->projects().hasProject()) return;
+    const auto& mapBounds = m_ctx->terrain().selectedBounds();
+    if (!mapBounds.isValid()) return;
+    const double centerLat = (mapBounds.south + mapBounds.north) * 0.5;
+    const double centerLon = (mapBounds.west + mapBounds.east) * 0.5;
+    const double span = std::max(mapBounds.widthDeg(), mapBounds.heightDeg());
+    const double zoom = qBound(2.0,
+        std::floor(std::log2(360.0 / std::max(span, 1e-9))) + 1.0, 18.0);
+    laneMaker->useSharedSatelliteView(centerLat, centerLon, zoom);
 }
 
 // ─── Project actions ─────────────────────────────────────────────
