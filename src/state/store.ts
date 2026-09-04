@@ -193,6 +193,10 @@ interface OgsState {
   refreshProjects: () => Promise<void>
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
+  /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
+  history: { past: Project[]; future: Project[] }
+  undo: () => void
+  redo: () => void
 }
 
 const STORAGE_KEY = 'ogs.projects.v2'
@@ -287,18 +291,24 @@ async function loadProjectsFromDisk(): Promise<Project[]> {
   }
 }
 
+const HISTORY_LIMIT = 100
+
 function updateActiveProject(
   get: () => OgsState,
   set: (patch: Partial<OgsState>) => void,
   update: (project: Project) => Project,
 ) {
-  const { projects, activeProjectId } = get()
+  const { projects, activeProjectId, history } = get()
   if (!activeProjectId) return
-  const next = projects.map((project) => (project.id === activeProjectId ? update(project) : project))
-  persistLocal(next)
-  set({ projects: next })
+  const current = projects.find((project) => project.id === activeProjectId)
+  if (!current) return
+  const nextProjects = projects.map((project) => (project.id === activeProjectId ? update(project) : project))
+  // pre-mutation snapshot for undo; any new mutation clears the redo stack
+  const past = [...history.past, current].slice(-HISTORY_LIMIT)
+  persistLocal(nextProjects)
+  set({ projects: nextProjects, history: { past, future: [] } })
   // Also save to file (async, non-blocking)
-  const active = next.find((p) => p.id === activeProjectId)
+  const active = nextProjects.find((p) => p.id === activeProjectId)
   if (active) void saveProjectToFile(active)
 }
 
@@ -327,6 +337,7 @@ export const useStore = create<OgsState>((set, get) => ({
   },
   insertOptions: { stickToTerrain: false, defaultProfile: 'travel' },
   lockedPassageways: [],
+  history: { past: [], future: [] },
 
   setSelection: (selection) => set({ selection }),
   toggleTrackSelection: (trackId, additive) => {
@@ -373,13 +384,43 @@ export const useStore = create<OgsState>((set, get) => ({
     }
     const projects = [project, ...get().projects]
     persistLocal(projects)
-    set({ projects, activeProjectId: id })
+    set({ projects, activeProjectId: id, history: { past: [], future: [] } })
     // Save to C:\OpenGeoStudio
     void saveProjectToFile(project)
   },
 
-  openProject: (id) => set({ activeProjectId: id }),
-  closeProject: () => set({ activeProjectId: null }),
+  openProject: (id) => set({ activeProjectId: id, history: { past: [], future: [] } }),
+  closeProject: () => set({ activeProjectId: null, history: { past: [], future: [] } }),
+
+  undo: () => {
+    const { history, projects, activeProjectId } = get()
+    if (history.past.length === 0 || !activeProjectId) return
+    const current = projects.find((project) => project.id === activeProjectId)
+    if (!current) return
+    const previous = history.past[history.past.length - 1]
+    const nextProjects = projects.map((project) => (project.id === activeProjectId ? previous : project))
+    persistLocal(nextProjects)
+    set({
+      projects: nextProjects,
+      history: { past: history.past.slice(0, -1), future: [...history.future, current].slice(-HISTORY_LIMIT) },
+    })
+    void saveProjectToFile(previous)
+  },
+
+  redo: () => {
+    const { history, projects, activeProjectId } = get()
+    if (history.future.length === 0 || !activeProjectId) return
+    const current = projects.find((project) => project.id === activeProjectId)
+    if (!current) return
+    const next = history.future[history.future.length - 1]
+    const nextProjects = projects.map((project) => (project.id === activeProjectId ? next : project))
+    persistLocal(nextProjects)
+    set({
+      projects: nextProjects,
+      history: { past: [...history.past, current].slice(-HISTORY_LIMIT), future: history.future.slice(0, -1) },
+    })
+    void saveProjectToFile(next)
+  },
 
   addRoad: (road) => updateActiveProject(get, set, (project) => ({ ...project, roads: [...project.roads, road] })),
   updateRoad: (roadId, patch) => updateActiveProject(get, set, (project) => ({

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Route, TrainFront } from 'lucide-react'
+import { Route, TrainFront, Undo2, Redo2 } from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
@@ -121,6 +121,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const insertLaneAt = useStore((state) => state.insertLaneAt)
   const removeLaneAt = useStore((state) => state.removeLaneAt)
   const setSelectedLaneKey = useStore((state) => state.setSelectedLane)
+  const undo = useStore((state) => state.undo)
+  const redo = useStore((state) => state.redo)
+  const canUndo = useStore((state) => state.history.past.length > 0)
+  const canRedo = useStore((state) => state.history.future.length > 0)
 
   const project = projects.find((item) => item.id === activeProjectId)
   const [draftPoints, setDraftPoints] = useState<Vec2[]>([])
@@ -525,6 +529,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       return { x: snap.frame.x, y: snap.frame.y }
     }
     dragSnapRef.current = null
+    // on-track snap: start exactly on a nearby road axis
+    const onTrack = snapToTrack(point)
+    if (onTrack) {
+      setDraftPoints([onTrack])
+      return onTrack
+    }
     setDraftPoints([point])
     return point
   }
@@ -958,19 +968,31 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     if (!project || !junctionNetwork) return null
     let best: { session: ExtendSession; distance: number } | null = null
     for (const road of project.roads) {
-      const path = junctionNetwork.paths.get(road.id)
-      if (!path) continue
-      const candidates: ExtendSession[] = [
-        { roadId: road.id, contact: 'start', start: road.points[0] },
-        { roadId: road.id, contact: 'end', start: road.points[road.points.length - 1] },
-      ]
-      for (const session of candidates) {
-        if (!session.start) continue
-        const distance = Math.hypot(point.x - session.start.x, point.y - session.start.y)
-        if (!best || distance < best.distance) best = { session, distance }
+      // true chain extremities: for function roads road.points is only the
+      // 2-point start frame, so the end must come from the function chain
+      for (const contact of ['start', 'end'] as const) {
+        const frame = exitFrame(road, contact)
+        if (!frame) continue
+        const distance = Math.hypot(point.x - frame.x, point.y - frame.y)
+        if (!best || distance < best.distance) {
+          best = { session: { roadId: road.id, contact, start: { x: frame.x, y: frame.y } }, distance }
+        }
       }
     }
     return best && best.distance <= 10 ? best.session : null
+  }
+
+  /** Nearest point on any road axis within 4 m (on-track snap). */
+  function snapToTrack(point: Vec2): Vec2 | null {
+    if (!project || !junctionNetwork) return null
+    let best: { point: Vec2; distance: number } | null = null
+    for (const road of project.roads) {
+      const path = junctionNetwork.paths.get(road.id)
+      if (!path) continue
+      const nearest = nearestPointOnPath(path, point)
+      if (!best || nearest.distance < best.distance) best = { point: nearest.point, distance: nearest.distance }
+    }
+    return best && best.distance <= 4 ? best.point : null
   }
 
   /** Station of the function under the context-click on a road. */
@@ -1653,6 +1675,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     },
     onLinkIntersectionToTracks: linkIntersectionToTracks,
     onInvertAuthorizations: invertAuthorizations,
+    onUndo: undo,
+    onRedo: redo,
   })
 
   function finishPointDraft() {
@@ -1857,16 +1881,24 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
               ? 'Lane editing — select a road, then use the lane tools on its lanes'
               : 'Road design — curves, profiles, intersections'}
         </span>
-        {section === 'road' && (
-          <div className="ml-auto flex items-center gap-0.5">
-            <Button size="sm" variant={roadSpace === 'road' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('road')}>
-              Road Tools
-            </Button>
-            <Button size="sm" variant={roadSpace === 'lane' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('lane')}>
-              Lane Tools
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={!canUndo} onClick={undo} title="Undo (Ctrl+Z)">
+            <Undo2 className="size-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={!canRedo} onClick={redo} title="Redo (Ctrl+Y)">
+            <Redo2 className="size-3.5" />
+          </Button>
+          {section === 'road' && (
+            <div className="flex items-center gap-0.5">
+              <Button size="sm" variant={roadSpace === 'road' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('road')}>
+                Road Tools
+              </Button>
+              <Button size="sm" variant={roadSpace === 'lane' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('lane')}>
+                Lane Tools
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">

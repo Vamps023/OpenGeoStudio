@@ -11,6 +11,8 @@ export interface KeyboardShortcutHandlers {
   onDeleteSelection: () => void
   onLinkIntersectionToTracks: () => void
   onInvertAuthorizations: () => void
+  onUndo: () => void
+  onRedo: () => void
 }
 
 /**
@@ -40,6 +42,14 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers) {
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'i') {
         event.preventDefault()
         handlers.onInvertAuthorizations()
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault()
+        handlers.onUndo()
+      }
+      if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+        event.preventDefault()
+        handlers.onRedo()
       }
     }
     window.addEventListener('keydown', handleKeyDown)

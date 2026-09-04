@@ -123,7 +123,7 @@ interface OgsBridge {
   onExportProgress: (callback: (p: { stage: string; current: number; total: number; message: string }) => void) => () => void
 
   // ── Project files ──
-  saveProject: (project: Record<string, unknown>) => Promise<OgsProjectSaveResult>
+  saveProject: (project: unknown) => Promise<OgsProjectSaveResult>
   loadProject: (projectId: string, projectName: string) => Promise<OgsProjectLoadResult>
   listProjects: () => Promise<OgsProjectListResult>
   deleteProject: (projectId: string, projectName: string) => Promise<{ success: boolean; error?: string }>
