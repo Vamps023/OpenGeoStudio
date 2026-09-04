@@ -65,6 +65,8 @@ import { Button } from '@/components/ui/button'
 import AppHeader from '@/components/layout/AppHeader'
 import RoadViewport from '../viewport/RoadViewport'
 import ElevationProfileEditor from '../elevation/ElevationProfileEditor'
+import LanesTab from '../lanes/LanesTab'
+import PortionProfileEditor from '../lanes/PortionProfileEditor'
 import ToolRail from '../editor/ToolRail'
 import EditorHeaderActions from '../editor/EditorHeaderActions'
 import DraftPointsToolbar from '../editor/DraftPointsToolbar'
@@ -127,8 +129,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const [showMap, setShowMap] = useState(false)
   const [menu, setMenu] = useState<{ screen: { x: number; y: number }; world: Vec2 } | null>(null)
   const [contourHandleArmed, setContourHandleArmed] = useState(false)
-  // Editor top-level section: Road workspace or Train (railway) workspace
+  // Editor top-level section: Road workspace or Train (railway) workspace.
+  // Within Road, a sub-space splits road tools from lane tools.
   const [section, setSection] = useState<'road' | 'train'>('road')
+  const [roadSpace, setRoadSpace] = useState<'road' | 'lane'>('road')
   const odrInputRef = useRef<HTMLInputElement>(null)
   // Begin/End Lane gizmo (doc 5.5.5.1.2): click a lane, then an arrow
   const [laneGizmo, setLaneGizmo] = useState<{
@@ -358,8 +362,14 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     chooseTool('select')
   }
 
-  // Section drives which tool rail is shown; tools stay valid in both.
-  const toolSpace: ToolSpace = section === 'train' ? 'train' : 'road'
+  function switchRoadSpace(next: 'road' | 'lane') {
+    if (next === roadSpace) return
+    setRoadSpace(next)
+    chooseTool(next === 'lane' ? 'lane-insert' : 'select')
+  }
+
+  // Section drives which tool rail is shown.
+  const toolSpace: ToolSpace = section === 'train' ? 'train' : roadSpace
 
   // ─── Profile presets ("Default Profile") ───────────────────────────
 
@@ -1841,10 +1851,22 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           </Button>
         </div>
         <span className="text-[11px] text-muted-foreground">
-          {section === 'road'
-            ? 'Road design — curves, lanes, intersections'
-            : 'Railway track — Straight / Circle Arc / Clothoid (Spiral) with rails, sleepers and ballast'}
+          {section === 'train'
+            ? 'Railway track — Straight / Circle Arc / Clothoid (Spiral) with rails, sleepers and ballast'
+            : roadSpace === 'lane'
+              ? 'Lane editing — select a road, then use the lane tools on its lanes'
+              : 'Road design — curves, profiles, intersections'}
         </span>
+        {section === 'road' && (
+          <div className="ml-auto flex items-center gap-0.5">
+            <Button size="sm" variant={roadSpace === 'road' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('road')}>
+              Road Tools
+            </Button>
+            <Button size="sm" variant={roadSpace === 'lane' ? 'default' : 'ghost'} className="h-7 px-3 text-xs" onClick={() => switchRoadSpace('lane')}>
+              Lane Tools
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -1905,7 +1927,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
         {/* Sidebar */}
         <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-card/60">
-          {section === 'road' ? (
+          {section === 'road' && roadSpace === 'road' ? (
           <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
               <TabsList className="grid w-full grid-cols-3">
@@ -2017,6 +2039,49 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                   onToggleJunction={(junction) => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
                   onRegenerateJunctions={regenerateJunctions}
                   onSetLayer={setLayer}
+                />
+              </TabsContent>
+            </ScrollArea>
+          </Tabs>
+          ) : section === 'road' ? (
+          <Tabs defaultValue="lanes" className="flex min-h-0 flex-1 flex-col gap-0">
+            <div className="shrink-0 border-b border-border p-3">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="lanes">Lanes</TabsTrigger>
+                <TabsTrigger value="roads">Roads</TabsTrigger>
+              </TabsList>
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <TabsContent value="lanes" className="grid gap-4 p-4">
+                {selectedRoad ? (
+                  <>
+                    <LanesTab road={selectedRoad} />
+                    <PortionProfileEditor road={selectedRoad} length={roadLengths.get(selectedRoad.id) ?? 0} />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Select a road to edit its lanes.</p>
+                )}
+              </TabsContent>
+              <TabsContent value="roads" className="grid gap-1.5 p-4">
+                <RoadsTab
+                  roads={project.roads}
+                  selectedIds={selection.trackIds}
+                  roadLengths={roadLengths}
+                  tool={tool}
+                  draftLength={draftPath?.length ?? null}
+                  onRoadClick={(roadId, additive) => {
+                    if (additive) {
+                      setSelection({
+                        trackIds: selection.trackIds.includes(roadId)
+                          ? selection.trackIds.filter((id) => id !== roadId)
+                          : [...selection.trackIds, roadId],
+                        intersectionId: selection.intersectionId,
+                        trackStation: null,
+                      })
+                    } else {
+                      selectRoadOnly(roadId)
+                    }
+                  }}
                 />
               </TabsContent>
             </ScrollArea>
