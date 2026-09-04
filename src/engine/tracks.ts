@@ -405,8 +405,8 @@ export function stickTrackToTerrain(
     const steps = Math.max(1, Math.ceil(el.length / (path.length / samples)))
     for (let i = 0; i < steps; i++) {
       const s = cursor + (el.length * i) / steps
-      const t = el.length > 0 ? (el.length * i) / steps : 0
-      const frame = elementFrame(el, t)
+      // elementFrame takes a FRACTION of the element, not a station
+      const frame = elementFrame(el, el.length > 0 ? i / steps : 0)
       const z = terrainHeight(frame.x, frame.y)
       if (z !== null) {
         lastZ = z

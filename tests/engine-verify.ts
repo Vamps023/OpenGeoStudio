@@ -12,6 +12,7 @@ import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, inve
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
 import { buildTerrainMeshWorld } from '../src/engine/terrainMesh'
 import { makeTerrainSampler, setActiveTerrain } from '../src/terrain/terrainRegistry'
+import { evaluateElevation } from '../src/engine/elevation'
 import { sampleFunction, functionLength, splitFunction, mergeFunctions, convertSplineToFunctions, bezierConnector, bezierAt, functionEndFrame, FUNCTION_COLORS } from '../src/engine/xyFunctions'
 import { stickTrackToTerrain } from '../src/engine/tracks'
 import type { XYFunction, Frame } from '../src/engine/xyFunctions'
@@ -409,6 +410,88 @@ if (odr) {
     check('gis: mesh vertex carries DEM elevation', Math.abs(vy - expected) < 1e-6, `${vy} vs ${expected}`)
   }
 }
+
+
+// 23. Phase 11 regression: roads AND railways must follow hilly terrain
+// exactly when stuck (the "rail floating above terrain" class of bug),
+// and the network XML must carry every fixture type.
+{
+  // hilly synthetic DEM: 200 m square, smooth sinusoidal relief
+  const tw = 64, th = 64
+  const terr = {
+    elevations: new Float32Array(tw * th),
+    width: tw, height: th,
+    bounds: { west: -95.37, east: -95.35, south: 29.75, north: 29.77 },
+    minElevation: 0, maxElevation: 0,
+  }
+  let elMin = Infinity, elMax = -Infinity
+  for (let gy = 0; gy < th; gy++) {
+    const lat = terr.bounds.north + ((terr.bounds.south - terr.bounds.north) * gy) / (th - 1)
+    for (let gx = 0; gx < tw; gx++) {
+      const lng = terr.bounds.west + ((terr.bounds.east - terr.bounds.west) * gx) / (tw - 1)
+      const h = 20 + 8 * Math.sin(((lng + 95.36) * 111320) / 30) + 5 * Math.cos(((lat - 29.76) * 111320) / 25)
+      terr.elevations[gy * tw + gx] = h
+      if (h < elMin) elMin = h
+      if (h > elMax) elMax = h
+    }
+  }
+  terr.minElevation = elMin
+  terr.maxElevation = elMax
+  setActiveTerrain(terr as never)
+  const sampler = makeTerrainSampler({ lng: -95.36, lat: 29.76, scale: 1 })
+
+  const stickAndCheck = (name: string, halfWidth: number) => {
+    // S-curve track through the hills
+    const track = {
+      id: `stk-${name}`, points: [{ x: -60, y: -60 }, { x: -59, y: -60 }],
+      lanesLeft: 0, lanesRight: 0, laneWidth: 3.5,
+      functions: [
+        { kind: 'segment', length: 60 },
+        { kind: 'arc', radius: 60, angle: Math.PI / 2 },
+        { kind: 'segment', length: 60 },
+      ] as never,
+    }
+    const result = stickTrackToTerrain(track, sampler, halfWidth)
+    check(`phase11: ${name} stick succeeds`, !!result)
+    if (!result) return
+    const path = fitTrackPath(track)!
+    const profile = result.elevation
+    let worst = 0
+    for (let s = 5; s <= path.length - 5; s += 5) {
+      const at = evaluatePath(path, s)
+      const terrainZ = sampler(at.x, at.y) ?? 0
+      const roadZ = evaluateElevation(profile, s)
+      worst = Math.max(worst, Math.abs(roadZ - terrainZ))
+    }
+    check(`phase11: ${name} follows hilly terrain`, worst < 0.75, `max delta ${worst.toFixed(3)} m`)
+    // banking was picked from the cross-slope
+    check(`phase11: ${name} picks cant`, (result.banking?.length ?? 0) > 0)
+  }
+  evaluateElevation
+  stickAndCheck('road', 3.5)
+  stickAndCheck('rail', 1.5)
+
+  // XML export carries every fixture type
+  const road = (id: string, x: number, y: number, heading: number, len: number): RoadData => ({
+    id, name: id,
+    points: [{ x, y }, { x: x + Math.cos(heading), y: y + Math.sin(heading) }],
+    lanesLeft: 0, lanesRight: 0, laneWidth: 3.5, filletRadius: 50,
+    functions: [{ kind: 'segment', length: len }],
+    railway: { gauge: 1.435, railSize: 0.075, trackbedWidth: 3, sleeperSpacing: 0.65 },
+  })
+  const fullProject = {
+    id: 'p2', name: 'Fixtures', createdAt: '', suppressedJunctions: [],
+    roads: [road('t1', 0, 0, 0, 100), road('t2', 20, -60, Math.PI / 2, 120)],
+    railCrossings: [{ id: 'x9', trackAId: 't1', trackBId: 't2', sA: 20, sB: 20, position: { x: 20, y: 0 }, angle: Math.PI / 2, kind: 'diamond' as const }],
+    catchPoints: [{ id: 'c9', trackId: 't1', contact: 'start' as const, side: 'left' as const }],
+  } as unknown as Project
+  const xml2 = exportNetworkDefinition(fullProject)
+  check('phase11: xml has diamond crossing', xml2.includes('kind="diamond"'))
+  check('phase11: xml has catch point', xml2.includes('<CatchPoint'))
+  const crossingMeshes2 = buildRailFixtureMeshes(fullProject)
+  check('phase11: diamond + catch meshes build', crossingMeshes2.length >= 9, `got ${crossingMeshes2.length}`)
+}
+
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)
