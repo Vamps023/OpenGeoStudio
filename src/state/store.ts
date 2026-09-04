@@ -1,8 +1,33 @@
 import { create } from 'zustand'
 import type { ElevationPoint } from '../engine/elevation'
 import type { Vec2 } from '../engine/types'
+import type { LaneSectionDef } from '../engine/laneTypes'
+import { makeDefaultSection, totalLanes, totalWidth } from '../engine/laneLayout'
+import type { XYFunction } from '../engine/xyFunctions'
+import type { IntersectionData } from '../engine/intersections'
 
 export type RoadGeometryType = 'straight' | 'polyline' | 'arc'
+
+export interface LaneTaper {
+  side: 'left' | 'right'
+  index: number              // lane index on that side
+  mode: 'in' | 'out'         // 'in': grows from startS; 'out': shrinks to endS
+  length: number             // [m] SPEED_LIMIT × REACTION_TIME
+  /** abscissa where the express lane begins (mode 'in'; default 0) */
+  startS?: number
+  /** abscissa where the express lane disappears (mode 'out'; default track length) */
+  endS?: number
+}
+
+export type RoadType = 'none' | 'bridge' | 'tunnel'
+
+export interface PortionDef {
+  id: string
+  name: string
+  /** end abscissa along the track [m]; last portion uses the track length */
+  sEnd: number
+  roadType: RoadType
+}
 
 export interface RoadData {
   id: string
@@ -10,10 +35,34 @@ export interface RoadData {
   points: Vec2[]
   geometryType?: RoadGeometryType
   elevationProfile?: ElevationPoint[]
+  // SCANeR-style XY function chain (track). When present it defines the
+  // road axis instead of `points`.
+  functions?: XYFunction[]
+  // Lane expansion/reduction tapers created by the Begin/End Lane tools
+  // (express lane grows/shrinks over SPEED_LIMIT × REACTION_TIME meters)
+  tapers?: LaneTaper[]
+  // Road portions (SCANeR portion editing)
+  portions?: PortionDef[]
+  // Profile (road style) name of this road's cross-section
+  profileName?: string
+  // Sub-network exits marked on track extremities (doc 5.5.4.2.16)
+  subNetworkExits?: ('start' | 'end')[]
+  // Banking/cant profile from Stick to Background Terrain (station → signed radians)
+  bankingProfile?: ElevationPoint[]
+  // Legacy simple lane counts (kept for backwards compatibility and quick UI).
   lanesLeft: number
   lanesRight: number
   laneWidth: number
   filletRadius: number
+  // Rich per-lane definition (SCANeR-compatible).
+  // When undefined, derived from {lanesLeft, lanesRight, laneWidth}.
+  laneSection?: LaneSectionDef
+}
+
+export interface GeoReference {
+  lng: number
+  lat: number
+  scale: number // meters per world unit
 }
 
 export interface Project {
@@ -22,15 +71,53 @@ export interface Project {
   createdAt: string
   roads: RoadData[]
   suppressedJunctions: string[]
+  /** Explicit intersections (SCANeR Roads tab) */
+  intersections?: IntersectionData[]
+  geoRef?: GeoReference
 }
 
-export type Tool = 'select' | 'draw-straight' | 'draw-polyline' | 'draw-arc' | 'move' | 'extend' | 'split' | 'delete' | 'junction'
+export type Tool =
+  | 'select' | 'draw-straight' | 'draw-polyline' | 'draw-arc'
+  | 'draw-clothoid' | 'draw-bezier' | 'draw-spline'
+  | 'move' | 'extend' | 'split' | 'delete' | 'junction'
+  | 'insert-intersection'
+  | 'lane-begin' | 'lane-end' | 'lane-insert' | 'lane-remove' | 'lane-border' | 'lane-sidewalk'
+
+export type EditionConstraint = 'free' | 'fixedRadius' | 'fixedLength'
+
+export interface LayerFlags {
+  roadLogicalContent: boolean
+  road3dGeneration: boolean
+  intersectionLogicalContent: boolean
+  intersection3dGeneration: boolean
+  wayAxis: boolean
+  wayLogicalContents: boolean
+  otherSubNetworks: boolean
+}
+
+export interface InsertOptions {
+  /** "Stick to Background Terrain" — auto altitude/banking picking for new tracks */
+  stickToTerrain: boolean
+  /** "Default Profile" used by the next new track */
+  defaultProfile: 'travel' | 'highway' | 'rural' | 'urban'
+}
+
+export interface EditorSelection {
+  trackIds: string[]
+  intersectionId: string | null
+  /** station on the selected track where it was last clicked (function picking) */
+  trackStation: number | null
+}
 
 export interface EditorConfig {
   lanesLeft: number
   lanesRight: number
   laneWidth: number
   filletRadius: number
+  /** clothoid drawing: output radius (0 = infinite) */
+  clothoidRadiusOut: number
+  /** clothoid drawing: turn direction */
+  clothoidTurn: 'left' | 'right'
 }
 
 interface OgsState {
@@ -39,6 +126,26 @@ interface OgsState {
   tool: Tool
   config: EditorConfig
   workspacePath: string | null
+  // Selection within the lanes tab (for the Lanes dock widget)
+  selectedLaneKey: string | null // e.g. "left:0", "right:2"
+  // Border selection: a key like "border:left:outer" or "border:right:inner"
+  selectedBorderKey: string | null
+  // ── Roads tab (SCANeR) state ──
+  selection: EditorSelection
+  editionConstraint: EditionConstraint
+  layers: LayerFlags
+  insertOptions: InsertOptions
+  /** locked entering/leaving passageways for ways visualization (max 2) */
+  lockedPassageways: string[]
+  setSelection: (selection: EditorSelection) => void
+  toggleTrackSelection: (trackId: string, additive: boolean) => void
+  setEditionConstraint: (constraint: EditionConstraint) => void
+  setLayer: (layer: keyof LayerFlags, value: boolean) => void
+  setInsertOptions: (patch: Partial<InsertOptions>) => void
+  setLockedPassageways: (keys: string[]) => void
+  addIntersection: (intersection: IntersectionData) => void
+  updateIntersection: (id: string, patch: Partial<IntersectionData>) => void
+  deleteIntersectionById: (id: string) => void
   createProject: (name: string) => void
   openProject: (id: string) => void
   closeProject: () => void
@@ -51,12 +158,41 @@ interface OgsState {
   regenerateJunctions: () => void
   setTool: (tool: Tool) => void
   setConfig: (patch: Partial<EditorConfig>) => void
+  setGeoRef: (geoRef: GeoReference) => void
+  setSelectedLane: (key: string | null) => void
+  setSelectedBorder: (key: string | null) => void
+  // Lane operations (mutate the active road's laneSection)
+  insertLaneAt: (roadId: string, side: 'left' | 'right', index: number, lane: import('../engine/laneTypes').LaneDef) => void
+  removeLaneAt: (roadId: string, side: 'left' | 'right', index: number) => void
+  updateLaneAt: (roadId: string, side: 'left' | 'right', index: number, patch: Partial<import('../engine/laneTypes').LaneDef>) => void
+  moveLaneAt: (roadId: string, side: 'left' | 'right', from: number, to: number) => void
+  setLaneBorder: (roadId: string, side: 'left' | 'right', index: number, edge: 'inner' | 'outer', height: number, offset?: number) => void
   refreshProjects: () => Promise<void>
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
 }
 
 const STORAGE_KEY = 'ogs.projects.v2'
+
+/**
+ * Returns the effective lane section for a road.
+ * If the road has a rich laneSection it is used as-is.
+ * Otherwise a default travel-lane section is built from the legacy counts.
+ */
+export function getLaneSection(road: RoadData): LaneSectionDef {
+  if (road.laneSection) return road.laneSection
+  return makeDefaultSection(road.lanesLeft, road.lanesRight, road.laneWidth)
+}
+
+/** Sum of all lane widths on both sides. */
+export function getRoadTotalWidth(road: RoadData): number {
+  return totalWidth(getLaneSection(road))
+}
+
+/** Total lane count on both sides. */
+export function getRoadTotalLanes(road: RoadData): number {
+  return totalLanes(getLaneSection(road))
+}
 
 // ─── localStorage fallback (used until Electron bridge is available) ───
 function loadProjectsLocal(): Project[] {
@@ -71,12 +207,15 @@ function loadProjectsLocal(): Project[] {
         ...rest,
         roads: Array.isArray(project.roads)
           ? project.roads.map((road) => ({
-              ...road,
-              points: Array.isArray(road.points) ? road.points : [],
-              elevationProfile: Array.isArray(road.elevationProfile) ? road.elevationProfile : undefined,
-            }))
+            ...road,
+            points: Array.isArray(road.points) ? road.points : [],
+            elevationProfile: Array.isArray(road.elevationProfile) ? road.elevationProfile : undefined,
+            // Materialize laneSection from legacy counts if missing.
+            laneSection: road.laneSection ?? makeDefaultSection(road.lanesLeft ?? 1, road.lanesRight ?? 1, road.laneWidth ?? 3.5),
+          }))
           : [],
         suppressedJunctions: Array.isArray(project.suppressedJunctions) ? project.suppressedJunctions : [],
+        intersections: Array.isArray(project.intersections) ? project.intersections : [],
       }
     })
   } catch {
@@ -110,8 +249,14 @@ async function loadProjectsFromDisk(): Promise<Project[]> {
         id: projectData.id as string,
         name: projectData.name as string,
         createdAt: projectData.createdAt as string,
-        roads: Array.isArray(projectData.roads) ? projectData.roads as RoadData[] : [],
+        roads: Array.isArray(projectData.roads)
+          ? (projectData.roads as RoadData[]).map((road) => ({
+            ...road,
+            laneSection: road.laneSection ?? makeDefaultSection(road.lanesLeft ?? 1, road.lanesRight ?? 1, road.laneWidth ?? 3.5),
+          }))
+          : [],
         suppressedJunctions: Array.isArray(projectData.suppressedJunctions) ? projectData.suppressedJunctions as string[] : [],
+        intersections: Array.isArray(projectData.intersections) ? (projectData.intersections as IntersectionData[]) : [],
       }
     })
   } catch {
@@ -142,8 +287,56 @@ export const useStore = create<OgsState>((set, get) => ({
   projects: loadProjectsLocal(), // Load from localStorage immediately, refresh from disk on mount
   activeProjectId: null,
   tool: 'draw-straight',
-  config: { lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 50 },
+  config: { lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 50, clothoidRadiusOut: 100, clothoidTurn: 'left' },
   workspacePath: null,
+  selectedLaneKey: null,
+  selectedBorderKey: null,
+  selection: { trackIds: [], intersectionId: null, trackStation: null },
+  editionConstraint: 'free',
+  layers: {
+    roadLogicalContent: true,
+    road3dGeneration: true,
+    intersectionLogicalContent: true,
+    intersection3dGeneration: true,
+    wayAxis: false,
+    wayLogicalContents: false,
+    otherSubNetworks: true,
+  },
+  insertOptions: { stickToTerrain: false, defaultProfile: 'travel' },
+  lockedPassageways: [],
+
+  setSelection: (selection) => set({ selection }),
+  toggleTrackSelection: (trackId, additive) => {
+    const current = get().selection
+    if (!additive) {
+      set({ selection: { trackIds: [trackId], intersectionId: null, trackStation: current.trackStation } })
+      return
+    }
+    const has = current.trackIds.includes(trackId)
+    set({
+      selection: {
+        ...current,
+        trackIds: has ? current.trackIds.filter((id) => id !== trackId) : [...current.trackIds, trackId],
+      },
+    })
+  },
+  setEditionConstraint: (constraint) => set({ editionConstraint: constraint }),
+  setLayer: (layer, value) => set({ layers: { ...get().layers, [layer]: value } }),
+  setInsertOptions: (patch) => set({ insertOptions: { ...get().insertOptions, ...patch } }),
+  setLockedPassageways: (keys) => set({ lockedPassageways: keys.slice(0, 2) }),
+
+  addIntersection: (intersection) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    intersections: [...(project.intersections ?? []), intersection],
+  })),
+  updateIntersection: (id, patch) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    intersections: (project.intersections ?? []).map((item) => (item.id === id ? { ...item, ...patch } : item)),
+  })),
+  deleteIntersectionById: (id) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    intersections: (project.intersections ?? []).filter((item) => item.id !== id),
+  })),
 
   createProject: (name) => {
     const id = uuid()
@@ -153,6 +346,7 @@ export const useStore = create<OgsState>((set, get) => ({
       createdAt: new Date().toISOString(),
       roads: [],
       suppressedJunctions: [],
+      intersections: [],
     }
     const projects = [project, ...get().projects]
     persistLocal(projects)
@@ -194,6 +388,88 @@ export const useStore = create<OgsState>((set, get) => ({
   regenerateJunctions: () => updateActiveProject(get, set, (project) => ({ ...project, suppressedJunctions: [] })),
   setTool: (tool) => set({ tool }),
   setConfig: (patch) => set({ config: { ...get().config, ...patch } }),
+  setGeoRef: (geoRef) => updateActiveProject(get, set, (project) => ({ ...project, geoRef })),
+  setSelectedLane: (key) => set({ selectedLaneKey: key }),
+  setSelectedBorder: (key) => set({ selectedBorderKey: key }),
+
+  // Lane operations - operate on the active road's laneSection.
+  // They ensure the section is materialized first, then mutate it.
+  insertLaneAt: (roadId, side, index, lane) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const next = { left: [...section.left], right: [...section.right] }
+      next[side].splice(index, 0, lane)
+      const updated = { ...road, laneSection: next }
+      // Keep legacy counts in sync.
+      updated.lanesLeft = next.left.length
+      updated.lanesRight = next.right.length
+      return updated
+    }),
+  })),
+  removeLaneAt: (roadId, side, index) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const next = { left: [...section.left], right: [...section.right] }
+      next[side].splice(index, 1)
+      const updated = { ...road, laneSection: next }
+      updated.lanesLeft = next.left.length
+      updated.lanesRight = next.right.length
+      return updated
+    }),
+  })),
+  updateLaneAt: (roadId, side, index, patch) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const list = [...section[side]]
+      list[index] = { ...list[index], ...patch }
+      return { ...road, laneSection: { left: side === 'left' ? list : section.left, right: side === 'right' ? list : section.right } }
+    }),
+  })),
+  moveLaneAt: (roadId, side, from, to) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const list = [...section[side]]
+      const [item] = list.splice(from, 1)
+      list.splice(to, 0, item)
+      return { ...road, laneSection: { left: side === 'left' ? list : section.left, right: side === 'right' ? list : section.right } }
+    }),
+  })),
+  setLaneBorder: (roadId, side, index, edge, height, offset) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const list = [...section[side]]
+      const lane = { ...list[index] }
+      if (edge === 'inner') {
+        // inner border is owned by the lane on the inside of this one
+        // but for simplicity we just expose borderLeftHeight / borderRightHeight
+        if (side === 'left') lane.borderRightHeight = height
+        else lane.borderLeftHeight = height
+        if (offset !== undefined) {
+          if (side === 'left') lane.borderRightOffset = offset
+          else lane.borderLeftOffset = offset
+        }
+      } else {
+        if (side === 'left') lane.borderLeftHeight = height
+        else lane.borderRightHeight = height
+        if (offset !== undefined) {
+          if (side === 'left') lane.borderLeftOffset = offset
+          else lane.borderRightOffset = offset
+        }
+      }
+      list[index] = lane
+      return { ...road, laneSection: { left: side === 'left' ? list : section.left, right: side === 'right' ? list : section.right } }
+    }),
+  })),
 
   refreshProjects: async () => {
     const projects = await loadProjectsFromDisk()

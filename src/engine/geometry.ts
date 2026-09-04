@@ -33,20 +33,131 @@ export function dedupePoints(points: Vec2[], minDist = 0.01): Vec2[] {
 }
 
 export function evaluateElement(el: PathElement, sLocal: number): { x: number; y: number; heading: number } {
-  if (el.type === 'line' || Math.abs(el.curvature) < EPS) {
+  if (el.type === 'line' || (el.type !== 'arc' && el.type !== 'clothoid' && el.type !== 'bezier' && el.type !== 'polyline' && el.type !== 'spline') || (el.type === 'arc' && Math.abs(el.curvature) < EPS)) {
     return {
       x: el.x + Math.cos(el.heading) * sLocal,
       y: el.y + Math.sin(el.heading) * sLocal,
       heading: el.heading,
     }
   }
-  const k = el.curvature
-  const h = el.heading + k * sLocal
-  return {
-    x: el.x + (Math.sin(h) - Math.sin(el.heading)) / k,
-    y: el.y + (-Math.cos(h) + Math.cos(el.heading)) / k,
-    heading: h,
+  if (el.type === 'arc') {
+    const k = el.curvature
+    const h = el.heading + k * sLocal
+    return {
+      x: el.x + (Math.sin(h) - Math.sin(el.heading)) / k,
+      y: el.y + (-Math.cos(h) + Math.cos(el.heading)) / k,
+      heading: h,
+    }
   }
+  if (el.type === 'clothoid') {
+    const L = Math.max(1e-9, el.length)
+    const kIn = el.curvature
+    const kOut = el.curvatureOut ?? kIn
+    const k1 = (kOut - kIn) / L
+    const steps = Math.max(4, Math.ceil(sLocal / 0.5))
+    let x = el.x
+    let y = el.y
+    const h = sLocal / steps
+    let u = 0
+    for (let i = 0; i < steps; i++) {
+      const th1 = el.heading + kIn * u + (k1 * u * u) / 2
+      const th2 = el.heading + kIn * (u + h) + (k1 * (u + h) * (u + h)) / 2
+      x += (h / 2) * (Math.cos(th1) + Math.cos(th2))
+      y += (h / 2) * (Math.sin(th1) + Math.sin(th2))
+      u += h
+    }
+    return { x, y, heading: el.heading + kIn * sLocal + (k1 * sLocal * sLocal) / 2 }
+  }
+  if (el.type === 'bezier') {
+    const p1 = el.p1 ?? { x: el.x, y: el.y }
+    const p2 = el.p2 ?? p1
+    const p0 = { x: el.x, y: el.y }
+    const t = Math.max(0, Math.min(1, sLocal / Math.max(1e-9, el.length)))
+    // Arc-length parameterization is approximated by the stored uniform length.
+    const u = 1 - t
+    const p3 = polylineEnd(el)
+    const x = u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x
+    const y = u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y
+    const dx = 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x)
+    const dy = 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y)
+    return { x, y, heading: Math.atan2(dy, dx) }
+  }
+  if (el.type === 'polyline') {
+    const pts = el.points ?? [{ x: el.x, y: el.y }]
+    let acc = 0
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]
+      const b = pts[i]
+      const seg = Math.hypot(b.x - a.x, b.y - a.y)
+      if (acc + seg >= sLocal || i === pts.length - 1) {
+        const t = seg > EPS ? (sLocal - acc) / seg : 0
+        return {
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+          heading: Math.atan2(b.y - a.y, b.x - a.x),
+        }
+      }
+      acc += seg
+    }
+    const last = pts[pts.length - 1]
+    return { x: last.x, y: last.y, heading: el.heading }
+  }
+  // spline: Catmull-Rom style clamped curve through points
+  {
+    const pts = el.points ?? [{ x: el.x, y: el.y }]
+    if (pts.length < 2) return { x: el.x, y: el.y, heading: el.heading }
+    const tangents: number[] = []
+    for (let i = 0; i < pts.length; i++) {
+      if (i === 0) tangents.push(Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x))
+      else if (i === pts.length - 1) tangents.push(Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x))
+      else {
+        const a = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x)
+        const b = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x)
+        let d = b - a
+        while (d > Math.PI) d -= Math.PI * 2
+        while (d < -Math.PI) d += Math.PI * 2
+        tangents.push(a + d / 2)
+      }
+    }
+    // locate segment containing sLocal by chord lengths
+    let acc = 0
+    for (let i = 0; i < pts.length - 1; i++) {
+      const chord = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y)
+      if (acc + chord >= sLocal || i === pts.length - 2) {
+        const t = chord > EPS ? (sLocal - acc) / chord : 0
+        const u = 1 - t
+        const h00 = 2 * t * t * t - 3 * t * t + 1
+        const h10 = t * t * t - 2 * t * t + t
+        const h01 = -2 * t * t * t + 3 * t * t
+        const h11 = t * t * t - t * t
+        const x = h00 * pts[i].x + h10 * chord * Math.cos(tangents[i]) + h01 * pts[i + 1].x + h11 * chord * Math.cos(tangents[i + 1])
+        const y = h00 * pts[i].y + h10 * chord * Math.sin(tangents[i]) + h01 * pts[i + 1].y + h11 * chord * Math.sin(tangents[i + 1])
+        const e = 1e-3
+        const herm = (tt: number) => {
+          const uu = 1 - tt
+          const a0 = 2 * tt * tt * tt - 3 * tt * tt + 1
+          const a1 = tt * tt * tt - 2 * tt * tt + tt
+          const a2 = -2 * tt * tt * tt + 3 * tt * tt
+          const a3 = tt * tt * tt - tt * tt
+          return {
+            x: a0 * pts[i].x + a1 * chord * Math.cos(tangents[i]) + a2 * pts[i + 1].x + a3 * chord * Math.cos(tangents[i + 1]),
+            y: a0 * pts[i].y + a1 * chord * Math.sin(tangents[i]) + a2 * pts[i + 1].y + a3 * chord * Math.sin(tangents[i + 1]),
+          }
+        }
+        const pa = herm(Math.max(0, t - e))
+        const pb = herm(Math.min(1, t + e))
+        return { x, y, heading: Math.atan2(pb.y - pa.y, pb.x - pa.x) }
+      }
+      acc += chord
+    }
+    const lastP = pts[pts.length - 1]
+    return { x: lastP.x, y: lastP.y, heading: el.heading }
+  }
+}
+
+function polylineEnd(el: PathElement): Vec2 {
+  if (el.points && el.points.length > 0) return el.points[el.points.length - 1]
+  return { x: el.x + Math.cos(el.heading) * el.length, y: el.y + Math.sin(el.heading) * el.length }
 }
 
 export function fitPath(points: Vec2[], radius: number): FittedPath | null {

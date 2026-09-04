@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Route, Trash2 } from 'lucide-react'
+import { Boxes, FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Route, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import LogoMark from '@/components/layout/LogoMark'
@@ -25,7 +25,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useStore } from '../state/store'
 
-export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
+export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio3D }) {
   const projects = useStore((s) => s.projects)
   const createProject = useStore((s) => s.createProject)
   const openProject = useStore((s) => s.openProject)
@@ -57,6 +57,11 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
   function openInTerrain(id) {
     openProject(id)
     onOpenTerrain()
+  }
+
+  function openInStudio3D(id) {
+    openProject(id)
+    onOpenStudio3D()
   }
 
   async function handleDelete() {
@@ -181,6 +186,15 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain }) {
                   >
                     <MapIcon className="size-4" />
                     Terrain
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => openInStudio3D(project.id)}
+                  >
+                    <Boxes className="size-4" />
+                    3D Studio
                   </Button>
                   <Button
                     size="sm"

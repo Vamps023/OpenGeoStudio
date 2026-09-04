@@ -1,7 +1,10 @@
 import { samplePath, samplePathRange } from './geometry'
-import { laneLayout } from './lanes'
+import { laneLayout, LANE_TYPE_META } from './lanes'
 import type { PathSample } from './geometry'
-import type { FittedPath, LaneSectionDef } from './types'
+import type { FittedPath } from './types'
+import type { LaneDef, LaneSectionDef } from './laneTypes'
+import type { LaneStrip } from './laneLayout'
+import type { LaneTaper } from '../state/store'
 
 export interface MeshData {
   positions: Float32Array
@@ -15,6 +18,47 @@ const ASPHALT_A: Rgb = [0.16, 0.18, 0.21]
 const ASPHALT_B: Rgb = [0.19, 0.21, 0.25]
 const WHITE: Rgb = [0.88, 0.9, 0.93]
 const YELLOW: Rgb = [0.91, 0.7, 0.1]
+const SIDEWALK: Rgb = [0.64, 0.65, 0.66]
+const SHOULDER: Rgb = [0.36, 0.40, 0.46]
+const SOFT_SHOULDER: Rgb = [0.55, 0.62, 0.50]
+const MEDIAN: Rgb = [0.40, 0.45, 0.50]
+const BIKE: Rgb = [0.85, 0.78, 0.55]
+const BUS: Rgb = [0.78, 0.50, 0.40]
+const CURB: Rgb = [0.55, 0.65, 0.65]
+const PARKING: Rgb = [0.70, 0.40, 0.40]
+const GRASS: Rgb = [0.40, 0.55, 0.35]
+const DIRT: Rgb = [0.55, 0.42, 0.32]
+const RUNWAY: Rgb = [0.20, 0.22, 0.25]
+
+function hexToRgb(hex: string): Rgb {
+  const m = hex.replace('#', '').match(/.{2}/g)
+  if (!m) return ASPHALT_A
+  return [parseInt(m[0], 16) / 255, parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255]
+}
+
+function colorForLaneType(type: LaneDef['type']): Rgb {
+  switch (type) {
+    case 'travel':        return ASPHALT_A
+    case 'paved_major':   return ASPHALT_B
+    case 'shoulder':      return SHOULDER
+    case 'hard_shoulder': return SHOULDER
+    case 'soft_shoulder': return SOFT_SHOULDER
+    case 'curb':          return CURB
+    case 'sidewalk':      return SIDEWALK
+    case 'bike':          return BIKE
+    case 'bus':           return BUS
+    case 'median':        return MEDIAN
+    case 'parking':       return PARKING
+    case 'embankment':    return GRASS
+    case 'ditch':         return [0.40, 0.50, 0.60]
+    case 'barrier':       return [0.18, 0.20, 0.25]
+    case 'land':          return GRASS
+    case 'lane_out':      return YELLOW
+    case 'runway':        return RUNWAY
+    case 'taxiway':       return [0.26, 0.30, 0.36]
+    default:              return ASPHALT_A
+  }
+}
 
 interface StripSpec {
   inner: number
@@ -25,14 +69,19 @@ interface StripSpec {
 
 type ElevationSampler = (station: number) => number
 
+function isLaneDefArray(arr: unknown): arr is LaneDef[] {
+  return Array.isArray(arr) && (arr.length === 0 || typeof (arr[0] as LaneDef)?.width === 'number')
+}
+
 export function buildRoadMesh(
   path: FittedPath | null,
   section: LaneSectionDef,
   ds = 1,
   elevation?: ElevationSampler,
+  banking?: ElevationSampler,
 ): MeshData | null {
   if (!path || path.elements.length === 0) return null
-  return buildRoadMeshFromSamples(samplePath(path, ds), section, elevation)
+  return buildRoadMeshFromSamples(samplePath(path, ds), section, elevation, banking)
 }
 
 export function buildRoadMeshRange(
@@ -42,33 +91,110 @@ export function buildRoadMeshRange(
   sEnd: number,
   ds = 1,
   elevation?: ElevationSampler,
+  banking?: ElevationSampler,
+  tapers?: LaneTaper[],
 ): MeshData | null {
-  return buildRoadMeshFromSamples(samplePathRange(path, sStart, sEnd, ds), section, elevation)
+  return buildRoadMeshFromSamples(samplePathRange(path, sStart, sEnd, ds), section, elevation, banking, tapers, path.length)
 }
 
 export function buildRoadMeshFromSamples(
   samples: PathSample[],
   section: LaneSectionDef,
   elevation?: ElevationSampler,
+  banking?: ElevationSampler,
+  tapers?: LaneTaper[],
+  roadLength = 0,
 ): MeshData | null {
   if (samples.length < 2) return null
   const layout = laneLayout(section)
   const strips: StripSpec[] = []
 
-  layout.left.forEach((strip, i) => strips.push({ ...strip, color: i % 2 ? ASPHALT_B : ASPHALT_A }))
-  layout.right.forEach((strip, i) => strips.push({ ...strip, color: i % 2 ? ASPHALT_B : ASPHALT_A }))
+  // Determine if we have rich lane defs or just width arrays
+  const leftAreDefs = isLaneDefArray(section.left)
+  const rightAreDefs = isLaneDefArray(section.right)
 
+  // Lane strips (colored by lane type if available)
+  if (leftAreDefs) {
+    section.left.forEach((lane, i) => {
+      const strip = layout.left[i]
+      const baseColor = colorForLaneType(lane.type)
+      const color: Rgb = i % 2 ? [baseColor[0] + 0.03, baseColor[1] + 0.03, baseColor[2] + 0.04] : baseColor
+      strips.push({ ...strip, color, height: lane.borderLeftHeight ?? 0 })
+    })
+  } else {
+    layout.left.forEach((strip, i) => strips.push({ ...strip, color: i % 2 ? ASPHALT_B : ASPHALT_A }))
+  }
+  if (rightAreDefs) {
+    section.right.forEach((lane, i) => {
+      const strip = layout.right[i]
+      const baseColor = colorForLaneType(lane.type)
+      const color: Rgb = i % 2 ? [baseColor[0] + 0.03, baseColor[1] + 0.03, baseColor[2] + 0.04] : baseColor
+      strips.push({ ...strip, color, height: lane.borderRightHeight ?? 0 })
+    })
+  } else {
+    layout.right.forEach((strip, i) => strips.push({ ...strip, color: i % 2 ? ASPHALT_B : ASPHALT_A }))
+  }
+
+  // Express-lane tapers: per-sample strip layout for tapered lanes
+  let layoutAt: ((s: number) => { left: LaneStrip[]; right: LaneStrip[] }) | undefined
+  if (tapers && tapers.length > 0 && roadLength > 0) {
+    const widths = {
+      left: section.left.map((l) => l.width),
+      right: section.right.map((l) => l.width),
+    }
+    layoutAt = (s: number) => {
+      const scaled = {
+        left: widths.left.slice(),
+        right: widths.right.slice(),
+      }
+      for (const taper of tapers) {
+        // express lane: absent before startS / after endS, growing/shrinking
+        // smoothly over the taper length (SPEED_LIMIT × REACTION_TIME)
+        const factor = taper.mode === 'in'
+          ? (() => {
+              const start = taper.startS ?? 0
+              return s <= start ? 0 : Math.max(0, Math.min(1, (s - start) / Math.max(0.01, taper.length)))
+            })()
+          : (() => {
+              const end = taper.endS ?? roadLength
+              return s >= end ? 0 : Math.max(0, Math.min(1, (end - s) / Math.max(0.01, taper.length)))
+            })()
+        const list = scaled[taper.side]
+        if (taper.index < list.length) list[taper.index] = widths[taper.side][taper.index] * factor
+      }
+      return taperedLayout(scaled.left, scaled.right)
+    }
+  }
+
+  // Edge lines (white) at outermost borders
   if (layout.totalLeft > 0.3) strips.push({ inner: layout.totalLeft - 0.2, outer: layout.totalLeft - 0.05, color: WHITE, height: 0.025 })
   if (layout.totalRight > 0.3) strips.push({ inner: -layout.totalRight + 0.05, outer: -layout.totalRight + 0.2, color: WHITE, height: 0.025 })
   if (layout.totalLeft > 0 && layout.totalRight > 0) strips.push({ inner: -0.075, outer: 0.075, color: YELLOW, height: 0.025 })
 
+  // Lane dividers (per-lane markings)
   for (const side of [layout.left, layout.right]) {
     for (let i = 1; i < side.length; i++) {
-      strips.push({ inner: side[i].inner - 0.06, outer: side[i].inner + 0.06, color: WHITE, height: 0.025 })
+      const dividerColor: Rgb = WHITE
+      strips.push({ inner: side[i].inner - 0.06, outer: side[i].inner + 0.06, color: dividerColor, height: 0.025 })
     }
   }
 
-  return buildStrips(samples, strips, elevation)
+  const laneStripCount = section.left.length + section.right.length
+  return buildStrips(samples, strips, elevation, banking, layoutAt ? { layoutAt, laneStripCount } : undefined)
+}
+
+/** Lane strips recomputed with per-lane (tapered) widths. */
+function taperedLayout(leftWidths: number[], rightWidths: number[]): { left: LaneStrip[]; right: LaneStrip[] } {
+  const build = (widths: number[], sign: 1 | -1): LaneStrip[] => {
+    const strips: LaneStrip[] = []
+    let acc = 0
+    for (const width of widths) {
+      strips.push({ inner: acc * sign, outer: (acc + width) * sign })
+      acc += width
+    }
+    return strips
+  }
+  return { left: build(leftWidths, 1), right: build(rightWidths, -1) }
 }
 
 export function buildConnectingRoadMesh(samples: PathSample[], laneCount: number, laneWidth: number): MeshData | null {
@@ -90,7 +216,13 @@ export function buildConnectingRoadMesh(samples: PathSample[], laneCount: number
   return buildStrips(samples, strips)
 }
 
-function buildStrips(samples: PathSample[], strips: StripSpec[], elevation?: ElevationSampler): MeshData | null {
+function buildStrips(
+  samples: PathSample[],
+  strips: StripSpec[],
+  elevation?: ElevationSampler,
+  banking?: ElevationSampler,
+  taperLayout?: { layoutAt: (s: number) => { left: LaneStrip[]; right: LaneStrip[] }; laneStripCount: number },
+): MeshData | null {
   if (samples.length < 2 || strips.length === 0) return null
   const n = samples.length
   const positions = new Float32Array(strips.length * n * 6)
@@ -102,13 +234,28 @@ function buildStrips(samples: PathSample[], strips: StripSpec[], elevation?: Ele
       const nx = -Math.sin(sample.heading)
       const ny = Math.cos(sample.heading)
       const base = (stripIndex * n + i) * 6
-      const height = (sample.z ?? elevation?.(sample.s) ?? 0) + (strip.height ?? 0)
-      positions[base] = sample.x + nx * strip.inner
-      positions[base + 1] = height
-      positions[base + 2] = -(sample.y + ny * strip.inner)
-      positions[base + 3] = sample.x + nx * strip.outer
-      positions[base + 4] = height
-      positions[base + 5] = -(sample.y + ny * strip.outer)
+      const baseHeight = (sample.z ?? elevation?.(sample.s) ?? 0) + (strip.height ?? 0)
+      // banking tilts the section: positive cant raises the left side (positive lateral)
+      const bank = Math.tan(banking?.(sample.s) ?? 0)
+      let inner = strip.inner
+      let outer = strip.outer
+      if (taperLayout && stripIndex < taperLayout.laneStripCount) {
+        const at = taperLayout.layoutAt(sample.s)
+        // strips are ordered: left lanes (center→outward), right lanes, then markings
+        const laneSide = stripIndex < at.left.length ? at.left[stripIndex] : at.right[stripIndex - at.left.length]
+        if (laneSide) {
+          inner = laneSide.inner
+          outer = laneSide.outer
+        }
+      }
+      const heightInner = baseHeight + bank * inner
+      const heightOuter = baseHeight + bank * outer
+      positions[base] = sample.x + nx * inner
+      positions[base + 1] = heightInner
+      positions[base + 2] = -(sample.y + ny * inner)
+      positions[base + 3] = sample.x + nx * outer
+      positions[base + 4] = heightOuter
+      positions[base + 5] = -(sample.y + ny * outer)
       for (let vertex = 0; vertex < 2; vertex++) {
         const colorBase = base + vertex * 3
         colors[colorBase] = strip.color[0]

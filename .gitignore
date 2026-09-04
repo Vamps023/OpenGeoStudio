@@ -1,3 +1,4 @@
 node_modules/
 dist/
 ne2e-shot.png
+tsc.log

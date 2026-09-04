@@ -102,6 +102,10 @@
     display: block;
   }
 
+  .viewport-map-bg {
+    background: #0b1220;
+  }
+
   /* Floating hint pills over canvas / map */
   .viewport-hint,
   .terrain-map-hint {

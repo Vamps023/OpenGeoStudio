@@ -2,6 +2,7 @@ import { useState } from 'react'
 import EditorPage from './pages/EditorPage'
 import LoginPage from './pages/LoginPage'
 import ProjectsPage from './pages/ProjectsPage'
+import Studio3DPage from './pages/Studio3DPage'
 import TerrainPage from './pages/TerrainPage'
 import { Toaster } from './components/ui/sonner'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -19,6 +20,20 @@ export default function App() {
     return (
       <TooltipProvider>
         <TerrainPage
+          onBack={() => {
+            closeProject()
+            setWorkspace('projects')
+          }}
+        />
+        <Toaster position="bottom-right" />
+      </TooltipProvider>
+    )
+  }
+
+  if (workspace === 'studio3d' && activeProjectId) {
+    return (
+      <TooltipProvider>
+        <Studio3DPage
           onBack={() => {
             closeProject()
             setWorkspace('projects')
@@ -48,6 +63,7 @@ export default function App() {
       <ProjectsPage
         onOpenEditor={() => setWorkspace('editor')}
         onOpenTerrain={() => setWorkspace('terrain')}
+        onOpenStudio3D={() => setWorkspace('studio3d')}
       />
       <Toaster position="bottom-right" />
     </TooltipProvider>

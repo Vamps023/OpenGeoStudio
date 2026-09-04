@@ -1,25 +1,90 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   GitMerge,
+  Map as MapIcon,
   MousePointer2,
   Move,
   MoveDiagonal,
   PenLine,
+  Plus,
   RefreshCw,
   Scissors,
   Slash,
   Spline,
   Trash2,
+  CornerDownLeft,
+  CornerDownRight,
+  Layers,
+  Footprints,
+  TrendingUp,
+  Route,
+  Circle,
+  Waves,
+  Waypoints,
+  FileUp,
 } from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
-import { evaluateElevation, evaluateGrade, normalizeElevationProfile } from '../engine/elevation'
+import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
+import { evaluatePath } from '../engine/geometry'
 import type { MeshData } from '../engine/mesh'
-import type { ElevationPoint } from '../engine/elevation'
 import type { Vec2 } from '../engine/types'
-import { useStore, uuid } from '../state/store'
+import { useStore, uuid, getLaneSection } from '../state/store'
 import type { RoadData, RoadGeometryType, Tool } from '../state/store'
+import { makeDefaultSection, defaultLaneByType, laneLayout } from '../engine/laneLayout'
+import type { XYFunction, PolylineFunction } from '../engine/xyFunctions'
+import {
+  FUNCTION_COLORS,
+  FUNCTION_LABELS,
+  bezierConnector,
+  convertPolylineToBezier,
+  convertPolylineToClothoidArcs,
+  convertPolylineToClothoidSpline,
+  convertSplineToFunctions,
+  functionEndFrame,
+  functionLength,
+  functionRadiusOut,
+  INFINITE_RADIUS,
+  mergeFunctions,
+  snapFrame,
+  splitFunction,
+} from '../engine/xyFunctions'
+import {
+  appendFunction,
+  bindTrackFunctions,
+  fitTrackPath,
+  insertHandle,
+  invertTrack,
+  invertTrackFunctions,
+  linkTrackFunctions,
+  mergeFunctionPair,
+  splitTrackFunctions,
+  stickTrackToTerrain,
+  trackSlices,
+  trackStartFrame,
+  trackTotalLength,
+} from '../engine/tracks'
+import type { Frame } from '../engine/xyFunctions'
+import {
+  allWays,
+  authorizationKey,
+  buildExitConnector,
+  computeWays,
+  extractWaysFromIntersection,
+  findTrackCrossing,
+  makeIntersectionData,
+  planInterchange,
+  resolveTracks,
+} from '../engine/intersections'
+import { importOpenDrive } from '../engine/opendrive'
+import type { IntersectionData } from '../engine/intersections'
+import { terrainHeightAtGeo } from '../terrain/terrainRegistry'
+import { buildOverlays } from '../roads/overlays'
+import SelectionPanel from '../roads/SelectionPanel'
+import { RoadsContextMenu } from '../roads/RoadsContextMenu'
+import type { ContextMenuItem } from '../roads/RoadsContextMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,6 +96,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import AppHeader from '@/components/layout/AppHeader'
 import RoadViewport from '../viewport/RoadViewport'
 import ElevationProfileEditor from '../elevation/ElevationProfileEditor'
+import LanesTab from '../lanes/LanesTab'
+import PortionProfileEditor from '../lanes/PortionProfileEditor'
 
 interface RoadMeshEntry {
   roadId: string
@@ -43,23 +110,34 @@ interface ExtendSession {
   start: Vec2
 }
 
-const TOOL_ITEMS: { tool: Tool; label: string; icon: typeof MousePointer2 }[] = [
+const TOOL_ITEMS: { tool: Tool; label: string; icon: typeof MousePointer2; color?: string }[] = [
   { tool: 'select', label: 'Select', icon: MousePointer2 },
-  { tool: 'draw-straight', label: 'Straight', icon: Slash },
-  { tool: 'draw-polyline', label: 'Polyline', icon: PenLine },
-  { tool: 'draw-arc', label: 'Arc', icon: Spline },
+  { tool: 'draw-straight', label: 'Insert Segment', icon: Slash, color: FUNCTION_COLORS.segment },
+  { tool: 'draw-arc', label: 'Insert Circle Arc', icon: Circle, color: FUNCTION_COLORS.arc },
+  { tool: 'draw-clothoid', label: 'Insert Clothoid Arc', icon: TrendingUp, color: FUNCTION_COLORS.clothoid },
+  { tool: 'draw-polyline', label: 'Insert Polyline', icon: PenLine, color: FUNCTION_COLORS.polyline },
+  { tool: 'draw-bezier', label: 'Insert Bezier', icon: Spline, color: FUNCTION_COLORS.bezier },
+  { tool: 'draw-spline', label: 'Insert ClothoidSpline', icon: Waves, color: FUNCTION_COLORS.clothoidSpline },
   { tool: 'move', label: 'Move End', icon: Move },
   { tool: 'extend', label: 'Extend', icon: MoveDiagonal },
   { tool: 'split', label: 'Split', icon: Scissors },
   { tool: 'delete', label: 'Delete', icon: Trash2 },
+  { tool: 'insert-intersection', label: 'Insert Intersection', icon: Waypoints, color: '#a3e635' },
   { tool: 'junction', label: 'Junction', icon: GitMerge },
+  { tool: 'lane-begin', label: 'Begin Lane', icon: CornerDownLeft },
+  { tool: 'lane-end', label: 'End Lane', icon: CornerDownRight },
+  { tool: 'lane-insert', label: 'Insert Lane', icon: Plus },
+  { tool: 'lane-remove', label: 'Remove Lane', icon: Trash2 },
+  { tool: 'lane-border', label: 'Edit Border', icon: Layers },
+  { tool: 'lane-sidewalk', label: 'Add Sidewalk', icon: Footprints },
 ]
 
 const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
   { label: 'Select', tools: ['select'] },
-  { label: 'Draw', tools: ['draw-straight', 'draw-polyline', 'draw-arc'] },
+  { label: 'Insert curves', tools: ['draw-straight', 'draw-arc', 'draw-clothoid', 'draw-polyline', 'draw-bezier', 'draw-spline'] },
   { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
-  { label: 'Network', tools: ['junction'] },
+  { label: 'Network', tools: ['insert-intersection', 'junction'] },
+  { label: 'Lanes', tools: ['lane-begin', 'lane-end', 'lane-insert', 'lane-remove', 'lane-border', 'lane-sidewalk'] },
 ]
 
 export default function EditorPage({ onBack }: { onBack: () => void }) {
@@ -77,16 +155,51 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const setTool = useStore((state) => state.setTool)
   const config = useStore((state) => state.config)
   const setConfig = useStore((state) => state.setConfig)
+  const setGeoRef = useStore((state) => state.setGeoRef)
+  const selection = useStore((state) => state.selection)
+  const setSelection = useStore((state) => state.setSelection)
+  const toggleTrackSelection = useStore((state) => state.toggleTrackSelection)
+  const editionConstraint = useStore((state) => state.editionConstraint)
+  const setEditionConstraint = useStore((state) => state.setEditionConstraint)
+  const layers = useStore((state) => state.layers)
+  const setLayer = useStore((state) => state.setLayer)
+  const insertOptions = useStore((state) => state.insertOptions)
+  const setInsertOptions = useStore((state) => state.setInsertOptions)
+  const lockedPassageways = useStore((state) => state.lockedPassageways)
+  const setLockedPassageways = useStore((state) => state.setLockedPassageways)
+  const addIntersection = useStore((state) => state.addIntersection)
+  const updateIntersection = useStore((state) => state.updateIntersection)
+  const deleteIntersectionById = useStore((state) => state.deleteIntersectionById)
+  const insertLaneAt = useStore((state) => state.insertLaneAt)
+  const removeLaneAt = useStore((state) => state.removeLaneAt)
+  const setSelectedLaneKey = useStore((state) => state.setSelectedLane)
 
   const project = projects.find((item) => item.id === activeProjectId)
-  const [selectedRoadId, setSelectedRoadId] = useState<string | null>(null)
   const [draftPoints, setDraftPoints] = useState<Vec2[]>([])
   const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [mode, setMode] = useState<'2d' | '3d'>('2d')
+  const [showMap, setShowMap] = useState(false)
+  const [menu, setMenu] = useState<{ screen: { x: number; y: number }; world: Vec2 } | null>(null)
+  const [contourHandleArmed, setContourHandleArmed] = useState(false)
+  const odrInputRef = useRef<HTMLInputElement>(null)
+  // Begin/End Lane gizmo (doc 5.5.5.1.2): click a lane, then an arrow
+  const [laneGizmo, setLaneGizmo] = useState<{
+    roadId: string
+    s: number
+    side: 'left' | 'right'
+    kind: 'begin' | 'end'
+    point: Vec2
+    tangent: number
+    halfWidth: number
+  } | null>(null)
   const dragStartRef = useRef<Vec2 | null>(null)
+  const dragSnapRef = useRef<{ roadId: string; contact: 'start' | 'end'; frame: Frame } | null>(null)
   const extendRef = useRef<ExtendSession | null>(null)
 
+  const selectedRoadId = selection.trackIds[0] ?? null
   const selectedRoad = project?.roads.find((road) => road.id === selectedRoadId) ?? null
+  const selectedIntersection = (project?.intersections ?? []).find((item) => item.id === selection.intersectionId) ?? null
+
   const elevationSamplers = useMemo(() => {
     const map = new Map<string, (s: number) => number>()
     if (!project) return map
@@ -94,6 +207,17 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       const path = fitRoadGeometry(road)
       const length = path?.length ?? 0
       const profile = normalizeElevationProfile(road.elevationProfile, length)
+      map.set(road.id, (s) => evaluateElevation(profile, s))
+    }
+    return map
+  }, [project])
+  const bankingSamplers = useMemo(() => {
+    const map = new Map<string, (s: number) => number>()
+    if (!project) return map
+    for (const road of project.roads) {
+      const path = fitRoadGeometry(road)
+      const length = path?.length ?? 0
+      const profile = normalizeElevationProfile(road.bankingProfile, length)
       map.set(road.id, (s) => evaluateElevation(profile, s))
     }
     return map
@@ -107,45 +231,114 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   const roadMeshEntries = useMemo<RoadMeshEntry[]>(() => {
     if (!project || !junctionNetwork) return []
+    if (!layers.road3dGeneration) return []
     return project.roads.flatMap((road) => {
       const path = junctionNetwork.paths.get(road.id)
       if (!path) return []
-      const section = roadSection(road)
+      const section = getLaneSection(road)
       const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
       return visibleRoadRanges(path, cuts).flatMap((range) => {
-        const mesh = buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id))
+        const mesh = buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
         return mesh ? [{ roadId: road.id, mesh }] : []
       })
     })
-  }, [project, junctionNetwork])
+  }, [project, junctionNetwork, elevationSamplers, bankingSamplers, layers.road3dGeneration])
 
   const connectingMeshes = useMemo(() => {
-    if (!junctionNetwork) return []
+    if (!junctionNetwork || !layers.intersection3dGeneration) return []
     return activeJunctions.flatMap((junction) =>
       junction.connectingRoads.flatMap((connection) => {
         const mesh = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
         return mesh ? [mesh] : []
       }),
     )
-  }, [junctionNetwork, activeJunctions])
+  }, [junctionNetwork, activeJunctions, layers.intersection3dGeneration])
 
-  const previewPoints = useMemo(() => {
-    if (!hoverPoint || draftPoints.length === 0) return draftPoints
-    if (tool === 'draw-polyline' || tool === 'draw-arc') return [...draftPoints, hoverPoint]
-    return draftPoints
-  }, [draftPoints, hoverPoint, tool])
-  const draftGeometryType: RoadGeometryType = tool === 'draw-arc' && previewPoints.length >= 3
-    ? 'arc'
-    : tool === 'draw-polyline'
-      ? 'polyline'
-      : 'straight'
-  const draftPath = useMemo(
-    () => fitRoadGeometry({ points: previewPoints, geometryType: draftGeometryType, filletRadius: config.filletRadius }),
-    [previewPoints, draftGeometryType, config.filletRadius],
-  )
+  // Explicit intersections generate 3D from their ways just like auto junctions
+  const intersectionWayMeshes = useMemo(() => {
+    if (!project || !layers.intersection3dGeneration) return []
+    const resolved = resolveTracks(project.roads)
+    const out: MeshData[] = []
+    for (const intersection of project.intersections ?? []) {
+      if (intersection.trackEnds.length < 2) continue
+      for (const way of allWays(intersection, resolved)) {
+        const mesh = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
+        if (mesh) out.push(mesh)
+      }
+    }
+    return out
+  }, [project, layers.intersection3dGeneration])
+
+  // ─── Draft preview (function-aware) ────────────────────────────────
+  const draftSection = useMemo(() => profileSection(insertOptions.defaultProfile, config.laneWidth), [insertOptions.defaultProfile, config.laneWidth])
+  const draftFnPreview = useMemo<XYFunction | null>(() => {
+    const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
+    if (all.length < 1) return null
+    switch (tool) {
+      case 'draw-clothoid': {
+        if (all.length < 2) return null
+        const [a, b] = all
+        const length = Math.max(2, distance(a, b))
+        const turnSign = config.clothoidTurn === 'left' ? 1 : -1
+        return {
+          kind: 'clothoid',
+          radiusIn: dragSnapRef.current?.frame && draftPoints.length > 0 ? neighborRadiusIn(dragSnapRef.current.roadId) ?? INFINITE_RADIUS : INFINITE_RADIUS,
+          radiusOut: config.clothoidRadiusOut > 0 ? config.clothoidRadiusOut * turnSign : INFINITE_RADIUS,
+          length,
+        }
+      }
+      case 'draw-polyline':
+        return all.length >= 2 ? { kind: 'polyline', points: all, splineType: 'segment' } : null
+      case 'draw-spline':
+        return all.length >= 2 ? { kind: 'clothoidSpline', points: all, tolerance: 0.5, symmetryThreshold: 1 } : null
+      case 'draw-bezier':
+        if (all.length < 2) return null
+        return bezierConnector({ x: all[0].x, y: all[0].y, heading: Math.atan2(all[1].y - all[0].y, all[1].x - all[0].x) }, { x: all[all.length - 1].x, y: all[all.length - 1].y, heading: Math.atan2(all[all.length - 1].y - all[all.length - 2].y, all[all.length - 1].x - all[all.length - 2].x) })
+      default:
+        return null
+    }
+    function neighborRadiusIn(roadId: string): number | null {
+      const road = project?.roads.find((r) => r.id === roadId)
+      if (!road?.functions || road.functions.length === 0) return null
+      return functionRadiusOut(road.functions[road.functions.length - 1])
+    }
+  }, [tool, draftPoints, hoverPoint, config.clothoidRadiusOut, config.clothoidTurn, project])
+
+  const draftPath = useMemo(() => {
+    if (draftFnPreview) {
+      const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
+      if (all.length < 1) return null
+      const origin = all[0]
+      let heading = dragSnapRef.current?.frame.heading ?? 0
+      if (!dragSnapRef.current && all.length >= 2) heading = Math.atan2(all[1].y - all[0].y, all[1].x - all[0].x)
+      if (draftFnPreview.kind === 'polyline' || draftFnPreview.kind === 'clothoidSpline') {
+        return fitTrackPath({
+          id: 'draft',
+          points: [{ x: origin.x, y: origin.y }],
+          functions: [draftFnPreview],
+          lanesLeft: 0, lanesRight: 0, laneWidth: 0,
+        })
+      }
+      return fitTrackPath({
+        id: 'draft',
+        points: [origin, { x: origin.x + Math.cos(heading), y: origin.y + Math.sin(heading) }],
+        functions: [draftFnPreview],
+        lanesLeft: 0, lanesRight: 0, laneWidth: 0,
+      })
+    }
+    // legacy previews: straight / polyline / arc
+    const previewPoints = !hoverPoint || draftPoints.length === 0 ? draftPoints
+      : tool === 'draw-polyline' || tool === 'draw-arc' ? [...draftPoints, hoverPoint] : draftPoints
+    if (previewPoints.length < 2) return null
+    const geometryType: RoadGeometryType = tool === 'draw-arc' && previewPoints.length >= 3 ? 'arc' : tool === 'draw-polyline' ? 'polyline' : 'straight'
+    return fitRoadGeometry({ points: previewPoints, geometryType, filletRadius: config.filletRadius })
+  }, [draftFnPreview, draftPoints, hoverPoint, tool, config.filletRadius])
+
   const draftMesh = useMemo(
-    () => buildRoadMesh(draftPath, drawingSection(config.lanesLeft, config.lanesRight, config.laneWidth)),
-    [draftPath, config],
+    () => (draftPath && tool !== 'select' && tool !== 'insert-intersection' && tool !== 'junction' && !tool.startsWith('lane-')
+      ? buildRoadMesh(draftPath, draftSection)
+      : null),
+    [draftPath, draftSection, tool],
   )
 
   const roadLengths = useMemo(() => {
@@ -153,28 +346,655 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return new Map(project.roads.map((road) => [road.id, fitRoadGeometry(road)?.length ?? 0]))
   }, [project])
 
+  const gizmoMarkers = useMemo<import('../viewport/RoadViewport').OverlayMarker[]>(() => {
+    if (!laneGizmo) return []
+    return [
+      { point: laneGizmo.point, color: '#fb923c', shape: 'circle', size: 1.4 },
+      ...gizmoArrows(laneGizmo).map((arrow) => ({
+        id: `laneGizmo:${arrow.key}`,
+        point: arrow.point,
+        color: '#f97316',
+        shape: 'arrow' as const,
+        heading: arrow.heading,
+        size: 5,
+      })),
+    ]
+  }, [laneGizmo])
+
+  // ─── Overlays (axes, arrows, intersections, ways, exits) ───────────
+  const overlays = useMemo(() => {
+    if (!project) return { lines: [], markers: [], exits: [] }
+    const built = buildOverlays({
+      project,
+      layers,
+      selection,
+      lockedPassageways,
+      selectedTrackStation: selection.trackStation,
+    })
+    return { lines: built.lines, markers: [...built.markers, ...gizmoMarkers], exits: built.exits }
+  }, [project, layers, selection, lockedPassageways, gizmoMarkers])
+
+
+
+  // ─── Selected road helpers ─────────────────────────────────────────
+  const selectedRoadLength = selectedRoad ? roadLengths.get(selectedRoad.id) ?? 0 : 0
+
+  function selectRoadOnly(roadId: string | null, station?: number) {
+    setSelection({ trackIds: roadId ? [roadId] : [], intersectionId: null, trackStation: station ?? null })
+  }
+
   function chooseTool(next: Tool) {
     setTool(next)
     dragStartRef.current = null
+    dragSnapRef.current = null
     extendRef.current = null
     setDraftPoints([])
     setHoverPoint(null)
   }
 
-  function createRoad(points: Vec2[], geometryType: RoadGeometryType) {
-    if (!project || points.length < 2) return
-    addRoad({
-      id: uuid(),
-      name: `Road ${project.roads.length + 1}`,
-      points,
-      geometryType,
-      lanesLeft: config.lanesLeft,
-      lanesRight: config.lanesRight,
-      laneWidth: config.laneWidth,
-      filletRadius: config.filletRadius,
-    })
+  // ─── Profile presets ("Default Profile") ───────────────────────────
+  function profileSection(profile: string, laneWidth: number) {
+    switch (profile) {
+      case 'highway': {
+        const side = [defaultLaneByType('hard_shoulder', 1.0), defaultLaneByType('travel', Math.max(3.4, laneWidth)), defaultLaneByType('travel', Math.max(3.4, laneWidth))]
+        return { left: side.map(cloneLane), right: side.map(cloneLane) }
+      }
+      case 'rural': {
+        const side = [defaultLaneByType('soft_shoulder', 1.5), defaultLaneByType('travel', laneWidth)]
+        return { left: side.map(cloneLane), right: side.map(cloneLane) }
+      }
+      case 'urban': {
+        const side = [defaultLaneByType('curb', 0.3), defaultLaneByType('travel', laneWidth), defaultLaneByType('sidewalk', 2)]
+        return { left: side.map(cloneLane), right: side.map(cloneLane) }
+      }
+      default:
+        return makeDefaultSection(config.lanesLeft, config.lanesRight, laneWidth)
+    }
+  }
+  function cloneLane(lane: ReturnType<typeof defaultLaneByType>) {
+    return { ...lane, id: `${lane.id}-${Math.random().toString(36).slice(2, 6)}` }
   }
 
+  // ─── Creating function-based roads ─────────────────────────────────
+  function startFramePoints(frame: Frame): Vec2[] {
+    return [
+      { x: frame.x, y: frame.y },
+      { x: frame.x + Math.cos(frame.heading), y: frame.y + Math.sin(frame.heading) },
+    ]
+  }
+
+  function createFunctionRoad(frame: Frame, functions: XYFunction[], nameSuffix = '') {
+    if (!project || functions.length === 0) return
+    const road: RoadData = {
+      id: uuid(),
+      name: `Road ${project.roads.length + 1}${nameSuffix}`,
+      points: startFramePoints(frame),
+      functions,
+      lanesLeft: draftSection.left.length,
+      lanesRight: draftSection.right.length,
+      laneWidth: config.laneWidth,
+      filletRadius: config.filletRadius,
+      laneSection: draftSection,
+    }
+    addRoad(road)
+    applyStickToTerrain(road)
+    selectRoadOnly(road.id)
+  }
+
+  function applyStickToTerrain(road: RoadData) {
+    if (!insertOptions.stickToTerrain || !project) return
+    const geo = project.geoRef
+    const lng = geo?.lng ?? -95.36
+    const lat = geo?.lat ?? 29.76
+    const scale = geo?.scale ?? 1
+    const latRad = (lat * Math.PI) / 180
+    const metersPerDegLng = 111320 * Math.cos(latRad)
+    const sampler = (x: number, y: number) => terrainHeightAtGeo(lng + (x * scale) / metersPerDegLng, lat + (y * scale) / 111320)
+    const section = getLaneSection(road)
+    const halfWidth = Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
+    const result = stickTrackToTerrain({ ...road, elevationProfile: undefined }, sampler, halfWidth)
+    if (result) {
+      updateRoad(road.id, { elevationProfile: result.elevation, bankingProfile: result.banking })
+      const maxBankDeg = result.banking.reduce((m, p) => Math.max(m, Math.abs((p.z * 180) / Math.PI)), 0)
+      toast.success(`Track stuck to Background Terrain — altitude + banking picked (max cant ${maxBankDeg.toFixed(1)}°)`)
+    } else {
+      toast.warning('No background terrain covers this track. Load terrain in the Terrain workspace first.')
+    }
+  }
+
+  /**
+   * Doc: editing a track connected to an intersection that owns imported
+   * (explicit) ways pops a warning that the explicit data will be lost.
+   * Returns false when the user cancels; continuing drops the explicit ways.
+   */
+  function guardExplicitWays(roadId: string): boolean {
+    if (!project) return true
+    const linked = (project.intersections ?? []).filter(
+      (it) => (it.explicitWays?.length ?? 0) > 0 && it.trackEnds.some((e) => e.trackId === roadId),
+    )
+    if (linked.length === 0) return true
+    if (!window.confirm('A connected intersection owns imported (explicit) ways. Continuing will invalidate that explicit data. Continue?')) {
+      return false
+    }
+    for (const it of linked) updateIntersection(it.id, { explicitWays: [] })
+    return true
+  }
+
+  // ─── OpenDRIVE import (source of explicit ways) ────────────────────
+  function applyOdrImport(xml: string) {
+    if (!project) return
+    const result = importOpenDrive(xml)
+    if (!result) {
+      toast.error('Invalid OpenDRIVE file (XML parse error).')
+      return
+    }
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    for (const road of result.roads) {
+      addRoad({ ...road, laneSection: section, filletRadius: config.filletRadius })
+    }
+    for (const node of result.intersections) addIntersection(node)
+    for (const warning of result.warnings.slice(0, 3)) toast.warning(warning)
+    const wayCount = result.intersections.reduce((sum, j) => sum + (j.explicitWays?.length ?? 0), 0)
+    toast.success(`OpenDRIVE import: ${result.roads.length} road(s), ${result.intersections.length} junction(s), ${wayCount} explicit way(s)`)
+  }
+
+  async function handleOdrImport(event: import('react').ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file || !project) return
+    const text = await file.text()
+    event.target.value = ''
+    applyOdrImport(text)
+  }
+
+  // automation hook for UI verification
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__ogsImportOpenDrive = (xml: string) => applyOdrImport(xml)
+  })
+
+  /** Convert a legacy road to an XY-function road (polyline chain). */
+  function ensureFunctions(road: RoadData): RoadData {
+    if (road.functions && road.functions.length > 0) return road
+    const path = fitRoadGeometry(road)
+    if (!path) return road
+    const samples = sampledControlPoints(path, 0, path.length, 4)
+    const start = { x: samples[0].x, y: samples[0].y }
+    const heading = Math.atan2(samples[1].y - samples[0].y, samples[1].x - samples[0].x)
+    return {
+      ...road,
+      points: startFramePoints({ x: start.x, y: start.y, heading }),
+      functions: [{ kind: 'polyline', points: samples, splineType: 'segment' }],
+    }
+  }
+
+  /** Endpoint snap candidates from all function roads (auto-attach). */
+  function endpointFrames() {
+    if (!project) return []
+    const out: { roadId: string; contact: 'start' | 'end'; frame: Frame }[] = []
+    for (const road of project.roads) {
+      if (!road.functions || road.functions.length === 0) continue
+      const start = trackStartFrame(road)
+      if (!start) continue
+      const slices = trackSlices(road)
+      if (!slices) continue
+      const lastSlice = slices[slices.length - 1]
+      const end = functionEndFrame(lastSlice.start, lastSlice.fn)
+      out.push({ roadId: road.id, contact: 'start', frame: start })
+      out.push({ roadId: road.id, contact: 'end', frame: end })
+    }
+    // legacy roads: endpoints only, heading along the last/first span
+    for (const road of project.roads) {
+      if (road.functions && road.functions.length > 0) continue
+      const pts = road.points
+      if (!pts || pts.length < 2) continue
+      out.push({ roadId: road.id, contact: 'start', frame: { x: pts[0].x, y: pts[0].y, heading: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x) } })
+      out.push({ roadId: road.id, contact: 'end', frame: { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, heading: Math.atan2(pts[pts.length - 1].y - pts[pts.length - 2].y, pts[pts.length - 1].x - pts[pts.length - 2].x) } })
+    }
+    return out
+  }
+
+  function snapToEndpoint(point: Vec2) {
+    return snapFrame(endpointFrames().map((e) => ({ frame: e.frame, roadId: e.roadId, contact: e.contact })), point, 3)
+  }
+
+  // ─── Drawing interactions ──────────────────────────────────────────
+  function beginDraftAt(point: Vec2, forcedHeading?: number) {
+    const snap = snapToEndpoint(point)
+    if (snap) {
+      dragSnapRef.current = { roadId: snap.roadId, contact: snap.contact, frame: snap.frame }
+      setDraftPoints([{ x: snap.frame.x, y: snap.frame.y }])
+      if (forcedHeading === undefined) toast.info('Attached to existing track extremity.')
+      return { x: snap.frame.x, y: snap.frame.y }
+    }
+    dragSnapRef.current = null
+    setDraftPoints([point])
+    return point
+  }
+
+  function handleDragStart(point: Vec2) {
+    if (tool === 'draw-straight') {
+      const start = beginDraftAt(point)
+      dragStartRef.current = start
+      setDraftPoints([start, start])
+      return
+    }
+    if (tool === 'draw-clothoid') {
+      const start = beginDraftAt(point)
+      dragStartRef.current = start
+      setDraftPoints([start, start])
+      return
+    }
+    if (tool === 'extend' || tool === 'move') {
+      const session = nearestEndpoint(point)
+      extendRef.current = session
+      if (session) {
+        selectRoadOnly(session.roadId)
+        setDraftPoints([session.start, session.start])
+      }
+    }
+  }
+
+  function handleDragMove(point: Vec2) {
+    const start = tool === 'extend' || tool === 'move' ? extendRef.current?.start : dragStartRef.current
+    if (start) setDraftPoints([start, point])
+  }
+
+  function handleDragEnd(point: Vec2) {
+    if (tool === 'draw-straight') {
+      const start = dragStartRef.current
+      const snap = dragSnapRef.current
+      dragStartRef.current = null
+      dragSnapRef.current = null
+      setDraftPoints([])
+      if (!start || distance(start, point) < 1) return
+      const heading = Math.atan2(point.y - start.y, point.x - start.x)
+      const fn: XYFunction = { kind: 'segment', length: distance(start, point) }
+      commitFunction(fn, { x: start.x, y: start.y, heading }, snap)
+      return
+    }
+    if (tool === 'draw-clothoid') {
+      const start = dragStartRef.current
+      const snap = dragSnapRef.current
+      dragStartRef.current = null
+      dragSnapRef.current = null
+      setDraftPoints([])
+      if (!start || distance(start, point) < 2) return
+      const heading = Math.atan2(point.y - start.y, point.x - start.x)
+      const turnSign = config.clothoidTurn === 'left' ? 1 : -1
+      let radiusIn = INFINITE_RADIUS
+      if (snap) {
+        const sourceRoad = project?.roads.find((r) => r.id === snap.roadId)
+        if (sourceRoad?.functions && sourceRoad.functions.length > 0) {
+          radiusIn = functionRadiusOut(sourceRoad.functions[sourceRoad.functions.length - 1])
+        }
+      }
+      const fn: XYFunction = {
+        kind: 'clothoid',
+        radiusIn,
+        radiusOut: config.clothoidRadiusOut > 0 ? config.clothoidRadiusOut * turnSign : INFINITE_RADIUS,
+        length: distance(start, point),
+      }
+      commitFunction(fn, { x: start.x, y: start.y, heading }, snap)
+      return
+    }
+    if (tool === 'extend' || tool === 'move') {
+      const session = extendRef.current
+      extendRef.current = null
+      setDraftPoints([])
+      if (!session || distance(session.start, point) < 1 || !project) return
+      const road = project.roads.find((item) => item.id === session.roadId)
+      if (!road) return
+      if (road.functions && road.functions.length > 0) {
+        adjustTrackEnd(road, session.contact, point, tool === 'move')
+        return
+      }
+      let points = [...road.points]
+      let geometryType: RoadGeometryType = road.geometryType ?? 'polyline'
+      if (tool === 'move') {
+        if (session.contact === 'start') points[0] = point
+        else points[points.length - 1] = point
+      } else {
+        if (geometryType === 'arc') {
+          const path = fitRoadGeometry(road)
+          if (!path) return
+          points = sampledControlPoints(path, 0, path.length)
+          geometryType = 'polyline'
+        }
+        points = session.contact === 'start' ? [point, ...points] : [...points, point]
+      }
+      updateRoad(road.id, { points, geometryType })
+    }
+  }
+
+  /** Append the drawn function to a snapped track, or create a new road. */
+  function commitFunction(fn: XYFunction, frame: Frame, snap: { roadId: string; contact: 'start' | 'end'; frame: Frame } | null) {
+    if (snap) {
+      const road = project?.roads.find((r) => r.id === snap.roadId)
+      if (road && road.functions && road.functions.length > 0 && snap.contact === 'end') {
+        const next = appendFunction(road, fn.kind === 'clothoid' && fn.radiusIn === INFINITE_RADIUS
+          ? { ...fn, radiusIn: functionRadiusOut(road.functions[road.functions.length - 1]) }
+          : fn)
+        updateRoad(road.id, { functions: next })
+        selectRoadOnly(road.id)
+        toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name}`)
+        return
+      }
+      if (road && road.functions && road.functions.length > 0 && snap.contact === 'start') {
+        // attach at start: invert road, append, invert back
+        const inverted = invertTrackFunctions(road)
+        if (inverted) {
+          const appended = [...inverted, fn.kind === 'clothoid' && fn.radiusIn === INFINITE_RADIUS
+            ? { ...fn, radiusIn: functionRadiusOut(inverted[inverted.length - 1]) }
+            : fn]
+          const restored = [...appended].reverse().map((f) => invertFunctionLocal(f))
+          updateRoad(road.id, { functions: restored })
+          selectRoadOnly(road.id)
+          toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name} (start)`)
+          return
+        }
+      }
+      // legacy road: create a function road starting at its extremity
+      createFunctionRoad(frame, [fn])
+      return
+    }
+    createFunctionRoad(frame, [fn])
+  }
+
+  function invertFunctionLocal(fn: XYFunction): XYFunction {
+    switch (fn.kind) {
+      case 'segment': return fn
+      case 'arc': return { ...fn, angle: -fn.angle }
+      // reversed clothoid: curvature negates → rIn_rev = -rOut, rOut_rev = -rIn
+      case 'clothoid': return { ...fn, radiusIn: -fn.radiusOut, radiusOut: -fn.radiusIn }
+      case 'polyline': return { ...fn, points: [...fn.points].reverse() }
+      case 'bezier': return { ...fn, p1: fn.p2, p2: fn.p1 }
+      case 'clothoidSpline': return { ...fn, points: [...fn.points].reverse() }
+    }
+  }
+
+  /** Extend / Move End on a function-based track (constraint aware). */
+  function adjustTrackEnd(road: RoadData, contact: 'start' | 'end', point: Vec2, allowHeading: boolean) {
+    if (!guardExplicitWays(road.id)) return
+    const slices = trackSlices(road)
+    if (!slices || slices.length === 0) return
+    if (contact === 'end') {
+      const slice = slices[slices.length - 1]
+      const functions = [...road.functions!]
+      functions[slice.index] = retargetFunction(slice, point, editionConstraint, allowHeading)
+      updateRoad(road.id, { functions })
+      return
+    }
+    // contact 'start': work in inverted space, then invert back. The
+    // inverted chain starts at the original end frame.
+    const inverted = invertTrack(road)
+    if (!inverted) return
+    const invStartPoints = startFramePoints(inverted.startFrame)
+    const slicesInv = trackSlices({ ...road, points: invStartPoints, functions: inverted.functions })
+    if (!slicesInv) return
+    const slice = slicesInv[slicesInv.length - 1]
+    const functions = [...inverted.functions]
+    functions[slice.index] = retargetFunction(slice, point, editionConstraint, allowHeading)
+    // walk the adjusted inverted chain to find the restored chain's start
+    let frame = inverted.startFrame
+    for (const s of trackSlices({ ...road, points: invStartPoints, functions }) ?? []) {
+      frame = functionEndFrame(s.start, s.fn)
+    }
+    const restored = [...functions].reverse().map(invertFunctionLocal)
+    updateRoad(road.id, { functions: restored, points: startFramePoints(frame) })
+  }
+
+  function retargetFunction(
+    slice: { fn: XYFunction; start: Frame; length: number },
+    point: Vec2,
+    constraint: string,
+    allowHeading: boolean,
+  ): XYFunction {
+    const fn = slice.fn
+    const d = distance({ x: slice.start.x, y: slice.start.y }, point)
+    switch (fn.kind) {
+      case 'segment': {
+        if (!allowHeading) return { ...fn, length: Math.max(0.01, d) }
+        return fn // heading changes need a new direction: keep length
+      }
+      case 'arc': {
+        const headingToPoint = Math.atan2(point.y - slice.start.y, point.x - slice.start.x)
+        let deflection = headingToPoint - slice.start.heading
+        while (deflection > Math.PI) deflection -= Math.PI * 2
+        while (deflection < -Math.PI) deflection += Math.PI * 2
+        if (constraint === 'fixedLength') {
+          // solve radius so that chord matches with fixed arc length
+          const len = fn.radius * Math.abs(fn.angle)
+          const radius = solveRadiusForChord(d, len) ?? fn.radius
+          return { ...fn, radius: Math.max(0.01, radius) }
+        }
+        // free / fixed radius: adjust sweep
+        const angle = 2 * deflection
+        return { ...fn, angle }
+      }
+      case 'clothoid': {
+        const curLen = fn.length
+        const scale = Math.max(0.05, d / Math.max(1, curLen))
+        return { ...fn, length: Math.max(0.5, curLen * scale) }
+      }
+      case 'polyline':
+        return { ...fn, points: [...fn.points.slice(0, -1), point] }
+      case 'clothoidSpline':
+        return { ...fn, points: [...fn.points.slice(0, -1), point] }
+      case 'bezier':
+        return { ...fn, p3: point }
+    }
+  }
+
+  function solveRadiusForChord(chord: number, arcLength: number): number | null {
+    // chord = 2 r sin(L / 2r) → solve for r by bisection
+    let lo = chord / 2
+    let hi = Math.max(chord, arcLength) * 4
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2
+      const c = 2 * mid * Math.sin(arcLength / (2 * mid))
+      if (c < chord) lo = mid
+      else hi = mid
+    }
+    return (lo + hi) / 2
+  }
+
+  function handleDragCancel() {
+    dragStartRef.current = null
+    dragSnapRef.current = null
+    extendRef.current = null
+    setDraftPoints([])
+  }
+
+  // ─── Click interactions ────────────────────────────────────────────
+  function handleGroundClick(point: Vec2, event: PointerEvent) {
+    if (!project || !junctionNetwork) return
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey
+
+    // Begin/End Lane gizmo: click one of the two arrows to commit
+    if (laneGizmo && (tool === 'lane-begin' || tool === 'lane-end')) {
+      const arrows = gizmoArrows(laneGizmo)
+      let picked: 'before' | 'after' | null = null
+      let bestDistance = 12
+      for (const arrow of arrows) {
+        const d = distance(arrow.point, point)
+        if (d < bestDistance) {
+          bestDistance = d
+          picked = arrow.key
+        }
+      }
+      if (picked) {
+        commitGizmoLane(laneGizmo, picked)
+      } else {
+        toast.info('Gizmo cancelled — click a lane to restart.')
+      }
+      setLaneGizmo(null)
+      return
+    }
+
+    if (contourHandleArmed && selectedIntersection) {
+      updateIntersection(selectedIntersection.id, {
+        contourHandles: [...selectedIntersection.contourHandles, point],
+      })
+      setContourHandleArmed(false)
+      toast.success('Contour handle inserted')
+      return
+    }
+
+    if (tool === 'draw-polyline' || tool === 'draw-spline') {
+      if (draftPoints.length === 0) {
+        beginDraftAt(point)
+      } else {
+        const last = draftPoints[draftPoints.length - 1]
+        if (!(last && distance(last, point) < 0.1)) setDraftPoints([...draftPoints, point])
+      }
+      return
+    }
+    if (tool === 'draw-bezier') {
+      if (draftPoints.length === 0) {
+        beginDraftAt(point)
+      } else {
+        const start = dragSnapRef.current?.frame
+          ? { ...dragSnapRef.current.frame }
+          : { x: draftPoints[0].x, y: draftPoints[0].y, heading: Math.atan2(point.y - draftPoints[0].y, point.x - draftPoints[0].x) }
+        const snap = dragSnapRef.current
+        const fn = bezierConnector(start, { x: point.x, y: point.y, heading: Math.atan2(point.y - start.y, point.x - start.x) })
+        dragSnapRef.current = null
+        setDraftPoints([])
+        commitFunction(fn, start, snap)
+      }
+      return
+    }
+    if (tool === 'draw-arc') {
+      const last = draftPoints[draftPoints.length - 1]
+      if (draftPoints.length === 0) {
+        beginDraftAt(point)
+        return
+      }
+      if (last && distance(last, point) < 0.1) return
+      const next = [...draftPoints, point]
+      if (next.length === 3) {
+        const snap = dragSnapRef.current
+        dragSnapRef.current = null
+        setDraftPoints([])
+        setHoverPoint(null)
+        const fitted = fitRoadGeometry({ points: next, geometryType: 'arc', filletRadius: 0 })
+        if (fitted && fitted.elements[0]?.type === 'arc') {
+          const el = fitted.elements[0]
+          const fn: XYFunction = {
+            kind: 'arc',
+            radius: 1 / Math.abs(el.curvature),
+            angle: el.curvature * el.length,
+          }
+          const heading = Math.atan2(next[1].y - next[0].y, next[1].x - next[0].x)
+          commitFunction(fn, { x: next[0].x, y: next[0].y, heading }, snap)
+        }
+      } else {
+        setDraftPoints(next)
+      }
+      return
+    }
+    if (tool === 'insert-intersection') {
+      const id = `intersection-${(project.intersections ?? []).length + 1}-${uuid().slice(0, 4)}`
+      const node = makeIntersectionData(id, point)
+      addIntersection(node)
+      setSelection({ trackIds: [], intersectionId: id, trackStation: null })
+      toast.success('Intersection inserted. Select tracks then Ctrl+L to link.')
+      return
+    }
+    if (tool === 'junction') {
+      const junction = nearestJunction(junctions, point)
+      if (junction) {
+        if (junction.suppressed) restoreJunction(junction.key)
+        else suppressJunction(junction.key)
+      }
+      return
+    }
+
+    const hit = nearestRoad(point)
+    // intersection picking: nearest node within 10 m wins over roads
+    const intersections = project.intersections ?? []
+    let nodeHit: IntersectionData | null = null
+    let nodeDistance = Number.POSITIVE_INFINITY
+    for (const node of intersections) {
+      const d = distance(node.position, point)
+      if (d < 10 && d < nodeDistance) {
+        nodeHit = node
+        nodeDistance = d
+      }
+    }
+
+    if (tool === 'select') {
+      if (nodeHit) {
+        setSelection({ trackIds: additive ? selection.trackIds : [], intersectionId: nodeHit.id, trackStation: null })
+        return
+      }
+      if (additive && hit) {
+        setSelection({
+          trackIds: selection.trackIds.includes(hit.road.id)
+            ? selection.trackIds.filter((id) => id !== hit.road.id)
+            : [...selection.trackIds, hit.road.id],
+          // keep the intersection selected so Ctrl+L can link the tracks to it
+          intersectionId: selection.intersectionId,
+          trackStation: hit.s,
+        })
+        return
+      }
+      selectRoadOnly(hit?.road.id ?? null, hit?.s)
+      return
+    }
+    if (tool === 'delete') {
+      if (nodeHit) {
+        deleteIntersectionById(nodeHit.id)
+        toast.success('Intersection deleted')
+        return
+      }
+      if (hit) {
+        deleteRoad(hit.road.id)
+        if (selection.trackIds.includes(hit.road.id)) {
+          setSelection({ ...selection, trackIds: selection.trackIds.filter((id) => id !== hit.road.id) })
+        }
+      }
+      return
+    }
+    if (tool === 'split' && hit) {
+      splitRoadAt(hit.road, hit.s)
+      return
+    }
+    if ((tool === 'lane-begin' || tool === 'lane-end') && hit) {
+      const proj = projectOntoRoad(hit.road, point)
+      const path = junctionNetwork.paths.get(hit.road.id)
+      if (!proj || !path) return
+      const sample = evaluatePath(path, proj.s)
+      setLaneGizmo({
+        roadId: hit.road.id,
+        s: proj.s,
+        side: proj.t >= 0 ? 'left' : 'right',
+        kind: tool === 'lane-begin' ? 'begin' : 'end',
+        point,
+        tangent: sample.heading,
+        halfWidth: getRoadHalfWidth(hit.road),
+      })
+      return
+    }
+    if (tool === 'lane-insert' && hit) {
+      insertLaneNearPoint(hit.road, point)
+    } else if (tool === 'lane-remove' && hit) {
+      removeLaneNearPoint(hit.road, point)
+    } else if (tool === 'lane-sidewalk' && hit) {
+      addSidewalkCurb(hit.road)
+      selectRoadOnly(hit.road.id)
+    } else if (tool === 'lane-border' && hit) {
+      selectRoadOnly(hit.road.id)
+      toast.info('Select a lane border in the Lanes tab to edit its height / offset.')
+    }
+  }
+
+  function handleGroundHover(point: Vec2) {
+    if (draftPoints.length > 0 && ['draw-polyline', 'draw-spline', 'draw-arc', 'draw-bezier'].includes(tool)) {
+      setHoverPoint(point)
+    }
+  }
+
+  // ─── Track operations ──────────────────────────────────────────────
   function nearestRoad(point: Vec2) {
     if (!project || !junctionNetwork) return null
     let best: { road: RoadData; point: Vec2; s: number; distance: number } | null = null
@@ -198,6 +1018,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         { roadId: road.id, contact: 'end', start: road.points[road.points.length - 1] },
       ]
       for (const session of candidates) {
+        if (!session.start) continue
         const distance = Math.hypot(point.x - session.start.x, point.y - session.start.y)
         if (!best || distance < best.distance) best = { session, distance }
       }
@@ -205,117 +1026,84 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return best && best.distance <= 10 ? best.session : null
   }
 
-  function handleDragStart(point: Vec2) {
-    if (tool === 'draw-straight') {
-      dragStartRef.current = point
-      setDraftPoints([point, point])
-      return
+  /** Station of the function under the context-click on a road. */
+  function activeFunctionIndexAt(road: RoadData, station: number | null): number {
+    const slices = trackSlices(road)
+    if (!slices || station === null) return 0
+    for (const slice of slices) {
+      if (station >= slice.offset && station <= slice.offset + slice.length) return slice.index
     }
-    if (tool === 'extend' || tool === 'move') {
-      const session = nearestEndpoint(point)
-      extendRef.current = session
-      if (session) {
-        setSelectedRoadId(session.roadId)
-        setDraftPoints([session.start, session.start])
-      }
-    }
+    return slices.length - 1
   }
 
-  function handleDragMove(point: Vec2) {
-    const start = tool === 'extend' || tool === 'move' ? extendRef.current?.start : dragStartRef.current
-    if (start) setDraftPoints([start, point])
+  /** End frame of a function chain that starts where `road` starts. */
+  function chainEndFrame(road: RoadData, functions: XYFunction[]): Frame | null {
+    const start = trackStartFrame({ ...road, functions })
+    if (!start) return null
+    let frame = start
+    for (const fn of functions) frame = functionEndFrame(frame, fn)
+    return frame
   }
 
-  function handleDragEnd(point: Vec2) {
-    if (tool === 'draw-straight') {
-      const start = dragStartRef.current
-      dragStartRef.current = null
-      setDraftPoints([])
-      if (start && distance(start, point) >= 1) createRoad([start, point], 'straight')
-      return
-    }
-    if (tool === 'extend' || tool === 'move') {
-      const session = extendRef.current
-      extendRef.current = null
-      setDraftPoints([])
-      if (!session || distance(session.start, point) < 1 || !project) return
-      const road = project.roads.find((item) => item.id === session.roadId)
-      if (!road) return
-      let points = [...road.points]
-      let geometryType: RoadGeometryType = road.geometryType ?? 'polyline'
-      if (tool === 'move') {
-        if (session.contact === 'start') points[0] = point
-        else points[points.length - 1] = point
-      } else {
-        if (geometryType === 'arc') {
-          const path = fitRoadGeometry(road)
-          if (!path) return
-          points = sampledControlPoints(path, 0, path.length)
-          geometryType = 'polyline'
+  function splitFunctionAt(road: RoadData, station: number) {
+    if (!guardExplicitWays(road.id)) return
+    const slices = trackSlices(road)
+    if (!slices) return
+    for (const slice of slices) {
+      if (station > slice.offset + 0.2 && station < slice.offset + slice.length - 0.2) {
+        const pieces = splitFunction(slice.start, slice.fn, station - slice.offset)
+        if (!pieces) {
+          toast.error('Cannot split this function here.')
+          return
         }
-        points = session.contact === 'start' ? [point, ...points] : [...points, point]
+        const functions = [...road.functions!]
+        functions.splice(slice.index, 1, pieces[0], pieces[1])
+        updateRoad(road.id, { functions })
+        toast.success('Function split in two')
+        return
       }
-      updateRoad(road.id, { points, geometryType })
     }
+    toast.error('Click closer to the middle of a function to split it.')
   }
 
-  function handleDragCancel() {
-    dragStartRef.current = null
-    extendRef.current = null
-    setDraftPoints([])
-  }
-
-  function handleGroundClick(point: Vec2) {
-    if (!project || !junctionNetwork) return
-    if (tool === 'draw-polyline') {
-      setDraftPoints((current) => {
-        const last = current[current.length - 1]
-        return last && distance(last, point) < 0.1 ? current : [...current, point]
-      })
+  function mergeAtStation(road: RoadData, station: number | null) {
+    const functions = road.functions ?? []
+    const index = activeFunctionIndexAt(road, station)
+    const merged = mergeFunctionPair(functions, index) ?? mergeFunctionPair(functions, Math.max(0, index - 1))
+    if (!merged) {
+      toast.error('Selected functions cannot be merged (same type and continuous radius required).')
       return
     }
-    if (tool === 'draw-arc') {
-      const last = draftPoints[draftPoints.length - 1]
-      if (last && distance(last, point) < 0.1) return
-      const next = [...draftPoints, point]
-      if (next.length === 3) {
-        createRoad(next, 'arc')
-        setDraftPoints([])
-        setHoverPoint(null)
-      } else {
-        setDraftPoints(next)
-      }
-      return
-    }
-    if (tool === 'junction') {
-      const junction = nearestJunction(junctions, point)
-      if (junction) {
-        if (junction.suppressed) restoreJunction(junction.key)
-        else suppressJunction(junction.key)
-      }
-      return
-    }
-
-    const hit = nearestRoad(point)
-    if (tool === 'select') {
-      setSelectedRoadId(hit?.road.id ?? null)
-    } else if (tool === 'delete' && hit) {
-      deleteRoad(hit.road.id)
-      if (selectedRoadId === hit.road.id) setSelectedRoadId(null)
-    } else if (tool === 'split' && hit) {
-      splitRoadAt(hit.road, hit.s)
-    }
-  }
-
-  function handleGroundHover(point: Vec2) {
-    if ((tool === 'draw-polyline' || tool === 'draw-arc') && draftPoints.length > 0) {
-      setHoverPoint(point)
-    }
+    updateRoad(road.id, { functions: merged })
+    toast.success('Functions merged')
   }
 
   function splitRoadAt(road: RoadData, s: number) {
     const path = fitRoadGeometry(road)
     if (!path || s < 1 || path.length - s < 1) return
+    if (road.functions && road.functions.length > 0) {
+      const pieces = splitTrackFunctions(road, s)
+      if (!pieces) return
+      const frame = chainEndFrame(road, pieces.functionsA)
+      if (!frame) return
+      const first: RoadData = {
+        ...road,
+        id: uuid(),
+        name: `${road.name} A`,
+        functions: pieces.functionsA,
+      }
+      const second: RoadData = {
+        ...road,
+        id: uuid(),
+        name: `${road.name} B`,
+        points: startFramePoints(frame),
+        functions: pieces.functionsB,
+      }
+      replaceRoad(road.id, [first, second])
+      setSelection({ trackIds: [first.id], intersectionId: null, trackStation: null })
+      toast.success('Track split in two (still adjacent)')
+      return
+    }
     const first: RoadData = {
       ...road,
       id: uuid(),
@@ -331,77 +1119,839 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       geometryType: 'polyline',
     }
     replaceRoad(road.id, [first, second])
-    setSelectedRoadId(first.id)
+    setSelection({ trackIds: [first.id], intersectionId: null, trackStation: null })
   }
 
-  function finishPolyline() {
-    if (draftPoints.length >= 2) createRoad(draftPoints, 'polyline')
-    setDraftPoints([])
-    setHoverPoint(null)
+  function invertSelectedOrientation() {
+    const road = selectedRoad
+    if (!road) return
+    if (!guardExplicitWays(road.id)) return
+    if (road.functions && road.functions.length > 0) {
+      const inverted = invertTrack(road)
+      if (!inverted) return
+      updateRoad(road.id, {
+        functions: inverted.functions,
+        points: startFramePoints(inverted.startFrame),
+        lanesLeft: road.lanesRight,
+        lanesRight: road.lanesLeft,
+        laneSection: road.laneSection ? { left: road.laneSection.right, right: road.laneSection.left } : undefined,
+        subNetworkExits: road.subNetworkExits?.map((c) => (c === 'start' ? 'end' : 'start')) as ('start' | 'end')[] | undefined,
+      })
+    } else {
+      updateRoad(road.id, {
+        points: [...road.points].reverse(),
+        lanesLeft: road.lanesRight,
+        lanesRight: road.lanesLeft,
+      })
+    }
+    toast.success('Track orientation inverted')
   }
 
+  function stickSelectedToTerrain() {
+    const road = selectedRoad
+    if (!road || !project) return
+    const geo = project.geoRef
+    const lng = geo?.lng ?? -95.36
+    const lat = geo?.lat ?? 29.76
+    const scale = geo?.scale ?? 1
+    const latRad = (lat * Math.PI) / 180
+    const metersPerDegLng = 111320 * Math.cos(latRad)
+    const sampler = (x: number, y: number) => terrainHeightAtGeo(lng + (x * scale) / metersPerDegLng, lat + (y * scale) / 111320)
+    const full = ensureFunctions(road)
+    const section = getLaneSection(full)
+    const halfWidth = Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
+    const result = stickTrackToTerrain({ ...full, elevationProfile: undefined }, sampler, halfWidth)
+    if (result) {
+      updateRoad(road.id, { elevationProfile: result.elevation, bankingProfile: result.banking })
+      const maxBankDeg = result.banking.reduce((m, p) => Math.max(m, Math.abs((p.z * 180) / Math.PI)), 0)
+      toast.success(`Track stuck to Background Terrain — altitude + banking picked (max cant ${maxBankDeg.toFixed(1)}°)`)
+    } else {
+      toast.warning('No background terrain loaded. Download terrain in the Terrain workspace first.')
+    }
+  }
+
+  function linkSelectedTracks() {
+    if (!project || selection.trackIds.length !== 2) return
+    const [idA, idB] = selection.trackIds
+    const a = ensureFunctions(project.roads.find((r) => r.id === idA)!)
+    const b = ensureFunctions(project.roads.find((r) => r.id === idB)!)
+    // First track imposes its direction; join at A's end and B's nearest end.
+    const contactA = contactFromStation(a, selection.trackStation)
+    const contactB = nearestContactTo(b, exitFrame(a, contactA))
+    const result = linkTrackFunctions(a, b, { contactA, contactB })
+    if (!result) {
+      toast.error('Link Tracks failed: both tracks must use XY functions.')
+      return
+    }
+    updateRoad(a.id, { functions: result.functions, points: startFramePoints(result.startFrame), name: a.name })
+    deleteRoad(b.id)
+    setSelection({ trackIds: [a.id], intersectionId: null, trackStation: null })
+    toast.success('Tracks linked with a spline connector (first track kept its direction)')
+  }
+
+  function contactFromStation(road: RoadData, station: number | null): 'start' | 'end' {
+    const length = fitTrackPath(road)?.length ?? trackTotalLength(road)
+    if (station === null) return 'end'
+    return station < length / 2 ? 'start' : 'end'
+  }
+
+  function nearestContactTo(road: RoadData, target: Frame | null): 'start' | 'end' {
+    if (!target) return 'end'
+    const start = exitFrame(road, 'start')
+    const end = exitFrame(road, 'end')
+    if (!start || !end) return 'end'
+    return distance(start, target) <= distance(end, target) ? 'start' : 'end'
+  }
+
+  function bindSelectedTracks() {
+    if (!project || selection.trackIds.length !== 2) return
+    const [idA, idB] = selection.trackIds
+    const a = ensureFunctions(project.roads.find((r) => r.id === idA)!)
+    const b = ensureFunctions(project.roads.find((r) => r.id === idB)!)
+    const contactA = contactFromStation(a, selection.trackStation)
+    const contactB = nearestContactTo(b, exitFrame(a, contactA))
+    const result = bindTrackFunctions(a, b, { contactA, contactB })
+    if (!result) {
+      toast.error('Bind Tracks failed.')
+      return
+    }
+    updateRoad(b.id, { functions: result.functions, points: startFramePoints(result.startFrame) })
+    toast.success('Tracks bound — the second track moved onto the first')
+  }
+
+  // ─── Conversions ───────────────────────────────────────────────────
+  function convertActivePolyline(target: 'bezier' | 'clothoidArc' | 'clothoidSpline') {
+    const road = selectedRoad
+    if (!road?.functions) return
+    if (!guardExplicitWays(road.id)) return
+    const slices = trackSlices(road)
+    if (!slices) return
+    const index = activeFunctionIndexAt(road, selection.trackStation)
+    const slice = slices[index]
+    if (slice.fn.kind !== 'polyline') {
+      toast.error('Select a segment-type polyline first (Polyline Spline: Segment).')
+      return
+    }
+    const fn = slice.fn as PolylineFunction
+    const functions = [...road.functions]
+    if (target === 'bezier') {
+      functions.splice(index, 1, convertPolylineToBezier(slice.start, fn))
+      toast.success('Polyline converted to Bezier')
+    } else if (target === 'clothoidArc') {
+      functions.splice(index, 1, ...convertPolylineToClothoidArcs(fn))
+      toast.success('Polyline converted to clothoid arcs + circle segments')
+    } else {
+      functions.splice(index, 1, convertPolylineToClothoidSpline(fn))
+      toast.success('Polyline converted to ClothoidSpline — review the result, it does not pass through the control points')
+    }
+    updateRoad(road.id, { functions })
+  }
+
+  function convertActiveSpline() {
+    const road = selectedRoad
+    if (!road?.functions) return
+    if (!guardExplicitWays(road.id)) return
+    const slices = trackSlices(road)
+    if (!slices) return
+    const index = activeFunctionIndexAt(road, selection.trackStation)
+    const slice = slices[index]
+    if (slice.fn.kind !== 'clothoidSpline') return
+    const functions = [...road.functions]
+    functions.splice(index, 1, ...convertSplineToFunctions(slice.start, slice.fn))
+    updateRoad(road.id, { functions })
+    toast.success('ClothoidSpline converted to clothoid + circle + segment')
+  }
+
+  function insertHandleAtStation() {
+    const road = selectedRoad
+    if (!road?.functions) return
+    if (!guardExplicitWays(road.id)) return
+    const slices = trackSlices(road)
+    const station = selection.trackStation
+    if (!slices || station === null) {
+      toast.info('Click on the curve where the handle should be inserted first.')
+      return
+    }
+    for (const slice of slices) {
+      if (station > slice.offset + 0.2 && station < slice.offset + slice.length - 0.2) {
+        const next = insertHandle(road, slice.index, station - slice.offset)
+        if (!next) {
+          toast.error('Handles can only be inserted on polylines and ClothoidSplines.')
+          return
+        }
+        updateRoad(road.id, { functions: next })
+        toast.success('Handle inserted')
+        return
+      }
+    }
+  }
+
+  // ─── SubNetwork exits ──────────────────────────────────────────────
+  function toggleExit(road: RoadData, contact: 'start' | 'end') {
+    const exits = road.subNetworkExits ?? []
+    const next = exits.includes(contact)
+      ? exits.filter((c) => c !== contact)
+      : [...exits, contact]
+    updateRoad(road.id, { subNetworkExits: next })
+    toast.success(next.includes(contact) ? `Extremity marked as SubNetwork Exit (${contact})` : 'SubNetwork Exit removed')
+  }
+
+  function linkExits(method: 'clothoidSpline' | 'segmentCircle') {
+    if (!project || selection.trackIds.length !== 2) return
+    const roads = selection.trackIds.map((id) => project.roads.find((r) => r.id === id)).filter(Boolean) as RoadData[]
+    const exitFrames: { roadId: string; contact: 'start' | 'end'; frame: Frame }[] = []
+    for (const road of roads) {
+      for (const contact of road.subNetworkExits ?? []) {
+        const frame = exitFrame(road, contact)
+        if (frame) exitFrames.push({ roadId: road.id, contact, frame })
+      }
+    }
+    if (exitFrames.length !== 2) {
+      toast.error('Select exactly two tracks that have marked SubNetwork Exits.')
+      return
+    }
+    const [from, to] = exitFrames
+    const functions = buildExitConnector(
+      { position: { x: from.frame.x, y: from.frame.y }, heading: from.frame.heading },
+      { position: { x: to.frame.x, y: to.frame.y }, heading: to.frame.heading },
+      method,
+    )
+    createExitLinkRoad(from.frame, functions)
+    toast.success('Exits linked — the connector track is part of the current sub network')
+  }
+
+  function createExitLinkRoad(frame: Frame, functions: XYFunction[]) {
+    if (!project) return
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    addRoad({
+      id: uuid(),
+      name: `Exit Link ${project.roads.length + 1}`,
+      points: startFramePoints(frame),
+      functions,
+      lanesLeft: section.left.length,
+      lanesRight: section.right.length,
+      laneWidth: config.laneWidth,
+      filletRadius: config.filletRadius,
+      laneSection: section,
+    })
+  }
+
+  function exitFrame(road: RoadData, contact: 'start' | 'end'): Frame | null {
+    if (road.functions && road.functions.length > 0) {
+      const start = trackStartFrame(road)
+      const slices = trackSlices(road)
+      if (!start || !slices) return null
+      if (contact === 'start') return start
+      const last = slices[slices.length - 1]
+      return functionEndFrame(last.start, last.fn)
+    }
+    const pts = road.points
+    if (!pts || pts.length < 2) return null
+    return contact === 'start'
+      ? { x: pts[0].x, y: pts[0].y, heading: Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x) }
+      : { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, heading: Math.atan2(pts[pts.length - 1].y - pts[pts.length - 2].y, pts[pts.length - 1].x - pts[pts.length - 2].x) }
+  }
+
+  // ─── Intersections ─────────────────────────────────────────────────
+  function linkIntersectionToTracks() {
+    const it = selectedIntersection
+    if (!it || !project || selection.trackIds.length === 0) return
+    const ends = [...it.trackEnds]
+    let added = 0
+    for (const trackId of selection.trackIds) {
+      const road = project.roads.find((r) => r.id === trackId)
+      if (!road) continue
+      const start = exitFrame(road, 'start')
+      const end = exitFrame(road, 'end')
+      if (!start || !end) continue
+      const contact = distance(start, it.position) <= distance(end, it.position) ? 'start' : 'end'
+      if (ends.some((e) => e.trackId === trackId && e.contact === contact)) continue
+      ends.push({ trackId, contact })
+      added++
+    }
+    updateIntersection(it.id, { trackEnds: ends })
+    if (ends.length < 3) {
+      toast.warning('Intersection links at least 3 tracks together. Linking 2 tracks is not recommended — prefer merging them.')
+    } else if (added > 0) {
+      toast.success(`Linked ${added} track(s) to the intersection`)
+    }
+  }
+
+  function unlinkIntersection() {
+    const it = selectedIntersection
+    if (!it) return
+    updateIntersection(it.id, { trackEnds: [] })
+    toast.success('Intersection unlinked from tracks')
+  }
+
+  function detectIntersectionFromSelection() {
+    if (!project || selection.trackIds.length !== 2) return
+    const [roadA, roadB] = selection.trackIds.map((id) => ensureFunctions(project.roads.find((r) => r.id === id)!))
+    const resolved = resolveTracks([roadA, roadB])
+    const a = resolved.get(roadA.id)
+    const b = resolved.get(roadB.id)
+    if (!a || !b) return
+    const crossing = findTrackCrossing(a, b)
+    if (!crossing) {
+      toast.error('The two selected tracks do not cross.')
+      return
+    }
+    const sinAngle = Math.max(0.2, crossing.angle)
+    // Trim the arms back from the crossing (like the auto junction cut) so
+    // the intersection interior has room for its ways, mesh and contours.
+    const halfWidth = (road: RoadData) => {
+      const section = getLaneSection(road)
+      return Math.max(1, (section.left.reduce((s, l) => s + l.width, 0) + section.right.reduce((s, l) => s + l.width, 0)) / 2)
+    }
+    const trimA = halfWidth(roadB) / sinAngle + 3
+    const trimB = halfWidth(roadA) / sinAngle + 3
+
+    function trimArm(road: RoadData, contact: 'start' | 'end', trim: number): RoadData | null {
+      const len = fitTrackPath(road)?.length ?? 0
+      if (len - trim < 2) return null // too short to keep — dropped as a stub
+      if (contact === 'end') {
+        const pieces = splitTrackFunctions(road, len - trim)
+        if (!pieces) return road
+        return { ...road, functions: pieces.functionsA }
+      }
+      const pieces = splitTrackFunctions(road, trim)
+      if (!pieces) return road
+      const frame = chainEndFrame(road, pieces.functionsA)
+      if (!frame) return road
+      return { ...road, functions: pieces.functionsB, points: startFramePoints(frame) }
+    }
+
+    const arms: { track: RoadData; contact: 'start' | 'end' }[] = []
+    const roadsToReplace: { originalId: string; pieces: RoadData[] }[] = []
+    for (const [road, s, trim] of [[roadA, crossing.sA, trimA], [roadB, crossing.sB, trimB]] as const) {
+      const pieces = splitTrackFunctions(road, s)
+      if (!pieces) {
+        toast.error(`Cannot split ${road.name} at the crossing.`)
+        return
+      }
+      const frame = chainEndFrame(road, pieces.functionsA)
+      if (!frame) return
+      const first: RoadData = { ...road, id: uuid(), name: `${road.name} A`, functions: pieces.functionsA }
+      const second: RoadData = { ...road, id: uuid(), name: `${road.name} B`, points: startFramePoints(frame), functions: pieces.functionsB }
+      const trimmed = [
+        { track: trimArm(first, 'end', trim), contact: 'end' as const },
+        { track: trimArm(second, 'start', trim), contact: 'start' as const },
+      ].filter((arm): arm is { track: RoadData; contact: 'start' | 'end' } => arm.track !== null)
+      // keep original names when a single arm survives (T intersection stubs removed)
+      const renamed = trimmed.length === 2 ? trimmed : trimmed.map((arm) => ({ ...arm, track: { ...arm.track, name: road.name } }))
+      arms.push(...renamed)
+      roadsToReplace.push({ originalId: road.id, pieces: renamed.map((arm) => arm.track) })
+    }
+    if (arms.length < 3) {
+      toast.error('Detect Intersection needs at least 3 remaining arms (two of them were too short).')
+      return
+    }
+    const node = makeIntersectionData(`intersection-${(project.intersections ?? []).length + 1}-${uuid().slice(0, 4)}`, crossing.point)
+    node.trackEnds = arms.map((arm) => ({ trackId: arm.track.id, contact: arm.contact }))
+    for (const replacement of roadsToReplace) {
+      replaceRoad(replacement.originalId, replacement.pieces)
+    }
+    addIntersection(node)
+    // suppress auto junctions that duplicate this explicit intersection
+    setTimeout(() => suppressDuplicateAutoJunctions(node.position, arms.map((arm) => arm.track)), 50)
+    setSelection({ trackIds: [], intersectionId: node.id, trackStation: null })
+    toast.success('Intersection detected: node + links + contours + ways created')
+  }
+
+  function suppressDuplicateAutoJunctions(nodePos: Vec2, pieces: RoadData[]) {
+    const resolved = resolveTracks(pieces)
+    const list = [...resolved.values()]
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const crossing = findTrackCrossing(list[i], list[j])
+        if (crossing && distance(crossing.point, nodePos) < 25) {
+          suppressJunction([list[i].track.id, list[j].track.id].sort().join('|'))
+        }
+      }
+    }
+  }
+
+  function invertAuthorizations() {
+    const it = selectedIntersection
+    if (!it || !project) return
+    const ways = allWays(it, resolveTracks(project.roads))
+    const authorizations = { ...it.authorizations }
+    for (const way of ways) {
+      authorizations[way.key] = !(authorizations[way.key] ?? true)
+    }
+    updateIntersection(it.id, { authorizations })
+    toast.success('Authorisations inverted on intersection')
+  }
+
+  function toggleAuthorization(key: string) {
+    const it = selectedIntersection
+    if (!it) return
+    updateIntersection(it.id, {
+      authorizations: { ...it.authorizations, [key]: !(it.authorizations[key] ?? true) },
+    })
+  }
+
+  function extractWays() {
+    const it = selectedIntersection
+    if (!it || !project) return
+    const resolved = resolveTracks(project.roads)
+    const result = extractWaysFromIntersection(it, resolved, project.roads.length + 1)
+    if (!result) {
+      toast.error('No authorized ways to extract from this intersection.')
+      return
+    }
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    for (const track of result.wayTracks) {
+      const start = track.functions[0].kind === 'polyline' ? track.functions[0].points[0] : { x: 0, y: 0 }
+      const nextPt = track.functions[0].kind === 'polyline' ? track.functions[0].points[1] : start
+      addRoad({
+        id: track.id,
+        name: track.name,
+        points: startFramePoints({ x: start.x, y: start.y, heading: Math.atan2(nextPt.y - start.y, nextPt.x - start.x) }),
+        functions: track.functions,
+        lanesLeft: section.left.length,
+        lanesRight: section.right.length,
+        laneWidth: config.laneWidth,
+        filletRadius: config.filletRadius,
+        laneSection: section,
+      })
+    }
+    for (const node of result.extremityIntersections) {
+      addIntersection(node)
+    }
+    deleteIntersectionById(it.id)
+    toast.success(`Extracted ${result.wayTracks.length} way track(s) with extremity intersections`)
+  }
+
+  function createInterchange() {
+    if (!project || selection.trackIds.length !== 2) return
+    const main = ensureFunctions(project.roads.find((r) => r.id === selection.trackIds[0])!)
+    const secondary = ensureFunctions(project.roads.find((r) => r.id === selection.trackIds[1])!)
+    const resolved = resolveTracks([main, secondary])
+    const mainRes = resolved.get(main.id)
+    const secRes = resolved.get(secondary.id)
+    if (!mainRes || !secRes) return
+    const plan = planInterchange(mainRes, secRes)
+    if (!plan) {
+      toast.error('Create Interchange needs two overlapping tracks (entry/exit shape).')
+      return
+    }
+    const [mainS1, mainS2] = [...plan.mainSplits].sort((a, b) => a - b)
+    const [secS1, secS2] = [...plan.secondarySplits].sort((a, b) => a - b)
+    // split main into 3, secondary into 3 (split far station first)
+    const mainPieces = splitAtStations(main, [mainS1, mainS2])
+    const secPieces = splitAtStations(secondary, [secS1, secS2])
+    if (!mainPieces || !secPieces) {
+      toast.error('Interchange splits failed.')
+      return
+    }
+    const [M1, M2, M3] = mainPieces
+    const [S1, , S3] = secPieces
+    // replace roads; the secondary middle piece becomes the added passageway
+    replaceRoad(main.id, [M1, M2, M3])
+    replaceRoad(secondary.id, [S1, S3])
+    const node = makeIntersectionData(`intersection-${(project.intersections ?? []).length + 1}-${uuid().slice(0, 4)}`, plan.node)
+    node.trackEnds = [
+      { trackId: M1.id, contact: 'end' },
+      { trackId: M3.id, contact: 'start' },
+      { trackId: S1.id, contact: 'end' },
+      { trackId: S3.id, contact: 'start' },
+    ]
+    node.authorizations = {
+      [authorizationKey({ trackId: S1.id, contact: 'end' }, { trackId: S3.id, contact: 'start' })]: false,
+    }
+    addIntersection(node)
+    setSelection({ trackIds: [], intersectionId: node.id, trackStation: null })
+    toast.success('Bifurcation created: tracks split, central intersection added, secondary through denied')
+  }
+
+  function splitAtStations(road: RoadData, stations: number[]): RoadData[] | null {
+    let remaining: RoadData = road
+    const piecesAfterFirst: RoadData[] = []
+    let offsetName = 0
+    const sorted = [...stations].sort((a, b) => a - b)
+    let firstCut: { a: RoadData; b: RoadData } | null = null
+    for (const s of sorted) {
+      const pieces = splitTrackFunctions(remaining, s - (firstCut ? sorted[0] : 0))
+      if (!pieces) return null
+      const frame = chainEndFrame(remaining, pieces.functionsA)
+      if (!frame) return null
+      const a: RoadData = { ...remaining, id: uuid(), name: `${road.name}.${String.fromCharCode(65 + offsetName)}`, functions: pieces.functionsA }
+      const b: RoadData = { ...remaining, id: uuid(), name: `${road.name}.${String.fromCharCode(66 + offsetName)}`, points: startFramePoints(frame), functions: pieces.functionsB }
+      if (!firstCut) {
+        firstCut = { a, b }
+        remaining = b
+      } else {
+        piecesAfterFirst.push(a)
+        remaining = b
+      }
+      offsetName++
+    }
+    if (!firstCut) return null
+    return [firstCut.a, ...piecesAfterFirst, remaining]
+  }
+
+  function moveMarker(id: string, point: Vec2) {
+    if (id.startsWith('node:')) {
+      updateIntersection(id.slice(5), { position: point })
+    } else if (id.startsWith('contour:')) {
+      const [, intersectionId, indexStr] = id.split(':')
+      const it = (project?.intersections ?? []).find((item) => item.id === intersectionId)
+      if (!it) return
+      const handles = [...it.contourHandles]
+      handles[Number.parseInt(indexStr, 10)] = point
+      updateIntersection(intersectionId, { contourHandles: handles })
+    }
+  }
+
+  function moveMarkerEnd(id: string, point: Vec2) {
+    moveMarker(id, point)
+    if (id.startsWith('node:')) toast.info('Intersection aligned — keep the handle inside the contours.')
+  }
+
+  function handleWayDoubleClick(wayKey: string) {
+    const [fromKey] = wayKey.split('->')
+    const locks = lockedPassageways.includes(fromKey)
+      ? lockedPassageways.filter((k) => k !== fromKey)
+      : [...lockedPassageways, fromKey].slice(-2)
+    setLockedPassageways(locks)
+    toast.info(locks.length === 0
+      ? 'Passageway lock removed'
+      : locks.length === 1
+        ? 'Passageway locked — showing only its ways'
+        : 'Two passageways locked — showing the way between them')
+  }
+
+  // ─── Context menu ──────────────────────────────────────────────────
+  function buildContextMenu(world: Vec2): { title: string; items: ContextMenuItem[] } {
+    const items: ContextMenuItem[] = []
+    const selTracks = selection.trackIds
+      .map((id) => project?.roads.find((r) => r.id === id))
+      .filter(Boolean) as RoadData[]
+    const hit = nearestRoad(world)
+    const nodeHit = (project?.intersections ?? []).find((n) => distance(n.position, world) < 10) ?? null
+    const activeIt = selectedIntersection ?? nodeHit
+
+    if (activeIt) {
+      items.push({ label: 'Link to Tracks', shortcut: 'Ctrl+L', disabled: selTracks.length === 0, onSelect: linkIntersectionToTracks })
+      items.push({ label: 'Unlink Intersection From Tracks', disabled: activeIt.trackEnds.length === 0, onSelect: () => { setSelection({ trackIds: selection.trackIds, intersectionId: activeIt.id, trackStation: null }); setTimeout(unlinkIntersection, 0) } })
+      items.push({ label: 'Invert Authorisations on Intersection', shortcut: 'Ctrl+Shift+I', disabled: activeIt.trackEnds.length < 2, onSelect: () => { setSelection({ trackIds: selection.trackIds, intersectionId: activeIt.id, trackStation: null }); setTimeout(invertAuthorizations, 0) } })
+      items.push({ label: 'Insert Handle (Contour)', onSelect: () => { setSelection({ trackIds: selection.trackIds, intersectionId: activeIt.id, trackStation: null }); setContourHandleArmed(true); toast.info('Click near a contour to place the handle.') } })
+      items.push({ label: 'Extract Ways From Intersection', disabled: activeIt.trackEnds.length < 2, onSelect: () => { setSelection({ trackIds: selection.trackIds, intersectionId: activeIt.id, trackStation: null }); setTimeout(extractWays, 0) }, separatorBefore: true })
+      items.push({ label: 'Delete Intersection', danger: true, onSelect: () => { deleteIntersectionById(activeIt.id); setSelection({ trackIds: selection.trackIds, intersectionId: null, trackStation: null }) }, separatorBefore: true })
+      return { title: 'Intersection', items }
+    }
+
+    if (selTracks.length === 2) {
+      items.push({ label: 'Link Tracks', onSelect: linkSelectedTracks })
+      items.push({ label: 'Bind Tracks', onSelect: bindSelectedTracks })
+      items.push({ label: 'Detect Intersection', onSelect: detectIntersectionFromSelection })
+      items.push({ label: 'Create Interchange (Bifurcation)', onSelect: createInterchange })
+      items.push({ label: 'Link Exits with ClothoidSpline', disabled: !selTracks.every((r) => (r.subNetworkExits ?? []).length > 0), onSelect: () => linkExits('clothoidSpline') })
+      items.push({ label: 'Link Exits with Segment + Circle Arc', disabled: !selTracks.every((r) => (r.subNetworkExits ?? []).length > 0), onSelect: () => linkExits('segmentCircle') })
+      return { title: `${selTracks[0].name} + ${selTracks[1].name}`, items }
+    }
+
+    if (hit) {
+      const road = hit.road
+      const isFn = !!road.functions && road.functions.length > 0
+      items.push({ label: `Select ${road.name}`, onSelect: () => selectRoadOnly(road.id, hit.s) })
+      if (isFn) {
+        items.push({ label: 'Split Function', onSelect: () => splitFunctionAt(road, hit.s) })
+        items.push({ label: 'Merge Functions', onSelect: () => mergeAtStation(road, hit.s) })
+        items.push({ label: 'Insert Handle', onSelect: () => { selectRoadOnly(road.id, hit.s); setTimeout(insertHandleAtStation, 0) } })
+      }
+      items.push({ label: 'Split Track', onSelect: () => splitRoadAt(road, hit.s), separatorBefore: true })
+      items.push({ label: 'Invert Track Orientation', onSelect: () => { selectRoadOnly(road.id); setTimeout(invertSelectedOrientation, 0) } })
+      items.push({ label: 'Stick Track to Background Terrain', onSelect: () => { selectRoadOnly(road.id); setTimeout(stickSelectedToTerrain, 0) } })
+
+      // exits
+      const nearStart = distance(hit.road.points[0] ?? { x: 1e9, y: 1e9 }, world) < 12
+      const pts = road.points
+      const nearEnd = pts.length > 0 && distance(pts[pts.length - 1], world) < 12
+      if (nearStart || nearEnd) {
+        const contact = nearStart ? 'start' : 'end'
+        items.push({
+          label: (road.subNetworkExits ?? []).includes(contact) ? 'Unmark SubNetwork Exit' : 'Mark as SubNetwork Exit',
+          onSelect: () => toggleExit(road, contact),
+        })
+      }
+
+      if (isFn && (road.functions as XYFunction[])[activeFunctionIndexAt(road, hit.s)]?.kind === 'polyline') {
+        items.push({ label: 'Convert to Bezier', onSelect: () => { selectRoadOnly(road.id, hit.s); setTimeout(() => convertActivePolyline('bezier'), 0) }, separatorBefore: true })
+        items.push({ label: 'Convert to Clothoid Arc', onSelect: () => { selectRoadOnly(road.id, hit.s); setTimeout(() => convertActivePolyline('clothoidArc'), 0) } })
+        items.push({ label: 'Convert to Clothoid Spline', onSelect: () => { selectRoadOnly(road.id, hit.s); setTimeout(() => convertActivePolyline('clothoidSpline'), 0) } })
+      }
+      if (isFn && (road.functions as XYFunction[])[activeFunctionIndexAt(road, hit.s)]?.kind === 'clothoidSpline') {
+        items.push({ label: 'Convert ClothoidSpline in Clothoid + Circle + Segment', onSelect: () => { selectRoadOnly(road.id, hit.s); setTimeout(convertActiveSpline, 0) }, separatorBefore: true })
+      }
+
+      items.push({ label: 'Delete Track', danger: true, onSelect: () => deleteRoad(road.id), separatorBefore: true })
+      return { title: road.name, items }
+    }
+
+    if (selTracks.length === 1) {
+      items.push({ label: 'Invert Track Orientation', onSelect: invertSelectedOrientation })
+      items.push({ label: 'Stick Track to Background Terrain', onSelect: stickSelectedToTerrain })
+      items.push({ label: 'Mark Start as SubNetwork Exit', onSelect: () => toggleExit(selTracks[0], 'start') })
+      items.push({ label: 'Mark End as SubNetwork Exit', onSelect: () => toggleExit(selTracks[0], 'end') })
+      items.push({ label: 'Split Track at Mouse', onSelect: () => splitRoadAt(selTracks[0], selection.trackStation ?? (roadLengths.get(selTracks[0].id) ?? 0) / 2) })
+      return { title: selTracks[0].name, items }
+    }
+
+    items.push({ label: tool === 'insert-intersection' ? 'Left-click to place the intersection node' : 'Nothing under the cursor', disabled: true, onSelect: () => {} })
+    return { title: 'Roads', items }
+  }
+
+  // ─── Keyboard shortcuts ────────────────────────────────────────────
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.target instanceof HTMLInputElement) return
-      if (event.key === 'Enter' && tool === 'draw-polyline') finishPolyline()
-      if (event.key === 'Escape' && (tool === 'draw-polyline' || tool === 'draw-arc')) {
+      const target = event.target as HTMLElement
+      if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return
+      if (event.key === 'Enter' && (tool === 'draw-polyline' || tool === 'draw-spline')) {
+        finishPointDraft()
+      }
+      if (event.key === 'Escape') {
         setDraftPoints([])
         setHoverPoint(null)
+        dragSnapRef.current = null
+        setContourHandleArmed(false)
+        setLaneGizmo(null)
+      }
+      if ((event.key === 'Delete' || event.key === 'Backspace') && tool === 'select') {
+        if (selection.intersectionId) {
+          deleteIntersectionById(selection.intersectionId)
+          setSelection({ ...selection, intersectionId: null })
+        } else if (selection.trackIds.length > 0) {
+          for (const id of selection.trackIds) deleteRoad(id)
+          setSelection({ trackIds: [], intersectionId: null, trackStation: null })
+        }
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        linkIntersectionToTracks()
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'i') {
+        event.preventDefault()
+        invertAuthorizations()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
 
+  function finishPointDraft() {
+    if (draftPoints.length >= 2) {
+      const snap = dragSnapRef.current
+      const heading = Math.atan2(draftPoints[1].y - draftPoints[0].y, draftPoints[1].x - draftPoints[0].x)
+      const start: Frame = snap?.frame ?? { x: draftPoints[0].x, y: draftPoints[0].y, heading }
+      if (tool === 'draw-polyline') {
+        dragSnapRef.current = null
+        commitFunction({ kind: 'polyline', points: draftPoints, splineType: 'segment' }, start, snap)
+      } else if (tool === 'draw-spline') {
+        dragSnapRef.current = null
+        commitFunction({ kind: 'clothoidSpline', points: draftPoints, tolerance: 0.5, symmetryThreshold: 1 }, start, snap)
+      }
+    }
+    setDraftPoints([])
+    setHoverPoint(null)
+    dragSnapRef.current = null
+  }
+
+  // Insert a new lane next to the one closest to the click point.
+  function insertLaneNearPoint(road: RoadData, point: Vec2) {
+    const section = getLaneSection(road)
+    const proj = projectOntoRoad(road, point)
+    if (!proj) return
+    const layout = laneLayout(section)
+    const { t } = proj
+    const side: 'left' | 'right' = t >= 0 ? 'left' : 'right'
+    const lanes = section[side]
+    let index = lanes.length
+    for (let i = 0; i < layout[side].length; i++) {
+      const a = layout[side][i].inner
+      const b = layout[side][i].outer
+      const lo = Math.min(a, b)
+      const hi = Math.max(a, b)
+      if (t >= lo && t <= hi) { index = i + 1; break }
+    }
+    insertLaneAt(road.id, side, index, defaultLaneByType('travel'))
+    setSelectedLaneKey(`${side}:${index}`)
+    selectRoadOnly(road.id)
+    toast.success(`Inserted lane at index ${index} on ${side}`)
+  }
+
+  // Remove the lane closest to the click point.
+  function removeLaneNearPoint(road: RoadData, point: Vec2) {
+    const section = getLaneSection(road)
+    const proj = projectOntoRoad(road, point)
+    if (!proj) return
+    const layout = laneLayout(section)
+    const { t } = proj
+    const side: 'left' | 'right' = t >= 0 ? 'left' : 'right'
+    const lanes = section[side]
+    for (let i = 0; i < layout[side].length; i++) {
+      const a = layout[side][i].inner
+      const b = layout[side][i].outer
+      const lo = Math.min(a, b)
+      const hi = Math.max(a, b)
+      if (t >= lo && t <= hi) {
+        if (lanes.length <= 1 && (side === 'left' ? section.right.length === 0 : section.left.length === 0)) {
+          toast.error('Cannot remove the last lane')
+          return
+        }
+        removeLaneAt(road.id, side, i)
+        setSelectedLaneKey(null)
+        toast.success(`Removed lane #${i} on ${side}`)
+        return
+      }
+    }
+  }
+
+  function addSidewalkCurb(road: RoadData) {
+    const section = getLaneSection(road)
+    insertLaneAt(road.id, 'right', section.right.length, defaultLaneByType('curb'))
+    insertLaneAt(road.id, 'right', section.right.length + 1, defaultLaneByType('sidewalk'))
+    insertLaneAt(road.id, 'left', section.left.length, defaultLaneByType('curb'))
+    insertLaneAt(road.id, 'left', section.left.length + 1, defaultLaneByType('sidewalk'))
+    toast.success('Sidewalks and curbs added on both sides')
+  }
+
+  function getRoadHalfWidth(road: RoadData): number {
+    const section = getLaneSection(road)
+    return Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
+  }
+
+  /** The two gizmo arrow positions (doc: arrows toward track start/end). */
+  function gizmoArrows(gizmo: NonNullable<typeof laneGizmo>): { key: 'before' | 'after'; point: Vec2; heading: number }[] {
+    const nx = -Math.sin(gizmo.tangent)
+    const ny = Math.cos(gizmo.tangent)
+    const sideSign = gizmo.side === 'left' ? 1 : -1
+    const tx = Math.cos(gizmo.tangent)
+    const ty = Math.sin(gizmo.tangent)
+    const lateral = (gizmo.halfWidth + 4) * sideSign
+    return [
+      {
+        key: 'after',
+        point: { x: gizmo.point.x + tx * 8 + nx * lateral, y: gizmo.point.y + ty * 8 + ny * lateral },
+        heading: gizmo.tangent,
+      },
+      {
+        key: 'before',
+        point: { x: gizmo.point.x - tx * 8 + nx * lateral, y: gizmo.point.y - ty * 8 + ny * lateral },
+        heading: gizmo.tangent + Math.PI,
+      },
+    ]
+  }
+
+  function commitGizmoLane(gizmo: NonNullable<typeof laneGizmo>, direction: 'before' | 'after') {
+    const road = project?.roads.find((r) => r.id === gizmo.roadId)
+    if (!road) return
+    const section = getLaneSection(road)
+    // 'after' → lane exists from s to the end (grows); 'before' → lane exists
+    // from the start to s (shrinks). Both taper over SPEED_LIMIT × 2 s.
+    const mode: 'in' | 'out' = direction === 'after' ? 'in' : 'out'
+    const index = gizmo.kind === 'begin' ? 0 : section[gizmo.side].length
+    const lane = defaultLaneByType('travel')
+    insertLaneAt(road.id, gizmo.side, index, lane)
+    const tapers = [...(road.tapers ?? [])]
+    if (index === 0) {
+      for (const t of tapers) {
+        if (t.side === gizmo.side) t.index += 1
+      }
+    }
+    tapers.push({
+      side: gizmo.side,
+      index,
+      mode,
+      length: (lane.speedLimit / 3.6) * 2,
+      startS: mode === 'in' ? gizmo.s : undefined,
+      endS: mode === 'out' ? gizmo.s : undefined,
+    })
+    updateRoad(road.id, { tapers })
+    setSelectedLaneKey(`${gizmo.side}:${index}`)
+    selectRoadOnly(road.id)
+    const length = (lane.speedLimit / 3.6) * 2
+    toast.success(`${gizmo.kind === 'begin' ? 'Begin' : 'End'} lane on ${gizmo.side} at ${gizmo.s.toFixed(0)} m — express over ${length.toFixed(1)} m (${lane.speedLimit} km/h × 2 s)`)
+  }
+
+  function projectOntoRoad(road: RoadData, point: Vec2) {
+    if (!junctionNetwork) return null
+    const path = junctionNetwork.paths.get(road.id)
+    if (!path) return null
+    const nearest = nearestPointOnPath(path, point)
+    const sample = evaluatePath(path, nearest.s)
+    const dx = point.x - nearest.point.x
+    const dy = point.y - nearest.point.y
+    // signed lateral offset: positive = left of the axis
+    const t = -Math.sin(sample.heading) * dx + Math.cos(sample.heading) * dy
+    return { s: nearest.s, t }
+  }
+
   function reverseSelectedRoad() {
     if (!selectedRoad) return
-    updateRoad(selectedRoad.id, {
-      points: [...selectedRoad.points].reverse(),
-      lanesLeft: selectedRoad.lanesRight,
-      lanesRight: selectedRoad.lanesLeft,
-    })
+    invertSelectedOrientation()
   }
+
+  function renameRoad(name: string) {
+    if (selectedRoad) updateRoad(selectedRoad.id, { name })
+  }
+
+  function onFunctionsChange(functions: XYFunction[]) {
+    if (selectedRoad) updateRoad(selectedRoad.id, { functions })
+  }
+
+  const selectionPanelWays = useMemo(() => {
+    if (!selectedIntersection || !project) return []
+    return allWays(selectedIntersection, resolveTracks(project.roads))
+  }, [selectedIntersection, project])
 
   if (!project) return null
 
-  const interaction = tool === 'draw-straight' || tool === 'extend' || tool === 'move' ? 'drag' : 'click'
-  const highlightMeshes = selectedRoadId
-    ? roadMeshEntries.filter((entry) => entry.roadId === selectedRoadId).map((entry) => entry.mesh)
-    : []
+  const dragTools: Tool[] = ['draw-straight', 'draw-clothoid', 'extend', 'move']
+  const interaction = dragTools.includes(tool) ? 'drag' : 'click'
+  const highlightIds = new Set(selection.trackIds)
+  const highlightMeshes = roadMeshEntries.filter((entry) => highlightIds.has(entry.roadId)).map((entry) => entry.mesh)
+  const insertToolActive = tool.startsWith('draw-')
+  const menuContent = menu ? buildContextMenu(menu.world) : null
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-background">
       <AppHeader
         projectName={project.name}
-        subtitle={`${project.roads.length} roads · ${activeJunctions.length} junctions`}
+        subtitle={`${project.roads.length} roads · ${activeJunctions.length} junctions · ${(project.intersections ?? []).length} intersections`}
         onBack={onBack}
       >
         <div className="flex items-center rounded-md border border-border bg-background p-0.5">
-          <Button
-            size="sm"
-            variant={mode === '2d' ? 'default' : 'ghost'}
-            className="h-7 px-3"
-            onClick={() => setMode('2d')}
-          >
+          <Button size="sm" variant={mode === '2d' ? 'default' : 'ghost'} className="h-7 px-3" onClick={() => setMode('2d')}>
             2D
           </Button>
-          <Button
-            size="sm"
-            variant={mode === '3d' ? 'default' : 'ghost'}
-            className="h-7 px-3"
-            onClick={() => setMode('3d')}
-          >
+          <Button size="sm" variant={mode === '3d' ? 'default' : 'ghost'} className="h-7 px-3" onClick={() => setMode('3d')}>
             3D
           </Button>
         </div>
+        <input ref={odrInputRef} type="file" accept=".xodr,.xml" className="hidden" onChange={handleOdrImport} />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 gap-1.5 px-3"
+          onClick={() => odrInputRef.current?.click()}
+          title="Import OpenDRIVE (.xodr) — roads and junctions with explicit ways"
+        >
+          <FileUp className="size-3.5" />
+          Import
+        </Button>
+        {mode === '2d' && (
+          <Button size="sm" variant={showMap ? 'default' : 'ghost'} className="h-7 gap-1.5 px-3" onClick={() => setShowMap((v) => !v)} title="Toggle satellite map background">
+            <MapIcon className="size-3.5" />
+            Map
+          </Button>
+        )}
       </AppHeader>
 
       <div className="flex min-h-0 flex-1">
         {/* Tool rail */}
-        <nav
-          aria-label="Road tools"
-          className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 border-r border-border bg-card/60 py-3"
-        >
+        <nav aria-label="Road tools" className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 overflow-y-auto border-r border-border bg-card/60 py-3">
           {TOOL_GROUPS.map((group, groupIndex) => (
             <div key={group.label} className="flex flex-col items-center gap-0.5">
               {groupIndex > 0 && <Separator className="my-2 w-6" />}
@@ -419,11 +1969,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                         aria-label={item.label}
                         aria-pressed={active}
                         onClick={() => chooseTool(item.tool)}
+                        className={item.color ? 'relative' : undefined}
                       >
-                        <Icon className="size-4" />
+                        <Icon className="size-4" style={item.color && !active ? { color: item.color } : undefined} />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="right">{item.label}</TooltipContent>
+                    <TooltipContent side="right">
+                      <span>{item.label}</span>
+                      {item.color && <span className="ml-2 inline-block size-2 rounded-full align-middle" style={{ background: item.color }} />}
+                    </TooltipContent>
                   </Tooltip>
                 )
               })}
@@ -434,10 +1988,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
           <RoadViewport
-            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes]}
+            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes]}
             highlightMeshes={highlightMeshes}
             draftMesh={draftMesh}
-            draftPoints={previewPoints}
+            draftPoints={draftPoints}
             interaction={interaction}
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
@@ -445,192 +1999,283 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
             onDragCancel={handleDragCancel}
             onGroundClick={handleGroundClick}
             onGroundHover={handleGroundHover}
+            onContextMenu={(world, screen) => setMenu({ world, screen })}
+            onMarkerDrag={moveMarker}
+            onMarkerDragEnd={moveMarkerEnd}
+            onWayDoubleClick={handleWayDoubleClick}
+            overlays={overlays}
             mode={mode}
             hint={toolHint(tool)}
+            showMap={showMap && mode === '2d'}
+            mapCenter={{ lng: project.geoRef?.lng ?? -95.36, lat: project.geoRef?.lat ?? 29.76 }}
+            mapScale={project.geoRef?.scale ?? 1}
           />
 
-          {tool === 'draw-polyline' && draftPoints.length > 0 && (
+          {(draftPoints.length > 0 && ['draw-polyline', 'draw-spline'].includes(tool)) && (
             <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur">
               <span className="pl-1 text-xs text-muted-foreground">
                 {draftPoints.length} point{draftPoints.length === 1 ? '' : 's'}
               </span>
-              <Button size="sm" className="h-7" disabled={draftPoints.length < 2} onClick={finishPolyline}>
+              <Button size="sm" className="h-7" disabled={draftPoints.length < 2} onClick={finishPointDraft}>
                 Finish
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7"
-                onClick={() => {
-                  setDraftPoints([])
-                  setHoverPoint(null)
-                }}
-              >
+              <Button size="sm" variant="ghost" className="h-7" onClick={() => { setDraftPoints([]); setHoverPoint(null); dragSnapRef.current = null }}>
                 Cancel
               </Button>
+            </div>
+          )}
+
+          {/* TOOL: Insert <function> panel (Stick to Background Terrain + Default Profile) */}
+          {insertToolActive && (
+            <div className="absolute top-3 left-3 z-10 grid w-56 gap-2 rounded-lg border border-border bg-card/90 p-3 shadow-lg backdrop-blur">
+              <h3 className="text-[10px] font-bold tracking-wider text-muted-foreground uppercase">
+                TOOL: {TOOL_ITEMS.find((i) => i.tool === tool)?.label}
+              </h3>
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={insertOptions.stickToTerrain}
+                  onChange={(e) => setInsertOptions({ stickToTerrain: e.target.checked })}
+                />
+                Stick to Background Terrain
+              </label>
+              <div className="grid gap-1">
+                <Label className="text-[11px] text-muted-foreground">Default Profile</Label>
+                <select
+                  className="h-7 rounded-md border border-border bg-background px-2 text-xs"
+                  value={insertOptions.defaultProfile}
+                  onChange={(e) => setInsertOptions({ defaultProfile: e.target.value as typeof insertOptions.defaultProfile })}
+                >
+                  <option value="travel">Travel (default)</option>
+                  <option value="highway">Highway (2+2, shoulders)</option>
+                  <option value="rural">Rural (shoulders)</option>
+                  <option value="urban">Urban (sidewalks)</option>
+                </select>
+              </div>
+              {tool === 'draw-clothoid' && (
+                <>
+                  <div className="grid gap-1">
+                    <Label className="text-[11px] text-muted-foreground">Radius Out (0 = infinite)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      className="h-7 text-xs"
+                      value={config.clothoidRadiusOut}
+                      onChange={(e) => setConfig({ clothoidRadiusOut: Math.max(0, Number.parseFloat(e.target.value) || 0) })}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <Button size="sm" variant={config.clothoidTurn === 'left' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setConfig({ clothoidTurn: 'left' })}>
+                      Left
+                    </Button>
+                    <Button size="sm" variant={config.clothoidTurn === 'right' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setConfig({ clothoidTurn: 'right' })}>
+                      Right
+                    </Button>
+                  </div>
+                </>
+              )}
+              {draftPath && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Draft length</span>
+                  <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
+                </div>
+              )}
+            </div>
+          )}
+
+          {contourHandleArmed && (
+            <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-lg border border-orange-500/50 bg-orange-500/10 px-3 py-1.5 text-xs text-orange-300 shadow-lg backdrop-blur">
+              Click near a contour to insert the handle · Esc to cancel
             </div>
           )}
         </div>
 
         {/* Sidebar */}
         <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-card/60">
-          <Tabs defaultValue="model" className="flex min-h-0 flex-1 flex-col gap-0">
+          <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
               <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="model">Model</TabsTrigger>
+                <TabsTrigger value="selection">Selection</TabsTrigger>
                 <TabsTrigger value="roads">Roads</TabsTrigger>
-                <TabsTrigger value="junctions">Junctions</TabsTrigger>
+                <TabsTrigger value="network">Network</TabsTrigger>
               </TabsList>
             </div>
 
             <ScrollArea className="min-h-0 flex-1">
-              <TabsContent value="model" className="grid gap-4 p-4">
+              <TabsContent value="selection" className="grid gap-4 p-4">
+                <SelectionPanel
+                  selectedRoad={selectedRoad}
+                  selectedStation={selection.trackStation}
+                  roadLength={selectedRoadLength}
+                  selectedIntersection={selectedIntersection}
+                  ways={selectionPanelWays}
+                  linkedTracks={selectedIntersection?.trackEnds ?? []}
+                  roadsList={project.roads.map((r) => ({ id: r.id, name: r.name }))}
+                  lockedPassageways={lockedPassageways}
+                  constraint={editionConstraint}
+                  onConstraintChange={setEditionConstraint}
+                  onFunctionsChange={onFunctionsChange}
+                  onRenameRoad={renameRoad}
+                  onSplitFunction={() => selectedRoad && splitFunctionAt(selectedRoad, selection.trackStation ?? selectedRoadLength / 2)}
+                  onMergeFunctions={() => selectedRoad && mergeAtStation(selectedRoad, selection.trackStation)}
+                  onInvertOrientation={invertSelectedOrientation}
+                  onStickToTerrain={stickSelectedToTerrain}
+                  onToggleExit={(contact) => selectedRoad && toggleExit(selectedRoad, contact)}
+                  onInsertHandle={insertHandleAtStation}
+                  onUpdateIntersection={(patch) => selectedIntersection && updateIntersection(selectedIntersection.id, patch)}
+                  onToggleAuthorization={toggleAuthorization}
+                  onInvertAuthorizations={invertAuthorizations}
+                  onAddContourHandle={() => {
+                    if (!selectedIntersection) return
+                    updateIntersection(selectedIntersection.id, {
+                      contourHandles: [...selectedIntersection.contourHandles, selectedIntersection.position],
+                    })
+                  }}
+                  onDeleteContourHandle={(index) => {
+                    if (!selectedIntersection) return
+                    updateIntersection(selectedIntersection.id, {
+                      contourHandles: selectedIntersection.contourHandles.filter((_, i) => i !== index),
+                    })
+                  }}
+                  onMoveContourHandle={(index, point) => {
+                    if (!selectedIntersection) return
+                    const handles = [...selectedIntersection.contourHandles]
+                    handles[index] = point
+                    updateIntersection(selectedIntersection.id, { contourHandles: handles })
+                  }}
+                  onSetMainPath={(a, b) => selectedIntersection && updateIntersection(selectedIntersection.id, { mainPath: [a, b] })}
+                  onLockPassageway={(key) => {
+                    const locks = lockedPassageways.includes(key)
+                      ? lockedPassageways.filter((k) => k !== key)
+                      : [...lockedPassageways, key].slice(-2)
+                    setLockedPassageways(locks)
+                  }}
+                  onDeleteIntersection={() => {
+                    if (selectedIntersection) {
+                      deleteIntersectionById(selectedIntersection.id)
+                      setSelection({ ...selection, intersectionId: null })
+                    }
+                  }}
+                  onUnlinkIntersection={unlinkIntersection}
+                />
+
+                <Separator />
+
+                {/* Model parameters for the selected road (lanes etc.) */}
                 {selectedRoad ? (
                   <div className="grid gap-3">
-                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
-                      Selected Road
-                    </h3>
-                    <div className="grid gap-1.5 rounded-lg border border-border bg-muted/40 p-3 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Name</span>
-                        <b className="font-medium">{selectedRoad.name}</b>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Length</span>
-                        <b className="font-medium">{(roadLengths.get(selectedRoad.id) ?? 0).toFixed(1)} m</b>
-                      </div>
-                    </div>
+                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Model</h3>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="grid gap-1.5">
                         <Label htmlFor="lanes-left">Lanes left</Label>
-                        <Input
-                          id="lanes-left"
-                          type="number"
-                          min={0}
-                          max={6}
-                          value={selectedRoad.lanesLeft}
-                          onChange={(event) => updateRoad(selectedRoad.id, { lanesLeft: clampInt(event.target.value, 0, 6, 0) })}
-                        />
+                        <Input id="lanes-left" type="number" min={0} max={6} value={selectedRoad.lanesLeft}
+                          onChange={(event) => updateRoad(selectedRoad.id, { lanesLeft: clampInt(event.target.value, 0, 6, 0) })} />
                       </div>
                       <div className="grid gap-1.5">
                         <Label htmlFor="lanes-right">Lanes right</Label>
-                        <Input
-                          id="lanes-right"
-                          type="number"
-                          min={0}
-                          max={6}
-                          value={selectedRoad.lanesRight}
-                          onChange={(event) => updateRoad(selectedRoad.id, { lanesRight: clampInt(event.target.value, 0, 6, 0) })}
-                        />
+                        <Input id="lanes-right" type="number" min={0} max={6} value={selectedRoad.lanesRight}
+                          onChange={(event) => updateRoad(selectedRoad.id, { lanesRight: clampInt(event.target.value, 0, 6, 0) })} />
                       </div>
                     </div>
                     <div className="grid gap-1.5">
                       <Label htmlFor="lane-width">Lane width (m)</Label>
-                      <Input
-                        id="lane-width"
-                        type="number"
-                        min={2}
-                        max={5}
-                        step={0.25}
-                        value={selectedRoad.laneWidth}
-                        onChange={(event) => updateRoad(selectedRoad.id, { laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })}
-                      />
+                      <Input id="lane-width" type="number" min={2} max={5} step={0.25} value={selectedRoad.laneWidth}
+                        onChange={(event) => updateRoad(selectedRoad.id, { laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
                     </div>
-                    <Button variant="outline" size="sm" onClick={reverseSelectedRoad}>
-                      Reverse Direction
-                    </Button>
                   </div>
                 ) : (
                   <div className="grid gap-3">
-                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
-                      New Road
-                    </h3>
+                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">New Road</h3>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="grid gap-1.5">
                         <Label htmlFor="new-lanes-left">Lanes left</Label>
-                        <Input
-                          id="new-lanes-left"
-                          type="number"
-                          min={0}
-                          max={6}
-                          value={config.lanesLeft}
-                          onChange={(event) => setConfig({ lanesLeft: clampInt(event.target.value, 0, 6, 1) })}
-                        />
+                        <Input id="new-lanes-left" type="number" min={0} max={6} value={config.lanesLeft}
+                          onChange={(event) => setConfig({ lanesLeft: clampInt(event.target.value, 0, 6, 1) })} />
                       </div>
                       <div className="grid gap-1.5">
                         <Label htmlFor="new-lanes-right">Lanes right</Label>
-                        <Input
-                          id="new-lanes-right"
-                          type="number"
-                          min={0}
-                          max={6}
-                          value={config.lanesRight}
-                          onChange={(event) => setConfig({ lanesRight: clampInt(event.target.value, 0, 6, 1) })}
-                        />
+                        <Input id="new-lanes-right" type="number" min={0} max={6} value={config.lanesRight}
+                          onChange={(event) => setConfig({ lanesRight: clampInt(event.target.value, 0, 6, 1) })} />
                       </div>
                     </div>
                     <div className="grid gap-1.5">
                       <Label htmlFor="new-lane-width">Lane width (m)</Label>
-                      <Input
-                        id="new-lane-width"
-                        type="number"
-                        min={2}
-                        max={5}
-                        step={0.25}
-                        value={config.laneWidth}
-                        onChange={(event) => setConfig({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })}
-                      />
+                      <Input id="new-lane-width" type="number" min={2} max={5} step={0.25} value={config.laneWidth}
+                        onChange={(event) => setConfig({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
                     </div>
                     <div className="grid gap-1.5">
                       <Label htmlFor="new-fillet">Corner radius (m)</Label>
-                      <Input
-                        id="new-fillet"
-                        type="number"
-                        min={5}
-                        max={300}
-                        step={5}
-                        value={config.filletRadius}
-                        onChange={(event) => setConfig({ filletRadius: clampNumber(event.target.value, 5, 300, 50) })}
-                      />
+                      <Input id="new-fillet" type="number" min={5} max={300} step={5} value={config.filletRadius}
+                        onChange={(event) => setConfig({ filletRadius: clampNumber(event.target.value, 5, 300, 50) })} />
                     </div>
                   </div>
                 )}
 
                 <Separator />
 
-                <div className="grid gap-2">
-                  <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
-                    Tool
-                  </h3>
-                  <p className="text-xs leading-relaxed text-muted-foreground">{toolHint(tool)}</p>
-                  {draftPath && (
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Draft length</span>
-                      <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
+                {/* Geographic Reference — for map background alignment */}
+                <div className="grid gap-3">
+                  <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Map Location</h3>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Set the geographic center so the satellite map aligns with your roads. The origin (0,0) in world space maps to this lat/lng.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="geo-lng">Longitude</Label>
+                      <Input id="geo-lng" type="number" step={0.0001} value={project.geoRef?.lng ?? -95.36}
+                        onChange={(event) => setGeoRef({ lng: parseFloat(event.target.value) || 0, lat: project.geoRef?.lat ?? 29.76, scale: project.geoRef?.scale ?? 1 })} />
                     </div>
-                  )}
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="geo-lat">Latitude</Label>
+                      <Input id="geo-lat" type="number" step={0.0001} value={project.geoRef?.lat ?? 29.76}
+                        onChange={(event) => setGeoRef({ lng: project.geoRef?.lng ?? -95.36, lat: parseFloat(event.target.value) || 0, scale: project.geoRef?.scale ?? 1 })} />
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="geo-scale">Scale (meters per world unit)</Label>
+                    <Input id="geo-scale" type="number" step={0.1} min={0.1} value={project.geoRef?.scale ?? 1}
+                      onChange={(event) => setGeoRef({ lng: project.geoRef?.lng ?? -95.36, lat: project.geoRef?.lat ?? 29.76, scale: parseFloat(event.target.value) || 1 })} />
+                  </div>
                 </div>
               </TabsContent>
 
               <TabsContent value="roads" className="grid gap-1.5 p-4">
                 {project.roads.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    No roads yet. Pick a draw tool and drag on the canvas.
-                  </p>
+                  <p className="text-xs text-muted-foreground">No roads yet. Pick an insert tool and drag on the canvas.</p>
                 ) : (
                   <ul className="grid gap-1">
                     {project.roads.map((road) => (
-                      <li key={road.id}>
+                      <li key={road.id} className="flex items-center gap-1">
                         <button
                           type="button"
                           className={
-                            selectedRoadId === road.id
-                              ? 'flex w-full items-center justify-between rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-left text-xs'
-                              : 'flex w-full items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-xs hover:bg-accent'
+                            selection.trackIds.includes(road.id)
+                              ? 'flex min-w-0 flex-1 items-center justify-between rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-left text-xs'
+                              : 'flex min-w-0 flex-1 items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-xs hover:bg-accent'
                           }
-                          onClick={() => setSelectedRoadId(road.id)}
+                          onClick={(event) => {
+                            if (event.ctrlKey || event.metaKey) {
+                              setSelection({
+                                trackIds: selection.trackIds.includes(road.id)
+                                  ? selection.trackIds.filter((id) => id !== road.id)
+                                  : [...selection.trackIds, road.id],
+                                // keep the intersection selected so Ctrl+L keeps working
+                                intersectionId: selection.intersectionId,
+                                trackStation: null,
+                              })
+                            } else {
+                              selectRoadOnly(road.id)
+                            }
+                          }}
                         >
-                          <span className="truncate font-medium">{road.name}</span>
+                          <span className="truncate font-medium">
+                            {road.name}
+                            {road.functions && road.functions.length > 0 && (
+                              <span className="ml-1 text-[10px] text-muted-foreground">
+                                ({(road.functions ?? []).map((f) => FUNCTION_LABELS[f.kind][0]).join('')})
+                              </span>
+                            )}
+                          </span>
                           <span className="ml-2 shrink-0 text-muted-foreground">
                             {(roadLengths.get(road.id) ?? 0).toFixed(1)} m
                           </span>
@@ -639,46 +2284,108 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                     ))}
                   </ul>
                 )}
+                <Separator className="my-2" />
+                <p className="text-[11px] leading-relaxed text-muted-foreground">{toolHint(tool)}</p>
+                {draftPath && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Draft length</span>
+                    <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
+                  </div>
+                )}
               </TabsContent>
 
-              <TabsContent value="junctions" className="grid gap-2 p-4">
+              <TabsContent value="network" className="grid gap-2 p-4">
                 <div className="flex items-center justify-between gap-2">
-                  <Badge variant="muted">{activeJunctions.length} active</Badge>
+                  <Badge variant="muted">{activeJunctions.length} junctions</Badge>
                   <Button size="sm" variant="outline" onClick={regenerateJunctions}>
                     <RefreshCw className="size-3.5" />
-                    Regenerate
+                    Clean up
                   </Button>
                 </div>
+
+                <h3 className="mt-2 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Intersections</h3>
+                {(project.intersections ?? []).length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    None yet. Use Insert Intersection, or select two crossing tracks → Detect Intersection.
+                  </p>
+                ) : (
+                  <ul className="grid gap-1.5">
+                    {(project.intersections ?? []).map((node) => (
+                      <li key={node.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+                        <button
+                          type="button"
+                          className={
+                            selection.intersectionId === node.id
+                              ? 'grid min-w-0 flex-1 gap-0.5 rounded text-left text-xs text-primary'
+                              : 'grid min-w-0 flex-1 gap-0.5 text-left text-xs'
+                          }
+                          onClick={() => setSelection({ trackIds: [], intersectionId: node.id, trackStation: null })}
+                        >
+                          <span className="truncate font-medium">{node.id}</span>
+                          <span className="text-muted-foreground">{node.trackEnds.length} tracks · {Object.values(node.authorizations).filter((v) => !v).length} denied</span>
+                        </button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => deleteIntersectionById(node.id)}>
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <h3 className="mt-2 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Auto junctions</h3>
                 {junctions.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No road overlaps detected.</p>
                 ) : (
                   <ul className="grid gap-1.5">
                     {junctions.map((junction) => (
-                      <li
-                        key={junction.id}
-                        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2"
-                      >
+                      <li key={junction.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
                         <div className="grid min-w-0 flex-1 gap-0.5 text-xs">
                           <span className="truncate font-medium">{junction.id}</span>
-                          <span className="text-muted-foreground">
-                            {junction.connectingRoads.length} connections
-                          </span>
+                          <span className="text-muted-foreground">{junction.connectingRoads.length} connections</span>
                         </div>
                         <Button
                           size="sm"
                           variant={junction.suppressed ? 'default' : 'ghost'}
                           className="h-7 px-2.5 text-xs"
-                          onClick={() =>
-                            junction.suppressed
-                              ? restoreJunction(junction.key)
-                              : suppressJunction(junction.key)
-                          }
+                          onClick={() => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
                         >
                           {junction.suppressed ? 'Create' : 'Detach'}
                         </Button>
                       </li>
                     ))}
                   </ul>
+                )}
+
+                <Separator className="my-2" />
+
+                <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Layers</h3>
+                <div className="grid gap-1.5">
+                  {([
+                    ['roadLogicalContent', 'Road Logical Content (axes)'],
+                    ['road3dGeneration', 'Road 3D Generation'],
+                    ['intersectionLogicalContent', 'Intersection Logical Content'],
+                    ['intersection3dGeneration', 'Intersection 3D Generation'],
+                    ['wayAxis', 'Way Axis'],
+                    ['wayLogicalContents', 'Way Logical Contents'],
+                    ['otherSubNetworks', 'Other Sub Networks (exits)'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-xs">
+                      <input type="checkbox" checked={layers[key]} onChange={(e) => setLayer(key, e.target.checked)} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+
+                <Separator className="my-2" />
+
+                <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Lanes</h3>
+                {selectedRoad ? (
+                  <>
+                    <LanesTab road={selectedRoad} />
+                    <PortionProfileEditor road={selectedRoad} length={roadLengths.get(selectedRoad.id) ?? 0} />
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Select a road to edit its lanes.</p>
                 )}
               </TabsContent>
             </ScrollArea>
@@ -694,6 +2401,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
             onChange={(profile) => updateRoad(selectedRoad.id, { elevationProfile: profile })}
           />
         </footer>
+      )}
+
+      {menu && menuContent && (
+        <RoadsContextMenu
+          position={menu.screen}
+          title={menuContent.title}
+          items={menuContent.items}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   )
@@ -712,25 +2428,27 @@ function nearestJunction(junctions: ReturnType<typeof buildJunctionNetwork>['jun
   return bestDistance <= 15 ? best : null
 }
 
-function roadSection(road: RoadData) {
-  return drawingSection(road.lanesLeft, road.lanesRight, road.laneWidth)
-}
-
-function drawingSection(lanesLeft: number, lanesRight: number, laneWidth: number) {
-  return { left: Array(lanesLeft).fill(laneWidth), right: Array(lanesRight).fill(laneWidth) }
-}
-
 function toolHint(tool: Tool): string {
   return {
-    select: 'Click a road to select it and edit its lanes.',
-    'draw-straight': 'Hold left mouse, drag a straight road, and release.',
-    'draw-polyline': 'Click each vertex; move to preview; press Enter or Finish when done.',
-    'draw-arc': 'Click start and through-point; move to preview; click the endpoint.',
-    move: 'Drag an existing road endpoint to a new position.',
-    extend: 'Drag from either endpoint of an existing road.',
-    split: 'Click an existing road where it should be split.',
-    delete: 'Click a road to delete it.',
+    select: 'Click a track or intersection to select it. Ctrl+click for multi-select. Right-click for actions. Double-click a way to lock its passageway.',
+    'draw-straight': 'Insert Segment: hold left mouse, drag, and release. Start near a track extremity to attach automatically.',
+    'draw-arc': 'Insert Circle Arc: click start, a through point, then the endpoint.',
+    'draw-clothoid': 'Insert Clothoid Arc: drag from start to end. Set radius out and turn direction in the TOOL panel (radius continuity is kept when attaching).',
+    'draw-polyline': 'Insert Polyline: click each vertex; Enter or Finish to complete.',
+    'draw-bezier': 'Insert Bezier: click the start, then the end — control points keep tangent continuity.',
+    'draw-spline': 'Insert ClothoidSpline: click control points; Enter or Finish to complete.',
+    move: 'Move End: drag an existing track endpoint to a new position.',
+    extend: 'Extend: drag from either endpoint of an existing track. Edition constrain (Free / Fixed Radius / Fixed Length) applies to arcs.',
+    split: 'Split: click a track to cut it where you clicked.',
+    delete: 'Delete: click a track or intersection to delete it.',
+    'insert-intersection': 'Insert Intersection: click to place a yellow node, then select tracks and press Ctrl+L to link.',
     junction: 'Click a detected junction to detach or recreate it.',
+    'lane-begin': 'Begin Lane: click a lane — a gizmo appears; click an arrow to start the new lane toward that direction (express lane over speed × 2 s).',
+    'lane-end': 'End Lane: click a lane — a gizmo appears; click an arrow to end the lane toward that direction.',
+    'lane-insert': 'Click on a lane to select it. The next click inserts a new lane next to it.',
+    'lane-remove': 'Click on a lane to remove it.',
+    'lane-border': 'Click a road to select it, then drag a border to adjust its height (off-road feedback).',
+    'lane-sidewalk': 'Click a road to add a sidewalk and curb on the selected side.',
   }[tool]
 }
 

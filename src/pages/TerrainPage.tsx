@@ -5,6 +5,7 @@ import { resolveCRS } from '../engine/crs'
 import type { GeoBounds } from '../engine/crs'
 import { buildTerrainMesh } from '../engine/terrainMesh'
 import type { TerrainData } from '../engine/terrainMesh'
+import { setActiveTerrain } from '../terrain/terrainRegistry'
 import { computeTileGrid, tileKey } from '../engine/tileGrid'
 import type { TileGrid } from '../engine/tileGrid'
 import { useStore } from '../state/store'
@@ -178,14 +179,17 @@ export default function TerrainPage({ onBack }: { onBack: () => void }) {
         setError(result.error || 'Download failed')
       } else {
         const data = result.data
-        setTerrain({
+        const terrainData = {
           elevations: data.elevations,
           width: data.width,
           height: data.height,
           bounds: data.bounds,
           minElevation: data.minElevation,
           maxElevation: data.maxElevation,
-        })
+        }
+        setTerrain(terrainData)
+        // Register for cross-page sampling (Stick to Background Terrain)
+        setActiveTerrain(terrainData)
         setProgress(null)
         setView('3d')
       }

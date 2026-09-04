@@ -1,10 +1,14 @@
 import { evaluatePath, fitPath, samplePath } from './geometry'
+import { fitTrackPath } from './tracks'
 import type { FittedPath, Vec2 } from './types'
+import type { XYFunction } from './xyFunctions'
 
 export interface RoadGeometryInput {
   points: Vec2[]
   geometryType?: 'straight' | 'polyline' | 'arc'
   filletRadius: number
+  // SCANeR XY function chain: takes precedence over points when present
+  functions?: XYFunction[]
 }
 
 export interface NearestPathPoint {
@@ -14,6 +18,16 @@ export interface NearestPathPoint {
 }
 
 export function fitRoadGeometry(road: RoadGeometryInput): FittedPath | null {
+  if (road.functions && road.functions.length > 0) {
+    return fitTrackPath({
+      id: 'road',
+      points: road.points,
+      functions: road.functions,
+      lanesLeft: 0,
+      lanesRight: 0,
+      laneWidth: 0,
+    })
+  }
   if (road.geometryType === 'arc' && road.points.length >= 3) {
     return fitArcThroughPoints(road.points[0], road.points[1], road.points[2])
   }
