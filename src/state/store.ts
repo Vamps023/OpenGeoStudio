@@ -41,6 +41,42 @@ export const DEFAULT_RAILWAY: RailwayConfig = {
   sleeperSpacing: 0.65,
 }
 
+/** Turnout (switch): the facing track's extremity splits into a trailing
+ *  (straight-through, main line) and a branch (diverging) track — the
+ *  Track Mesh Builder "Point" component. */
+export interface RailPoint {
+  id: string
+  name: string
+  facingTrackId: string
+  facingContact: 'start' | 'end'
+  trailingTrackId: string
+  branchTrackId: string
+}
+
+/** Interior crossing of two railway tracks: frog (part of a divergence)
+ *  or diamond (plain level crossing) with wing + guard rails. */
+export interface RailCrossing {
+  id: string
+  trackAId: string
+  trackBId: string
+  /** station of the crossing on each track */
+  sA: number
+  sB: number
+  position: Vec2
+  /** crossing angle [rad] */
+  angle: number
+  kind: 'frog' | 'diamond'
+}
+
+/** Single-blade derail point at a track extremity (catch point). */
+export interface CatchPoint {
+  id: string
+  trackId: string
+  contact: 'start' | 'end'
+  /** which side the blade sits on ('left' = left of travel direction) */
+  side: 'left' | 'right'
+}
+
 export interface PortionDef {
   id: string
   name: string
@@ -97,6 +133,10 @@ export interface Project {
   /** Explicit intersections (SCANeR Roads tab) */
   intersections?: IntersectionData[]
   geoRef?: GeoReference
+  // Rail fixtures (Train section turnout pipeline)
+  railPoints?: RailPoint[]
+  railCrossings?: RailCrossing[]
+  catchPoints?: CatchPoint[]
 }
 
 export type Tool =
@@ -105,6 +145,8 @@ export type Tool =
   | 'move' | 'extend' | 'split' | 'delete' | 'junction'
   | 'insert-intersection'
   | 'lane-begin' | 'lane-end' | 'lane-insert' | 'lane-remove' | 'lane-border' | 'lane-sidewalk'
+  // Train section rail fixtures
+  | 'rail-point' | 'rail-crossing' | 'catch-point'
 
 export type EditionConstraint = 'free' | 'fixedRadius' | 'fixedLength'
 
@@ -184,6 +226,13 @@ interface OgsState {
   setGeoRef: (geoRef: GeoReference) => void
   setSelectedLane: (key: string | null) => void
   setSelectedBorder: (key: string | null) => void
+  // Rail fixtures (Train section turnout pipeline)
+  addRailPoint: (point: RailPoint) => void
+  removeRailPointById: (id: string) => void
+  addRailCrossing: (crossing: RailCrossing) => void
+  removeRailCrossingById: (id: string) => void
+  addCatchPoint: (catchPoint: CatchPoint) => void
+  removeCatchPointById: (id: string) => void
   // Lane operations (mutate the active road's laneSection)
   insertLaneAt: (roadId: string, side: 'left' | 'right', index: number, lane: import('../engine/laneTypes').LaneDef) => void
   removeLaneAt: (roadId: string, side: 'left' | 'right', index: number) => void
@@ -233,7 +282,7 @@ function loadProjectsLocal(): Project[] {
       return {
         ...rest,
         roads: Array.isArray(project.roads)
-          ? project.roads.map((road) => ({
+          ? project.roads.map((road: RoadData) => ({
             ...road,
             points: Array.isArray(road.points) ? road.points : [],
             elevationProfile: Array.isArray(road.elevationProfile) ? road.elevationProfile : undefined,
@@ -455,6 +504,31 @@ export const useStore = create<OgsState>((set, get) => ({
   setGeoRef: (geoRef) => updateActiveProject(get, set, (project) => ({ ...project, geoRef })),
   setSelectedLane: (key) => set({ selectedLaneKey: key }),
   setSelectedBorder: (key) => set({ selectedBorderKey: key }),
+
+  addRailPoint: (point) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    railPoints: [...(project.railPoints ?? []), point],
+  })),
+  removeRailPointById: (id) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    railPoints: (project.railPoints ?? []).filter((item) => item.id !== id),
+  })),
+  addRailCrossing: (crossing) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    railCrossings: [...(project.railCrossings ?? []), crossing],
+  })),
+  removeRailCrossingById: (id) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    railCrossings: (project.railCrossings ?? []).filter((item) => item.id !== id),
+  })),
+  addCatchPoint: (catchPoint) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    catchPoints: [...(project.catchPoints ?? []), catchPoint],
+  })),
+  removeCatchPointById: (id) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    catchPoints: (project.catchPoints ?? []).filter((item) => item.id !== id),
+  })),
 
   // Lane operations - operate on the active road's laneSection.
   // They ensure the section is materialized first, then mutate it.

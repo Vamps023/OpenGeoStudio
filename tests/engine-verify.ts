@@ -4,6 +4,9 @@
 // Temporary engine verification (bundled and run via node, then deleted).
 import { evaluatePath } from '../src/engine/geometry'
 import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
+import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
+import { exportNetworkDefinition } from '../src/engine/railNetwork'
+import type { Project } from '../src/state/store'
 import { importOpenDrive } from '../src/engine/opendrive'
 import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, invertTrack, linkTrackFunctions, bindTrackFunctions, trackTotalLength } from '../src/engine/tracks'
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
@@ -319,6 +322,48 @@ if (odr) {
       check('railway rails at gauge offset', minRailDelta < 0.02, `min delta ${minRailDelta.toFixed(4)}`)
     }
   }
+}
+
+// 21. Rail fixtures (turnout blade, diamond wings/guards, catch point)
+// and network-definition XML export.
+{
+  const mk = (id: string, x: number, y: number, heading: number, len: number): RoadData => ({
+    id, name: id,
+    points: [{ x, y }, { x: x + Math.cos(heading), y: y + Math.sin(heading) }],
+    lanesLeft: 0, lanesRight: 0, laneWidth: 3.5,
+    functions: [{ kind: 'segment', length: len }],
+    railway: { gauge: 1.435, railSize: 0.075, trackbedWidth: 3, sleeperSpacing: 0.65 },
+  })
+  // turnout: facing track ends at (50,0); main continues, branch diverges
+  const facing = mk('f', 0, 0, 0, 50)
+  const main = mk('m', 50, 0, 0, 40)
+  const branch = mk('b', 50, 0, 0.5, 30)
+  const fixtureMeshes = buildRailFixtureMeshes({
+    roads: [facing, main, branch],
+    railPoints: [{ id: 'p1', name: 'P1', facingTrackId: 'f', facingContact: 'end', trailingTrackId: 'm', branchTrackId: 'b' }],
+    catchPoints: [{ id: 'c1', trackId: 'f', contact: 'start', side: 'left' }],
+  })
+  check('rail fixtures build meshes', fixtureMeshes.length >= 2, `got ${fixtureMeshes.length}`)
+  const blade = fixtureMeshes[0]
+  check('turnout blade is non-degenerate', !!blade && blade.indices.length >= 60)
+
+  // diamond crossing of two tracks through (50, 0)
+  const a = mk('a', 0, 0, 0, 100)
+  const b = mk('b2', 50, -50, Math.PI / 2, 100)
+  const crossingMeshes = buildRailFixtureMeshes({
+    roads: [a, b],
+    railCrossings: [{ id: 'x1', trackAId: 'a', trackBId: 'b2', sA: 50, sB: 50, position: { x: 50, y: 0 }, angle: Math.PI / 2, kind: 'diamond' }],
+  })
+  check('diamond builds wings + guards on both tracks', crossingMeshes.length >= 8, `got ${crossingMeshes.length}`)
+
+  const project = {
+    id: 'p', name: 'Test', createdAt: '', roads: [facing, main, branch], suppressedJunctions: [],
+    railPoints: [{ id: 'p1', name: 'P1', facingTrackId: 'f', facingContact: 'end' as const, trailingTrackId: 'm', branchTrackId: 'b' }],
+  } as unknown as Project
+  const xml = exportNetworkDefinition(project)
+  check('network xml has straight segments', xml.includes('<Segment id="f"') && xml.includes('type="Straight"'))
+  check('network xml has turnout point', xml.includes('facingSegment="f"') && xml.includes('branchSegment="b"'))
+  check('network xml has connection', xml.includes('<Connection fromSegment="f" fromEnd="Beta"'))
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

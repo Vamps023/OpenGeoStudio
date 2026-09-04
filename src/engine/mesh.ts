@@ -70,6 +70,9 @@ interface StripSpec {
   height?: number
 }
 
+export type { StripSpec }
+export type { Rgb }
+
 type ElevationSampler = (station: number) => number
 
 function isLaneDefArray(arr: unknown): arr is LaneDef[] {

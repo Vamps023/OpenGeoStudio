@@ -1,6 +1,8 @@
 import {
+  AlertTriangle,
   Circle,
   Footprints,
+  GitBranch,
   GitMerge,
   Layers,
   MousePointer2,
@@ -15,6 +17,7 @@ import {
   TrendingUp,
   Waves,
   Waypoints,
+  X,
   CornerDownLeft,
   CornerDownRight,
 } from 'lucide-react'
@@ -66,6 +69,9 @@ export const TOOL_ITEMS: ToolItem[] = [
   { tool: 'lane-remove', label: 'Remove Lane', icon: Trash2 },
   { tool: 'lane-border', label: 'Edit Border', icon: Layers },
   { tool: 'lane-sidewalk', label: 'Add Sidewalk', icon: Footprints },
+  { tool: 'rail-point', label: 'Insert Point (Turnout)', icon: GitBranch, color: '#60a5fa' },
+  { tool: 'rail-crossing', label: 'Insert Frog / Diamond', icon: X, color: '#f59e0b' },
+  { tool: 'catch-point', label: 'Catch Point', icon: AlertTriangle, color: '#a78bfa' },
 ]
 
 /** Tools for the Road workspace: road design + network. */
@@ -86,6 +92,7 @@ export const TRAIN_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
   { label: 'Select', tools: ['select'] },
   { label: 'Insert track', tools: ['draw-straight', 'draw-arc', 'draw-clothoid', 'draw-polyline', 'draw-spline'] },
   { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
+  { label: 'Fixtures', tools: ['rail-point', 'rail-crossing', 'catch-point'] },
 ]
 
 export function toolHint(tool: Tool): string {
@@ -109,6 +116,9 @@ export function toolHint(tool: Tool): string {
     'lane-remove': 'Click on a lane to remove it.',
     'lane-border': 'Click a road to select it, then drag a border to adjust its height (off-road feedback).',
     'lane-sidewalk': 'Click a road to add a sidewalk and curb on the selected side.',
+    'rail-point': 'Insert Point (Turnout): click the facing track end where two tracks diverge — places a tapered switch blade on the branch.',
+    'rail-crossing': 'Insert Frog / Diamond: click between two crossing tracks — wing rails and guard rails are generated at the crossing.',
+    'catch-point': 'Catch Point: click a track extremity to add a derail blade with stop block (side is picked from where you click).',
   }[tool]
 }
 

@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Route, TrainFront, Undo2, Redo2 } from 'lucide-react'
+import { FileDown, Route, TrainFront, Trash2, Undo2, Redo2 } from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
+import { buildRailFixtureMeshes } from '../engine/railFixtures'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
 import { evaluatePath } from '../engine/geometry'
 import type { MeshData } from '../engine/mesh'
 import type { Vec2 } from '../engine/types'
 import { useStore, uuid, getLaneSection } from '../state/store'
-import type { RoadData, RoadGeometryType, Tool } from '../state/store'
+import type { RailCrossing, RailPoint, RoadData, RoadGeometryType, Tool } from '../state/store'
 import { DEFAULT_RAILWAY } from '../state/store'
+import { exportNetworkDefinition } from '../engine/railNetwork'
 import { defaultLaneByType, laneLayout, profileSection, sectionHalfWidth } from '../engine/laneLayout'
 import type { XYFunction, PolylineFunction } from '../engine/xyFunctions'
 import {
@@ -125,6 +127,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const redo = useStore((state) => state.redo)
   const canUndo = useStore((state) => state.history.past.length > 0)
   const canRedo = useStore((state) => state.history.future.length > 0)
+  const addRailPoint = useStore((state) => state.addRailPoint)
+  const removeRailPointById = useStore((state) => state.removeRailPointById)
+  const addRailCrossing = useStore((state) => state.addRailCrossing)
+  const removeRailCrossingById = useStore((state) => state.removeRailCrossingById)
+  const addCatchPoint = useStore((state) => state.addCatchPoint)
+  const removeCatchPointById = useStore((state) => state.removeCatchPointById)
 
   const project = projects.find((item) => item.id === activeProjectId)
   const [draftPoints, setDraftPoints] = useState<Vec2[]>([])
@@ -229,6 +237,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     }
     return out
   }, [project, layers.intersection3dGeneration])
+
+  // Rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)
+  const railFixtureMeshes = useMemo<MeshData[]>(() => {
+    if (section !== 'train' || !project) return []
+    return buildRailFixtureMeshes(project)
+  }, [project, section])
 
   // ─── Draft preview (function-aware) ────────────────────────────────
   const draftSection = useMemo(
@@ -863,6 +877,18 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         if (junction.suppressed) restoreJunction(junction.key)
         else suppressJunction(junction.key)
       }
+      return
+    }
+    if (tool === 'rail-point') {
+      createRailPointAt(point)
+      return
+    }
+    if (tool === 'rail-crossing') {
+      createRailCrossingAt(point)
+      return
+    }
+    if (tool === 'catch-point') {
+      createCatchPointAt(point)
       return
     }
 
@@ -1822,6 +1848,145 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return { s: nearest.s, t }
   }
 
+  // ─── Rail fixtures (Train section turnout pipeline) ────────────────
+  function railwayTracks(): RoadData[] {
+    return (project?.roads ?? []).filter((road) => road.railway)
+  }
+
+  function createRailPointAt(point: Vec2) {
+    if (!project) return
+    const tracks = railwayTracks()
+    // facing track: an extremity within 6 m of the click
+    let facing: { road: RoadData; contact: 'start' | 'end'; frame: Frame } | null = null
+    outer: for (const road of tracks) {
+      for (const contact of ['start', 'end'] as const) {
+        const frame = exitFrame(road, contact)
+        if (frame && distance(frame, point) < 6) {
+          facing = { road, contact, frame }
+          break outer
+        }
+      }
+    }
+    if (!facing) {
+      toast.error('Insert Point: click the extremity of the facing track (within 6 m).')
+      return
+    }
+    // connected tracks: extremities within 8 m of the facing tip
+    const candidates: { road: RoadData; contact: 'start' | 'end'; frame: Frame }[] = []
+    for (const road of tracks) {
+      if (road.id === facing.road.id) continue
+      for (const contact of ['start', 'end'] as const) {
+        const frame = exitFrame(road, contact)
+        if (frame && distance(frame, facing.frame) < 8) candidates.push({ road, contact, frame })
+      }
+    }
+    if (candidates.length < 2) {
+      toast.error('A turnout needs the facing track end plus two tracks starting there.')
+      return
+    }
+    // trailing (main line) = candidate whose outbound heading continues the
+    // facing travel direction best; the next one is the diverging branch
+    const travel = facing.contact === 'end' ? facing.frame.heading : facing.frame.heading + Math.PI
+    const outbound = (candidate: { contact: 'start' | 'end'; frame: Frame }) =>
+      candidate.contact === 'start' ? candidate.frame.heading : candidate.frame.heading + Math.PI
+    const alignment = (candidate: { contact: 'start' | 'end'; frame: Frame }) => {
+      let d = outbound(candidate) - travel
+      while (d > Math.PI / 2) d -= Math.PI
+      while (d < -Math.PI / 2) d += Math.PI
+      return Math.abs(d)
+    }
+    const sorted = [...candidates].sort((a, b) => alignment(a) - alignment(b))
+    const [trailing, branch] = sorted
+    const railPoint: RailPoint = {
+      id: uuid(),
+      name: `P${(project.railPoints?.length ?? 0) + 1}`,
+      facingTrackId: facing.road.id,
+      facingContact: facing.contact,
+      trailingTrackId: trailing.road.id,
+      branchTrackId: branch.road.id,
+    }
+    addRailPoint(railPoint)
+    toast.success(`Turnout ${railPoint.name} created`, {
+      description: `${facing.road.name} → ${trailing.road.name} (main) + ${branch.road.name} (branch)`,
+    })
+  }
+
+  function createRailCrossingAt(point: Vec2) {
+    if (!project || !junctionNetwork) return
+    const measured = railwayTracks().flatMap((road) => {
+      const path = junctionNetwork!.paths.get(road.id)
+      if (!path) return []
+      const nearest = nearestPointOnPath(path, point)
+      return [{ road, s: nearest.s, d: nearest.distance }]
+    }).sort((a, b) => a.d - b.d)
+    if (measured.length < 2 || measured[1].d > 5) {
+      toast.error('Insert Frog / Diamond: click between two crossing tracks.')
+      return
+    }
+    const [a, b] = measured
+    const resolved = resolveTracks([a.road, b.road])
+    const pathA = resolved.get(a.road.id)
+    const pathB = resolved.get(b.road.id)
+    if (!pathA || !pathB) return
+    const crossing = findTrackCrossing(pathA, pathB)
+    if (!crossing) {
+      toast.error('Those two tracks do not cross.')
+      return
+    }
+    const angle = Math.min(Math.abs(crossing.angle), Math.PI - Math.abs(crossing.angle))
+    const item: RailCrossing = {
+      id: uuid(),
+      trackAId: a.road.id,
+      trackBId: b.road.id,
+      sA: crossing.sA,
+      sB: crossing.sB,
+      position: crossing.point,
+      angle,
+      kind: angle < 0.5 ? 'diamond' : 'frog',
+    }
+    addRailCrossing(item)
+    toast.success(`${item.kind === 'diamond' ? 'Diamond' : 'Frog'} created`, {
+      description: `crossing at ${angle.toFixed(2)} rad — wing rails + guard rails generated`,
+    })
+  }
+
+  function createCatchPointAt(point: Vec2) {
+    let best: { road: RoadData; contact: 'start' | 'end'; frame: Frame; d: number } | null = null
+    for (const road of railwayTracks()) {
+      for (const contact of ['start', 'end'] as const) {
+        const frame = exitFrame(road, contact)
+        if (!frame) continue
+        const d = distance(frame, point)
+        if (d < 6 && (!best || d < best.d)) best = { road, contact, frame, d }
+      }
+    }
+    if (!best) {
+      toast.error('Catch Point: click a track extremity (within 6 m).')
+      return
+    }
+    // side from where you clicked relative to the outbound travel direction
+    const travel = best.contact === 'start' ? best.frame.heading : best.frame.heading + Math.PI
+    const cross = Math.cos(travel) * (point.y - best.frame.y) - Math.sin(travel) * (point.x - best.frame.x)
+    const side: 'left' | 'right' = cross >= 0 ? 'left' : 'right'
+    addCatchPoint({ id: uuid(), trackId: best.road.id, contact: best.contact, side })
+    toast.success(`Catch point added on ${best.road.name}`, { description: `${best.contact} end, blade on the ${side} side` })
+  }
+
+  function handleExportNetwork() {
+    if (!project) return
+    const xml = exportNetworkDefinition(project)
+    const blob = new Blob([xml], { type: 'application/xml' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${project.name || 'network'}-track-network.xml`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast.success('Network definition exported', {
+      description: 'Segments, connections, points, crossings and catch points',
+    })
+  }
+
   function renameRoad(name: string) {
     if (selectedRoad) updateRoad(selectedRoad.id, { name })
   }
@@ -1881,6 +2046,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
               ? 'Lane editing — select a road, then use the lane tools on its lanes'
               : 'Road design — curves, profiles, intersections'}
         </span>
+        {section === 'train' && (
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 px-2.5 text-xs" onClick={handleExportNetwork}>
+            <FileDown className="size-3.5" />
+            Export Network XML
+          </Button>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={!canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             <Undo2 className="size-3.5" />
@@ -1907,7 +2078,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
           <RoadViewport
-            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes]}
+            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes, ...railFixtureMeshes]}
             highlightMeshes={highlightMeshes}
             draftMesh={draftMesh}
             draftPoints={draftPoints}
@@ -2121,9 +2292,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           ) : (
           <Tabs defaultValue="track" className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="track">Track</TabsTrigger>
                 <TabsTrigger value="tracks">Tracks</TabsTrigger>
+                <TabsTrigger value="fixtures">Fixtures</TabsTrigger>
               </TabsList>
             </div>
             <ScrollArea className="min-h-0 flex-1">
@@ -2154,6 +2326,58 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                     }
                   }}
                 />
+              </TabsContent>
+              <TabsContent value="fixtures" className="grid gap-2 p-4">
+                {(project.railPoints ?? []).length === 0 && (project.railCrossings ?? []).length === 0 && (project.catchPoints ?? []).length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No fixtures yet. Use the Fixtures tools on the left rail: Insert Point (turnout blade), Insert Frog / Diamond (crossing), Catch Point.
+                  </p>
+                ) : (
+                  <>
+                    {(project.railPoints ?? []).map((pt) => {
+                      const nameOf = (id: string) => project.roads.find((r) => r.id === id)?.name ?? id.slice(0, 8)
+                      return (
+                        <div key={pt.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{pt.name} — Turnout</div>
+                            <div className="truncate text-muted-foreground">main {nameOf(pt.trailingTrackId)} · branch {nameOf(pt.branchTrackId)}</div>
+                          </div>
+                          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => removeRailPointById(pt.id)}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      )
+                    })}
+                    {(project.railCrossings ?? []).map((crossing) => {
+                      const nameOf = (id: string) => project.roads.find((r) => r.id === id)?.name ?? id.slice(0, 8)
+                      return (
+                        <div key={crossing.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium capitalize">{crossing.kind}</div>
+                            <div className="truncate text-muted-foreground">{nameOf(crossing.trackAId)} × {nameOf(crossing.trackBId)} · {crossing.angle.toFixed(2)} rad</div>
+                          </div>
+                          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => removeRailCrossingById(crossing.id)}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      )
+                    })}
+                    {(project.catchPoints ?? []).map((cp) => {
+                      const nameOf = (id: string) => project.roads.find((r) => r.id === id)?.name ?? id.slice(0, 8)
+                      return (
+                        <div key={cp.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">Catch Point</div>
+                            <div className="truncate text-muted-foreground">{nameOf(cp.trackId)} · {cp.contact}, blade {cp.side}</div>
+                          </div>
+                          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => removeCatchPointById(cp.id)}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
               </TabsContent>
             </ScrollArea>
           </Tabs>
