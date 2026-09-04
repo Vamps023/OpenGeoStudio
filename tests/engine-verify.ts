@@ -10,6 +10,8 @@ import type { Project } from '../src/state/store'
 import { importOpenDrive } from '../src/engine/opendrive'
 import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, invertTrack, linkTrackFunctions, bindTrackFunctions, trackTotalLength } from '../src/engine/tracks'
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
+import { buildTerrainMeshWorld } from '../src/engine/terrainMesh'
+import { makeTerrainSampler, setActiveTerrain } from '../src/terrain/terrainRegistry'
 import { sampleFunction, functionLength, splitFunction, mergeFunctions, convertSplineToFunctions, bezierConnector, bezierAt, functionEndFrame, FUNCTION_COLORS } from '../src/engine/xyFunctions'
 import { stickTrackToTerrain } from '../src/engine/tracks'
 import type { XYFunction, Frame } from '../src/engine/xyFunctions'
@@ -364,6 +366,48 @@ if (odr) {
   check('network xml has straight segments', xml.includes('<Segment id="f"') && xml.includes('type="Straight"'))
   check('network xml has turnout point', xml.includes('facingSegment="f"') && xml.includes('branchSegment="b"'))
   check('network xml has connection', xml.includes('<Connection fromSegment="f" fromEnd="Beta"'))
+}
+
+
+// 22. GIS alignment: the world-geo transforms used by buildTerrainMeshWorld
+// (3D terrain) and makeTerrainSampler (road draping) must agree: a road
+// stuck with the sampler must sit exactly on the rendered terrain.
+{
+  const west = -95.38, east = -95.34, south = 29.74, north = 29.78
+  const width = 5, height = 5
+  const elevations = new Float32Array(width * height)
+  for (let gy = 0; gy < height; gy++) {
+    const lat = north + ((south - north) * gy) / (height - 1)
+    for (let gx = 0; gx < width; gx++) {
+      const lng = west + ((east - west) * gx) / (width - 1)
+      elevations[gy * width + gx] = 100 + (lng - west) * 1000 // known ramp
+    }
+  }
+  const terrain = { elevations, width, height, bounds: { west, east, south, north }, minElevation: 100, maxElevation: 140 }
+  const geoRef = { lng: -95.36, lat: 29.76, scale: 1 }
+  const mesh = buildTerrainMeshWorld(terrain as never, geoRef)
+  check('gis: terrain mesh builds', !!mesh)
+  if (mesh) {
+    // bounds center == geoRef origin, so the grid center vertex sits at world (0,0)
+    const cxi = Math.floor(mesh.width / 2)
+    const cyi = Math.floor(mesh.height / 2)
+    const cx = mesh.positions[(cyi * mesh.width + cxi) * 3]
+    const cz = mesh.positions[(cyi * mesh.width + cxi) * 3 + 2]
+    check('gis: geoRef origin is terrain center', Math.abs(cx) < 0.5 && Math.abs(cz) < 0.5, `${cx.toFixed(2)}, ${cz.toFixed(2)}`)
+    setActiveTerrain(terrain as never)
+    const sampler = makeTerrainSampler(geoRef)
+    const gxi = 3, gyi = 1
+    const lng = west + ((east - west) * gxi) / (width - 1)
+    const lat = north + ((south - north) * gyi) / (height - 1)
+    const latRad = (geoRef.lat * Math.PI) / 180
+    const wx = ((lng - geoRef.lng) * 111320 * Math.cos(latRad)) / geoRef.scale
+    const wy = ((lat - geoRef.lat) * 111320) / geoRef.scale
+    const expected = 100 + (lng - west) * 1000
+    const got = sampler(wx, wy)
+    check('gis: sampler matches DEM at mesh node', got !== null && Math.abs(got - expected) < 1e-6, `${got} vs ${expected}`)
+    const vy = mesh.positions[(gyi * mesh.width + gxi) * 3 + 1]
+    check('gis: mesh vertex carries DEM elevation', Math.abs(vy - expected) < 1e-6, `${vy} vs ${expected}`)
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
