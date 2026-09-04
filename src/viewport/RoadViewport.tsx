@@ -215,8 +215,8 @@ export default function RoadViewport({
       controls = new OrbitControls(camera, renderer.domElement)
       controls.enableRotate = !is2d
       controls.mouseButtons = is2d
-        ? { LEFT: -1, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
-        : { LEFT: -1, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
+        ? { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
+        : { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
       controls.update()
       activeCamera = camera
     }
@@ -254,8 +254,8 @@ export default function RoadViewport({
 
     function updateMapTiles() {
       if (!showMapRef.current || activeMode !== '2d') return
-      const containerW = container.clientWidth
-      const containerH = container.clientHeight
+      const containerW = container!.clientWidth
+      const containerH = container!.clientHeight
       if (!containerW || !containerH) return
 
       const center = mapCenterRef.current
@@ -395,8 +395,8 @@ export default function RoadViewport({
     }
 
     function resize() {
-      const width = container.clientWidth
-      const height = container.clientHeight
+      const width = container!.clientWidth
+      const height = container!.clientHeight
       if (!width || !height) return
       renderer.setSize(width, height)
       const nextAspect = width / height
@@ -794,7 +794,8 @@ function toOverlayMarker(marker: OverlayMarker): THREE.Object3D {
 function disposeGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child)
-    child.geometry?.dispose()
-    if (child.material) (child.material as THREE.Material).dispose()
+    const mesh = child as THREE.Mesh
+    mesh.geometry?.dispose()
+    if (mesh.material) (mesh.material as THREE.Material).dispose()
   }
 }

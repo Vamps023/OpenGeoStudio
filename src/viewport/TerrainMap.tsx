@@ -17,6 +17,8 @@ interface Props {
   selectedTiles: Set<string>
   onToggleTile: (row: number, col: number) => void
   gridVisible: boolean
+  /** move the map camera to a location (location search / set coordinates) */
+  flyTo?: { lng: number; lat: number; zoom?: number } | null
 }
 
 interface PixelRect {
@@ -33,11 +35,19 @@ export default function TerrainMap({
   selectedTiles,
   onToggleTile,
   gridVisible,
+  flyTo,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  // Camera moves requested from outside (location search / coordinates)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!flyTo || !map) return
+    map.flyTo({ center: [flyTo.lng, flyTo.lat], zoom: flyTo.zoom ?? 13, essential: true })
+  }, [flyTo])
   const liveBoundsRef = useRef<GeoBounds | null>(null)
   const [liveRectPx, setLiveRectPx] = useState<{ x: number; y: number; size: number } | null>(null)
   const [mapReady, setMapReady] = useState(false)
@@ -88,9 +98,7 @@ export default function TerrainMap({
       maxZoom: 22,
       maxPitch: 0,        // top-down only — no tilt
       dragRotate: false,  // no right-click drag rotation
-      touchPitch: false,  // no touch tilt
-      dragPitch: false,   // no drag tilt
-      keyboardRotate: false,
+      touchPitch: false,  // no touch tilt   // no drag tilt
       attributionControl: false,
     })
 

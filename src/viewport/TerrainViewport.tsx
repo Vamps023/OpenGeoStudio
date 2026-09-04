@@ -48,8 +48,8 @@ export default function TerrainViewport({ terrainMesh, heightScale }: Props) {
     controls.dampingFactor = 0.08
 
     function resize() {
-      const w = container.clientWidth
-      const h = container.clientHeight
+      const w = container!.clientWidth
+      const h = container!.clientHeight
       if (!w || !h) return
       renderer.setSize(w, h)
       persp.aspect = w / h
@@ -108,7 +108,8 @@ export default function TerrainViewport({ terrainMesh, heightScale }: Props) {
 function disposeGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child)
-    child.geometry?.dispose()
-    if (child.material) (child.material as THREE.Material).dispose()
+    const mesh = child as THREE.Mesh
+    mesh.geometry?.dispose()
+    if (mesh.material) (mesh.material as THREE.Material).dispose()
   }
 }

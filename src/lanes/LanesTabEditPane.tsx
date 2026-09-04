@@ -8,6 +8,9 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { LaneProperties } from './LanesTabEditPaneProps'
+import { InsertLaneMenu, LaneRow } from './LanesTabEditPaneRow'
+import CenterSummary from './CenterSummary'
 
 export interface LaneEditPaneProps {
   section: LaneSectionDef
@@ -31,7 +34,7 @@ export function LaneEditPane(props: LaneEditPaneProps) {
           <Separator />
           <SideBlock side="right" lanes={section.right} onInsert={(idx, t) => onInsert('right', idx, t)} onRemove={(idx) => onRemove('right', idx)} onMove={(f, to) => onMove('right', f, to)} onSelect={(idx) => onSelect('right', idx)} selectedLaneKey={selectedLaneKey} />
           <Separator />
-          <Summary section={section} />
+          <CenterSummary section={section} roadName="" />
         </div>
       </ScrollArea>
       {selectedLane && parsed ? (
@@ -70,7 +73,6 @@ function SideBlock(props: {
           <LaneRow
             key={lane.id ?? `${side}-${i}`}
             lane={lane}
-            index={i}
             isSelected={selectedLaneKey === `${side}:${i}`}
             onSelect={() => onSelect(i)}
             onRemove={() => onRemove(i)}
@@ -87,7 +89,7 @@ function SideBlock(props: {
         )}
       </div>
       <div className="flex justify-center">
-        <InsertLaneMenu small onPick={(t) => onInsert(0, t)} label="Insert at start" />
+        <InsertLaneMenu onPick={(t) => onInsert(0, t)} label="Insert at start" />
       </div>
     </div>
   )

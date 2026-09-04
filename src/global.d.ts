@@ -113,7 +113,7 @@ interface OgsBridge {
   ) => Promise<{
     success: boolean
     error?: string
-    data?: TerrainData & { zoom: number }
+    data: TerrainData & { zoom: number }
   }>
   saveGeoTIFF: (
     data: OgsSaveGeoTIFFData,

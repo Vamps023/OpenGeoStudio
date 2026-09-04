@@ -57,7 +57,8 @@ import {
 } from '../engine/intersections'
 import { importOpenDrive } from '../engine/opendrive'
 import type { IntersectionData } from '../engine/intersections'
-import { makeTerrainSampler } from '../terrain/terrainRegistry'
+import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
+import { buildTerrainMeshWorld } from '../engine/terrainMesh'
 import { buildOverlays } from '../roads/overlays'
 import { RoadsContextMenu } from '../roads/RoadsContextMenu'
 import type { ContextMenuItem } from '../roads/RoadsContextMenu'
@@ -243,6 +244,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     if (section !== 'train' || !project) return []
     return buildRailFixtureMeshes(project)
   }, [project, section])
+
+  // Background terrain shown under the alignment in 3D mode (draw on terrain)
+  const terrain3dMesh = useMemo(() => {
+    if (mode !== '3d' || !project) return null
+    const terrain = getActiveTerrain()
+    if (!terrain) return null
+    const mesh = buildTerrainMeshWorld(terrain, project.geoRef)
+    return mesh ? { positions: mesh.positions, colors: mesh.colors, indices: mesh.indices } : null
+  }, [mode, project])
 
   // ─── Draft preview (function-aware) ────────────────────────────────
   const draftSection = useMemo(
@@ -2078,7 +2088,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
           <RoadViewport
-            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes, ...railFixtureMeshes]}
+            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes, ...railFixtureMeshes, ...(terrain3dMesh ? [terrain3dMesh] : [])]}
             highlightMeshes={highlightMeshes}
             draftMesh={draftMesh}
             draftPoints={draftPoints}

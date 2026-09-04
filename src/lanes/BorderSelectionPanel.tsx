@@ -39,8 +39,8 @@ export default function BorderSelectionPanel({ section, side, edge, roadId }: Bo
     ? (edge === 'inner' ? 'borderRightOffset' : 'borderLeftOffset')
     : (edge === 'inner' ? 'borderLeftOffset'  : 'borderRightOffset')
 
-  const height = (lane as Record<string, number | undefined>)[heightKey] ?? 0
-  const offset = (lane as Record<string, number | undefined>)[offsetKey] ?? 0
+  const height = (lane as unknown as Record<string, number | undefined>)[heightKey] ?? 0
+  const offset = (lane as unknown as Record<string, number | undefined>)[offsetKey] ?? 0
 
   function applyHeight(value: number) {
     setLaneBorder(roadId, side, idx, edge, value)

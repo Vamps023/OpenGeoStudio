@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Download, Grid3x3, Globe, Image as ImageIcon, Layers, Mountain } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Crosshair, Download, Grid3x3, Globe, Image as ImageIcon, Layers, Mountain, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { resolveCRS } from '../engine/crs'
 import type { GeoBounds } from '../engine/crs'
@@ -80,6 +80,7 @@ const ALBEDO_FORMATS: { value: AlbedoFormat; label: string }[] = [
 export default function TerrainWorkspace() {
   const projects = useStore((s) => s.projects)
   const activeProjectId = useStore((s) => s.activeProjectId)
+  const setGeoRef = useStore((s) => s.setGeoRef)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [selectedBounds, setSelectedBounds] = useState<GeoBounds | null>(null)
@@ -88,6 +89,15 @@ export default function TerrainWorkspace() {
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'map' | '3d'>('map')
+
+  // STEP 1: project location — search a place or type coordinates, then set
+  // the working area (also aligns the project geo reference)
+  const [searchText, setSearchText] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [coordLat, setCoordLat] = useState('29.76')
+  const [coordLng, setCoordLng] = useState('-95.36')
+  const [areaKm, setAreaKm] = useState(2)
+  const [flyTo, setFlyTo] = useState<{ lng: number; lat: number; zoom?: number } | null>(null)
 
   // Tile grid state
   const [tileSizeKm, setTileSizeKm] = useState<number>(4)
@@ -151,6 +161,43 @@ export default function TerrainWorkspace() {
 
   function deselectAllTiles() {
     setSelectedTiles(new Set())
+  }
+
+  /** Center the working area (areaKm × areaKm) on a location and align the project geo reference. */
+  function applyLocation(lat: number, lng: number, zoom = 13) {
+    const half = areaKm / 2
+    const dLat = half / 111.32
+    const dLng = half / (111.32 * Math.max(0.1, Math.cos((lat * Math.PI) / 180)))
+    setSelectedBounds({ west: lng - dLng, east: lng + dLng, south: lat - dLat, north: lat + dLat })
+    setGeoRef({ lng, lat, scale: 1 })
+    setFlyTo({ lng, lat, zoom })
+    setView('map')
+    toast.success('Project location set', { description: `${areaKm} km × ${areaKm} km working area` })
+  }
+
+  async function handleLocationSearch(event: FormEvent) {
+    event.preventDefault()
+    const query = searchText.trim()
+    if (!query) return
+    setSearching(true)
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`)
+      const results = (await response.json()) as { lat: string; lon: string; display_name: string }[]
+      if (!results.length) {
+        toast.error('Location not found', { description: query })
+        return
+      }
+      const lat = Number.parseFloat(results[0].lat)
+      const lng = Number.parseFloat(results[0].lon)
+      setCoordLat(results[0].lat)
+      setCoordLng(results[0].lon)
+      applyLocation(lat, lng)
+      toast.success('Location found', { description: results[0].display_name })
+    } catch {
+      toast.error('Location search failed — check the connection, or enter coordinates directly.')
+    } finally {
+      setSearching(false)
+    }
   }
 
   // Subscribe to export progress
@@ -282,7 +329,7 @@ export default function TerrainWorkspace() {
       },
     )
     if (!result.success && result.error !== 'Cancelled') {
-      setError(result.error)
+      setError(result.error ?? null)
     }
   }
 
@@ -303,8 +350,72 @@ export default function TerrainWorkspace() {
             3D
           </Button>
         </div>
-        <span className="ml-auto text-[11px] text-muted-foreground">Shift + Drag on the map to select the terrain area</span>
+        <span className="ml-auto text-[11px] text-muted-foreground">Shift + Drag on the map to adjust the working area</span>
       </div>
+
+      {/* STEP 1: project location — search / coordinates / working area */}
+      {view === 'map' && (
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card/30 px-3 text-xs">
+          <form className="flex min-w-0 flex-1 items-center gap-1.5" onSubmit={handleLocationSearch}>
+            <Search className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs"
+              placeholder="Search a location (e.g. Houston, Texas)…"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            <Button type="submit" size="sm" variant="secondary" className="h-7 shrink-0 px-2.5 text-xs" disabled={searching || !searchText.trim()}>
+              {searching ? 'Searching…' : 'Search'}
+            </Button>
+          </form>
+          <Separator orientation="vertical" className="h-5" />
+          <Crosshair className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            className="h-7 w-24 rounded-md border border-border bg-background px-2 text-xs"
+            placeholder="lat"
+            value={coordLat}
+            onChange={(e) => setCoordLat(e.target.value)}
+            title="Latitude"
+          />
+          <input
+            className="h-7 w-24 rounded-md border border-border bg-background px-2 text-xs"
+            placeholder="lng"
+            value={coordLng}
+            onChange={(e) => setCoordLng(e.target.value)}
+            title="Longitude"
+          />
+          <label className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            Area
+            <input
+              type="number"
+              min={0.5}
+              max={50}
+              step={0.5}
+              className="h-7 w-14 rounded-md border border-border bg-background px-2 text-xs"
+              value={areaKm}
+              onChange={(e) => setAreaKm(Math.max(0.5, Math.min(50, Number.parseFloat(e.target.value) || 2)))}
+              title="Working area size in km"
+            />
+            km
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 px-2.5 text-xs"
+            onClick={() => {
+              const lat = Number.parseFloat(coordLat)
+              const lng = Number.parseFloat(coordLng)
+              if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+                toast.error('Enter valid coordinates')
+                return
+              }
+              applyLocation(lat, lng, 14)
+            }}
+          >
+            Set Location
+          </Button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1">
@@ -316,6 +427,7 @@ export default function TerrainWorkspace() {
             selectedTiles={selectedTiles}
             onToggleTile={toggleTile}
             gridVisible={gridVisible}
+            flyTo={flyTo}
           />
         ) : (
           <TerrainViewport terrainMesh={terrainMesh} heightScale={heightScale} />

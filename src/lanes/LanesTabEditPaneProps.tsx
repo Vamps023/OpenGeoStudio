@@ -93,7 +93,7 @@ export function LaneProperties({ lane, onChange }: { lane: LaneDef; onChange: (p
                       onChange({ vehicles: e.target.checked ? ['all'] : [] })
                       return
                     }
-                    const set = new Set(lane.vehicles.filter((v) => v !== 'all'))
+                    const set = new Set<VehicleCategory>(lane.vehicles.filter((v) => v !== 'all'))
                     if (e.target.checked) set.add(key as VehicleCategory)
                     else set.delete(key as VehicleCategory)
                     onChange({ vehicles: Array.from(set) })

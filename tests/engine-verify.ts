@@ -220,7 +220,7 @@ if (odr) {
     { x: 1000, y: 2000 }, { x: 1040, y: 2030 }, { x: 1090, y: 2020 }, { x: 1120, y: 2060 },
   ]
   const splineRoad = {
-    id: 'spline-1', name: 'S', points: [{ x: splinePoints[0].x, y: splinePoints[0].y }],
+    id: 'spline-1', points: [{ x: splinePoints[0].x, y: splinePoints[0].y }],
     lanesLeft: 1, lanesRight: 1, laneWidth: 3.5,
     functions: [{ kind: 'clothoidSpline', points: splinePoints, tolerance: 0.5, symmetryThreshold: 1 } as never],
   }
@@ -266,8 +266,8 @@ if (odr) {
   })()
   check('bezier length measured from real start', Math.abs(bzLen - denseLen) < 0.1, `${bzLen.toFixed(2)} vs ${denseLen.toFixed(2)}`)
   const bzRoad = {
-    id: 'bz-1', name: 'B', points: [{ x: farFrame.x, y: farFrame.y }, { x: farFrame.x + 1, y: farFrame.y }],
-    lanesLeft: 1, lanesRight: 1, laneWidth: 3.5,
+    id: 'bz-1', points: [{ x: farFrame.x, y: farFrame.y }, { x: farFrame.x + 1, y: farFrame.y }],
+    lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 50,
     functions: [bz],
   }
   const bzPath = fitTrackPath(bzRoad)
@@ -295,7 +295,7 @@ if (odr) {
 // sleepers at the configured spacing, ballast as the widest strip.
 {
   const trackPath = fitTrackPath({
-    id: 'rw', name: 'T',
+    id: 'rw',
     points: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
     lanesLeft: 0, lanesRight: 0, laneWidth: 3.5,
     functions: [{ kind: 'segment', length: 50 }],
@@ -330,7 +330,7 @@ if (odr) {
   const mk = (id: string, x: number, y: number, heading: number, len: number): RoadData => ({
     id, name: id,
     points: [{ x, y }, { x: x + Math.cos(heading), y: y + Math.sin(heading) }],
-    lanesLeft: 0, lanesRight: 0, laneWidth: 3.5,
+    lanesLeft: 0, lanesRight: 0, laneWidth: 3.5, filletRadius: 50,
     functions: [{ kind: 'segment', length: len }],
     railway: { gauge: 1.435, railSize: 0.075, trackbedWidth: 3, sleeperSpacing: 0.65 },
   })

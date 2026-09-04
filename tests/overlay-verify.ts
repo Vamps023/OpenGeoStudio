@@ -85,7 +85,7 @@ const overlays = buildOverlays({
     intersectionLogicalContent: true, intersection3dGeneration: true,
     wayAxis: true, wayLogicalContents: true, otherSubNetworks: true,
   },
-  selection: { trackIds: [], intersectionId: 'n1', trackStation: null },
+  selection: { trackIds: [], intersectionId: 'n1' },
   lockedPassageways: [],
   selectedTrackStation: null,
 })

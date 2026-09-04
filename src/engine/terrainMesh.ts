@@ -19,6 +19,8 @@ export interface TerrainMeshData {
   indices: Uint32Array
   width: number
   height: number
+  /** optional plan UVs (u: west→east, v: south→north) for imagery draping */
+  uvs?: Float32Array
 }
 
 /**
@@ -155,7 +157,16 @@ export function buildTerrainMeshWorld(
   }
 
   computeNormals(positions, indices, normals)
-  return { positions, normals, colors, indices, width: gw, height: gh }
+  // plan UVs for imagery draping (row 0 = north → v = 1)
+  const uvs = new Float32Array(gw * gh * 2)
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const i = gy * gw + gx
+      uvs[i * 2] = gx / (gw - 1)
+      uvs[i * 2 + 1] = 1 - gy / (gh - 1)
+    }
+  }
+  return { positions, normals, colors, indices, width: gw, height: gh, uvs }
 }
 
 function computeNormals(positions: Float32Array, indices: Uint32Array, normals: Float32Array) {

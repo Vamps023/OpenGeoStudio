@@ -93,7 +93,8 @@ export default function LanePropertiesEditor({ lane, onChange }: LanePropertiesE
               }`}>
                 <Checkbox
                   checked={checked}
-                  onCheckedChange={(c) => {
+                  onChange={(e) => {
+                    const c = e.target.checked
                     const next = c ? [...lane.vehicles, v] : lane.vehicles.filter((x) => x !== v)
                     onChange({ vehicles: next })
                   }}

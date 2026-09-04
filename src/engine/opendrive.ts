@@ -11,7 +11,8 @@
 // Lanes, objects and signals are ignored (default section is applied).
 // ─────────────────────────────────────────────────────────────────────
 import type { ElevationPoint, } from './elevation'
-import type { PathSample, Vec2 } from './types'
+import type { PathSample } from './geometry'
+import type { Vec2 } from './types'
 import type { XYFunction } from './xyFunctions'
 import type { IntersectionData, IntersectionWay } from './intersections'
 import { makeIntersectionData } from './intersections'

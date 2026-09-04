@@ -3,6 +3,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import SelectionPanel from '../../roads/SelectionPanel'
 import type { SelectionPanelProps } from '../../roads/SelectionPanel'
+import { maxAbsGrade } from '../../engine/elevation'
 import { clampInt, clampNumber } from '../tooling'
 import type { EditorConfig, GeoReference, RoadData } from '../../state/store'
 
@@ -45,6 +46,11 @@ export default function SelectionTab(props: SelectionTabProps) {
             <Input id="lane-width" type="number" min={2} max={5} step={0.25} value={selectedRoad.laneWidth}
               onChange={(event) => onUpdateRoad({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
           </div>
+          {selectedRoad.elevationProfile && selectedRoad.elevationProfile.length >= 2 && (
+            <p className="text-[11px] text-muted-foreground">
+              Max grade: <b className="font-medium text-foreground">{(maxAbsGrade(selectedRoad.elevationProfile, props.roadLength) * 100).toFixed(1)}%</b>
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid gap-3">

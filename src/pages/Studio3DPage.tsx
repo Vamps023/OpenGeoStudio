@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { Boxes, Maximize, Mountain, Route, Save, RotateCcw } from 'lucide-react'
+import { Boxes, Images, Maximize, Mountain, Route, Save, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
-import { buildConnectingRoadMesh, buildRoadMeshRange } from '../engine/mesh'
+import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMeshRange } from '../engine/mesh'
+import { buildRailFixtureMeshes } from '../engine/railFixtures'
 import { buildTerrainMeshWorld, type TerrainMeshData } from '../engine/terrainMesh'
+import { loadImageryTexture } from '../terrain/imageryTexture'
 import { allWays, resolveTracks } from '../engine/intersections'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry } from '../engine/roadGeometry'
@@ -29,8 +31,9 @@ function roadSection(road: RoadData) {
   return getLaneSection(road)
 }
 
-/** Lift roads slightly above the terrain surface to avoid z-fighting. */
-const ROAD_LIFT = 0.2
+/** Lift roads above the terrain surface to avoid z-fighting (the decimated
+ *  terrain grid interpolates up to ~0.5 m off the true surface). */
+const ROAD_LIFT = 1.0
 
 // ─── Scene content built from project + registry terrain ───────────
 
@@ -89,6 +92,8 @@ function buildProjectRoadMeshes(project: Project, drape: boolean): MeshData[] {
       if (mesh) meshes.push(mesh)
     }
   }
+  // rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)
+  meshes.push(...buildRailFixtureMeshes(project))
   return meshes
 }
 
@@ -118,6 +123,21 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     () => (project ? buildProjectRoadMeshes(project, drape) : []),
     [project, drape],
   )
+
+  // satellite imagery draped onto the terrain surface
+  const [imagery, setImagery] = useState(true)
+  const [imageryTexture, setImageryTexture] = useState<THREE.CanvasTexture | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!terrain || !imagery) {
+      setImageryTexture(null)
+      return
+    }
+    loadImageryTexture(terrain).then((texture) => {
+      if (!cancelled) setImageryTexture(texture)
+    })
+    return () => { cancelled = true }
+  }, [terrain, imagery])
 
   async function handleSave() {
     setSaving(true)
@@ -158,6 +178,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         <ToolbarToggle active={showTerrain} onClick={() => setShowTerrain((v) => !v)} icon={<Mountain className="size-3.5" />} label="Terrain" />
         <ToolbarToggle active={showRoads} onClick={() => setShowRoads((v) => !v)} icon={<Route className="size-3.5" />} label="Roads" />
         <ToolbarToggle active={drape} onClick={() => setDrape((v) => !v)} icon={<Route className="size-3.5" />} label="Drape on Terrain" />
+        <ToolbarToggle active={imagery} onClick={() => setImagery((v) => !v)} icon={<Images className="size-3.5" />} label="Imagery" />
         <ToolbarToggle active={wireframe} onClick={() => setWireframe((v) => !v)} icon={<Boxes className="size-3.5" />} label="Wireframe" />
         <Separator orientation="vertical" className="h-5" />
         <label className="flex items-center gap-2 text-muted-foreground">
@@ -188,6 +209,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
       <Studio3DViewport
         roadMeshes={showRoads ? roadMeshes : []}
         terrainMesh={showTerrain ? terrainMesh : null}
+        imageryTexture={imagery ? imageryTexture : null}
         heightScale={heightScale}
         wireframe={wireframe}
         fitSignal={fitSignal}
@@ -216,6 +238,7 @@ function ToolbarToggle({ active, onClick, icon, label }: { active: boolean; onCl
 interface Studio3DViewportProps {
   roadMeshes: MeshData[]
   terrainMesh: TerrainMeshData | null
+  imageryTexture: THREE.CanvasTexture | null
   heightScale: number
   wireframe: boolean
   fitSignal: number
@@ -224,7 +247,7 @@ interface Studio3DViewportProps {
   onFit: () => void
 }
 
-function Studio3DViewport({ roadMeshes, terrainMesh, heightScale, wireframe, fitSignal, hasContent, roadCount, onFit }: Studio3DViewportProps) {
+function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, hasContent, roadCount, onFit }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -316,15 +339,15 @@ function Studio3DViewport({ roadMeshes, terrainMesh, heightScale, wireframe, fit
     disposeGroup(ref.roadGroup)
 
     if (terrainMesh) {
-      ref.terrainGroup.add(meshFromData(terrainMesh.positions, terrainMesh.normals, terrainMesh.colors, terrainMesh.indices, 0.95))
+      ref.terrainGroup.add(meshFromData(terrainMesh.positions, terrainMesh.normals, terrainMesh.colors, terrainMesh.indices, 0.95, terrainMesh.uvs, imageryTexture))
       ref.grid.visible = false
     } else {
       ref.grid.visible = true
     }
     for (const mesh of roadMeshes) {
-      ref.roadGroup.add(meshFromData(mesh.positions, null, mesh.colors, mesh.indices, 0.85))
+      ref.roadGroup.add(meshFromData(mesh.positions, null, mesh.colors, mesh.indices, 0.85, undefined, null, true))
     }
-  }, [terrainMesh, roadMeshes])
+  }, [terrainMesh, roadMeshes, imageryTexture])
 
   // ── Wireframe + height scale ──
   useEffect(() => {
@@ -418,18 +441,27 @@ function meshFromData(
   colors: Float32Array,
   indices: Uint32Array,
   roughness: number,
+  uvs?: Float32Array,
+  map?: THREE.Texture | null,
+  /** pull the surface toward the camera so draped roads win the depth test against the terrain */
+  draped?: boolean,
 ): THREE.Mesh {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   if (normals) geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
   else geometry.computeVertexNormals()
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  if (uvs) geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
+    vertexColors: !map,
+    map: map ?? null,
     side: THREE.DoubleSide,
     roughness,
     metalness: 0.0,
+    polygonOffset: !!draped,
+    polygonOffsetFactor: draped ? -4 : 0,
+    polygonOffsetUnits: draped ? -4 : 0,
   })
   return new THREE.Mesh(geometry, material)
 }

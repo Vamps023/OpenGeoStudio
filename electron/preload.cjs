@@ -2,7 +2,13 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('ogs', {
   // ── Terrain ──
-  downloadTerrain: (bounds, options) => ipcRenderer.invoke('terrain:download', bounds, options),
+  // onProgress (a function) cannot cross the structured-clone IPC boundary —
+  // strip it; downloads report progress via the final result only.
+  downloadTerrain: (bounds, options) => {
+    const { onProgress, ...rest } = options || {}
+    void onProgress
+    return ipcRenderer.invoke('terrain:download', bounds, rest)
+  },
   saveGeoTIFF: (data, options) => ipcRenderer.invoke('terrain:save-geotiff', data, options),
   exportTerrain: (options) => ipcRenderer.invoke('terrain:export', options),
   onExportProgress: (callback) => {
