@@ -68,12 +68,24 @@ export const TOOL_ITEMS: ToolItem[] = [
   { tool: 'lane-sidewalk', label: 'Add Sidewalk', icon: Footprints },
 ]
 
-export const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
+/** Tools for the Road workspace: road design + network. */
+export const ROAD_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
   { label: 'Select', tools: ['select'] },
   { label: 'Insert curves', tools: ['draw-straight', 'draw-arc', 'draw-clothoid', 'draw-polyline', 'draw-bezier', 'draw-spline'] },
   { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
   { label: 'Network', tools: ['insert-intersection', 'junction'] },
+]
+
+/** Tools for the Lane workspace: lane editing on the selected road. */
+export const LANE_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
   { label: 'Lanes', tools: ['lane-begin', 'lane-end', 'lane-insert', 'lane-remove', 'lane-border', 'lane-sidewalk'] },
+]
+
+/** Tools for the Train workspace: railway track design (Straight / Circle / Spiral). */
+export const TRAIN_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
+  { label: 'Select', tools: ['select'] },
+  { label: 'Insert track', tools: ['draw-straight', 'draw-arc', 'draw-clothoid', 'draw-polyline', 'draw-spline'] },
+  { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
 ]
 
 export function toolHint(tool: Tool): string {

@@ -1,10 +1,10 @@
-import { samplePath, samplePathRange } from './geometry'
+import { samplePath, samplePathRange, evaluatePath } from './geometry'
 import { laneLayout, LANE_TYPE_META } from './lanes'
 import type { PathSample } from './geometry'
 import type { FittedPath } from './types'
 import type { LaneDef, LaneSectionDef } from './laneTypes'
 import type { LaneStrip } from './laneLayout'
-import type { LaneTaper } from '../state/store'
+import type { LaneTaper, RailwayConfig } from '../state/store'
 
 export interface MeshData {
   positions: Float32Array
@@ -29,6 +29,9 @@ const PARKING: Rgb = [0.70, 0.40, 0.40]
 const GRASS: Rgb = [0.40, 0.55, 0.35]
 const DIRT: Rgb = [0.55, 0.42, 0.32]
 const RUNWAY: Rgb = [0.20, 0.22, 0.25]
+const STEEL: Rgb = [0.62, 0.64, 0.68]
+const BALLAST: Rgb = [0.44, 0.41, 0.37]
+const SLEEPER: Rgb = [0.35, 0.28, 0.20]
 
 function hexToRgb(hex: string): Rgb {
   const m = hex.replace('#', '').match(/.{2}/g)
@@ -214,6 +217,70 @@ export function buildConnectingRoadMesh(samples: PathSample[], laneCount: number
     strips.push({ inner: offset - 0.06, outer: offset + 0.06, color: WHITE, height: 0.04 })
   }
   return buildStrips(samples, strips)
+}
+
+/**
+ * Railway track mesh (Train section): ballast + two steel rails as
+ * along-track strips (banking-aware, rail centers at ±(gauge/2 + railSize/2)
+ * like the Track Mesh Builder), plus sleeper quads across the track at the
+ * configured spacing.
+ */
+export function buildRailwayMesh(
+  path: FittedPath,
+  railway: RailwayConfig,
+  elevation?: ElevationSampler,
+  banking?: ElevationSampler,
+): MeshData | null {
+  if (!path || path.elements.length === 0) return null
+  const { gauge, railSize, trackbedWidth, sleeperSpacing } = railway
+  const ds = Math.min(1, Math.max(0.25, sleeperSpacing / 4))
+  const samples = samplePath(path, ds)
+  if (samples.length < 2) return null
+
+  const railOffset = gauge / 2 + railSize / 2
+  const strips: StripSpec[] = [
+    { inner: -trackbedWidth / 2, outer: trackbedWidth / 2, color: BALLAST, height: 0.22 },
+    { inner: -railOffset - railSize / 2, outer: -railOffset + railSize / 2, color: STEEL, height: 0.32 },
+    { inner: railOffset - railSize / 2, outer: railOffset + railSize / 2, color: STEEL, height: 0.32 },
+  ]
+  const base = buildStrips(samples, strips, elevation, banking)
+  if (!base) return null
+
+  // Sleepers: flat quads across the track on top of the ballast
+  const positions: number[] = [...base.positions]
+  const colors: number[] = [...base.colors]
+  const indices: number[] = [...base.indices]
+  let vertexCount = base.positions.length / 3
+  const sleeperLen = gauge + railSize * 2 + 0.6
+  const halfAlong = 0.12
+  const railTop = 0.24
+  for (let s = sleeperSpacing / 2; s < path.length; s += sleeperSpacing) {
+    const c = evaluatePath(path, s)
+    const y = (c.z ?? elevation?.(c.s) ?? 0) + railTop
+    const nx = -Math.sin(c.heading)
+    const ny = Math.cos(c.heading)
+    const tx = Math.cos(c.heading)
+    const ty = Math.sin(c.heading)
+    const corners: [number, number, number][] = [
+      [c.x + tx * halfAlong + nx * sleeperLen / 2, y, -(c.y + ty * halfAlong + ny * sleeperLen / 2)],
+      [c.x - tx * halfAlong + nx * sleeperLen / 2, y, -(c.y - ty * halfAlong + ny * sleeperLen / 2)],
+      [c.x + tx * halfAlong - nx * sleeperLen / 2, y, -(c.y + ty * halfAlong - ny * sleeperLen / 2)],
+      [c.x - tx * halfAlong - nx * sleeperLen / 2, y, -(c.y - ty * halfAlong - ny * sleeperLen / 2)],
+    ]
+    const start = vertexCount
+    for (const [px, py, pz] of corners) {
+      positions.push(px, py, pz)
+      colors.push(SLEEPER[0], SLEEPER[1], SLEEPER[2])
+      vertexCount++
+    }
+    indices.push(start, start + 2, start + 1, start + 1, start + 2, start + 3)
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    colors: new Float32Array(colors),
+    indices: new Uint32Array(indices),
+  }
 }
 
 function buildStrips(

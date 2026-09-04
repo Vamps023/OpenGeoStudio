@@ -133,8 +133,12 @@ interface OgsBridge {
   getWorkspacePath: () => Promise<OgsWorkspacePathResult>
 }
 
-interface Window {
-  ogs?: OgsBridge
+// This file is a module (it has imports/exports), so the Window
+// augmentation must be wrapped in `declare global` to actually apply.
+declare global {
+  interface Window {
+    ogs?: OgsBridge
+  }
 }
 
 // Vite asset URL imports (e.g. maplibre worker: '...?url')

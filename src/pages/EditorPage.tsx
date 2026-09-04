@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { Route, TrainFront } from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
-import { buildConnectingRoadMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
+import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
 import { evaluatePath } from '../engine/geometry'
@@ -9,6 +10,7 @@ import type { MeshData } from '../engine/mesh'
 import type { Vec2 } from '../engine/types'
 import { useStore, uuid, getLaneSection } from '../state/store'
 import type { RoadData, RoadGeometryType, Tool } from '../state/store'
+import { DEFAULT_RAILWAY } from '../state/store'
 import { defaultLaneByType, laneLayout, profileSection, sectionHalfWidth } from '../engine/laneLayout'
 import type { XYFunction, PolylineFunction } from '../engine/xyFunctions'
 import {
@@ -59,6 +61,7 @@ import { RoadsContextMenu } from '../roads/RoadsContextMenu'
 import type { ContextMenuItem } from '../roads/RoadsContextMenu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
 import AppHeader from '@/components/layout/AppHeader'
 import RoadViewport from '../viewport/RoadViewport'
 import ElevationProfileEditor from '../elevation/ElevationProfileEditor'
@@ -69,6 +72,8 @@ import ToolOptionsPanel from '../editor/ToolOptionsPanel'
 import SelectionTab from '../editor/sidebar/SelectionTab'
 import RoadsTab from '../editor/sidebar/RoadsTab'
 import NetworkTab from '../editor/sidebar/NetworkTab'
+import TrainTab from '../editor/sidebar/TrainTab'
+import type { ToolSpace } from '../editor/ToolRail'
 import { useKeyboardShortcuts } from '../editor/useKeyboardShortcuts'
 import { distance, nearestJunction, toolHint } from '../editor/tooling'
 
@@ -122,6 +127,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const [showMap, setShowMap] = useState(false)
   const [menu, setMenu] = useState<{ screen: { x: number; y: number }; world: Vec2 } | null>(null)
   const [contourHandleArmed, setContourHandleArmed] = useState(false)
+  // Editor top-level section: Road workspace or Train (railway) workspace
+  const [section, setSection] = useState<'road' | 'train'>('road')
   const odrInputRef = useRef<HTMLInputElement>(null)
   // Begin/End Lane gizmo (doc 5.5.5.1.2): click a lane, then an arrow
   const [laneGizmo, setLaneGizmo] = useState<{
@@ -176,10 +183,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return project.roads.flatMap((road) => {
       const path = junctionNetwork.paths.get(road.id)
       if (!path) return []
-      const section = getLaneSection(road)
+      // railway tracks render as rails + sleepers + ballast
+      if (road.railway) {
+        const mesh = buildRailwayMesh(path, road.railway, elevationSamplers.get(road.id), bankingSamplers.get(road.id))
+        return mesh ? [{ roadId: road.id, mesh }] : []
+      }
+      const laneSection = getLaneSection(road)
       const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
       return visibleRoadRanges(path, cuts).flatMap((range) => {
-        const mesh = buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
+        const mesh = buildRoadMeshRange(path, laneSection, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
         return mesh ? [{ roadId: road.id, mesh }] : []
       })
     })
@@ -212,8 +224,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   // ─── Draft preview (function-aware) ────────────────────────────────
   const draftSection = useMemo(
-    () => profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight),
-    [insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight],
+    () => (section === 'train'
+      ? { left: [], right: [] }
+      : profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight)),
+    [section, insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight],
   )
   const draftFnPreview = useMemo<XYFunction | null>(() => {
     const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
@@ -280,9 +294,11 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   const draftMesh = useMemo(
     () => (draftPath && tool !== 'select' && tool !== 'insert-intersection' && tool !== 'junction' && !tool.startsWith('lane-')
-      ? buildRoadMesh(draftPath, draftSection)
+      ? section === 'train'
+        ? buildRailwayMesh(draftPath, DEFAULT_RAILWAY)
+        : buildRoadMesh(draftPath, draftSection)
       : null),
-    [draftPath, draftSection, tool],
+    [draftPath, draftSection, tool, section],
   )
 
   const roadLengths = useMemo(() => {
@@ -336,6 +352,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     setHoverPoint(null)
   }
 
+  function switchSection(next: 'road' | 'train') {
+    if (next === section) return
+    setSection(next)
+    chooseTool('select')
+  }
+
+  // Section drives which tool rail is shown; tools stay valid in both.
+  const toolSpace: ToolSpace = section === 'train' ? 'train' : 'road'
+
   // ─── Profile presets ("Default Profile") ───────────────────────────
 
   // ─── Creating function-based roads ─────────────────────────────────
@@ -348,16 +373,18 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   function createFunctionRoad(frame: Frame, functions: XYFunction[], nameSuffix = '') {
     if (!project || functions.length === 0) return
+    const railway = section === 'train'
     const road: RoadData = {
       id: uuid(),
-      name: `Road ${project.roads.length + 1}${nameSuffix}`,
+      name: `${railway ? 'Track' : 'Road'} ${project.roads.length + 1}${nameSuffix}`,
       points: startFramePoints(frame),
       functions,
-      lanesLeft: draftSection.left.length,
-      lanesRight: draftSection.right.length,
+      lanesLeft: railway ? 0 : draftSection.left.length,
+      lanesRight: railway ? 0 : draftSection.right.length,
       laneWidth: config.laneWidth,
       filletRadius: config.filletRadius,
-      laneSection: draftSection,
+      laneSection: railway ? { left: [], right: [] } : draftSection,
+      ...(railway ? { railway: { ...DEFAULT_RAILWAY } } : {}),
     }
     addRoad(road)
     applyStickToTerrain(road)
@@ -373,8 +400,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   function stickRoadToTerrain(road: RoadData, missWarning: string) {
     if (!project) return
     const sampler = makeTerrainSampler(project.geoRef)
-    const section = getLaneSection(road)
-    const result = stickTrackToTerrain({ ...road, elevationProfile: undefined }, sampler, sectionHalfWidth(section))
+    const halfWidth = road.railway ? road.railway.trackbedWidth / 2 : sectionHalfWidth(getLaneSection(road))
+    const result = stickTrackToTerrain({ ...road, elevationProfile: undefined }, sampler, halfWidth)
     if (result) {
       updateRoad(road.id, { elevationProfile: result.elevation, bankingProfile: result.banking })
       const maxBankDeg = result.banking.reduce((m, p) => Math.max(m, Math.abs((p.z * 180) / Math.PI)), 0)
@@ -1801,8 +1828,27 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         />
       </AppHeader>
 
+      {/* Section switch: Road workspace vs Train (railway) workspace */}
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card/50 px-3">
+        <div className="flex items-center gap-0.5">
+          <Button size="sm" variant={section === 'road' ? 'default' : 'ghost'} className="h-7 gap-1.5 px-3 text-xs" onClick={() => switchSection('road')}>
+            <Route className="size-3.5" />
+            Road
+          </Button>
+          <Button size="sm" variant={section === 'train' ? 'default' : 'ghost'} className="h-7 gap-1.5 px-3 text-xs" onClick={() => switchSection('train')}>
+            <TrainFront className="size-3.5" />
+            Train
+          </Button>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {section === 'road'
+            ? 'Road design — curves, lanes, intersections'
+            : 'Railway track — Straight / Circle Arc / Clothoid (Spiral) with rails, sleepers and ballast'}
+        </span>
+      </div>
+
       <div className="flex min-h-0 flex-1">
-        <ToolRail tool={tool} onChooseTool={chooseTool} />
+        <ToolRail tool={tool} space={toolSpace} onChooseTool={chooseTool} />
 
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
@@ -1839,7 +1885,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           )}
 
           {/* TOOL: Insert <function> panel (Stick to Background Terrain + Default Profile) */}
-          {insertToolActive && (
+          {section === 'road' && insertToolActive && (
             <ToolOptionsPanel
               tool={tool}
               insertOptions={insertOptions}
@@ -1859,6 +1905,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
         {/* Sidebar */}
         <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-card/60">
+          {section === 'road' ? (
           <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
               <TabsList className="grid w-full grid-cols-3">
@@ -1974,6 +2021,46 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
               </TabsContent>
             </ScrollArea>
           </Tabs>
+          ) : (
+          <Tabs defaultValue="track" className="flex min-h-0 flex-1 flex-col gap-0">
+            <div className="shrink-0 border-b border-border p-3">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="track">Track</TabsTrigger>
+                <TabsTrigger value="tracks">Tracks</TabsTrigger>
+              </TabsList>
+            </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <TabsContent value="track" className="grid gap-4 p-4">
+                <TrainTab
+                  selectedRoad={selectedRoad}
+                  onUpdateRoad={(patch) => selectedRoad && updateRoad(selectedRoad.id, patch)}
+                />
+              </TabsContent>
+              <TabsContent value="tracks" className="grid gap-1.5 p-4">
+                <RoadsTab
+                  roads={project.roads.filter((r) => r.railway)}
+                  selectedIds={selection.trackIds}
+                  roadLengths={roadLengths}
+                  tool={tool}
+                  draftLength={draftPath?.length ?? null}
+                  onRoadClick={(roadId, additive) => {
+                    if (additive) {
+                      setSelection({
+                        trackIds: selection.trackIds.includes(roadId)
+                          ? selection.trackIds.filter((id) => id !== roadId)
+                          : [...selection.trackIds, roadId],
+                        intersectionId: selection.intersectionId,
+                        trackStation: null,
+                      })
+                    } else {
+                      selectRoadOnly(roadId)
+                    }
+                  }}
+                />
+              </TabsContent>
+            </ScrollArea>
+          </Tabs>
+          )}
         </aside>
       </div>
 

@@ -21,6 +21,26 @@ export interface LaneTaper {
 
 export type RoadType = 'none' | 'bridge' | 'tunnel'
 
+/** Railway track parameters (Train section). Values follow the Track Mesh
+ *  Builder defaults: standard gauge 1.435, rail 0.075, trackbed 3.0. */
+export interface RailwayConfig {
+  /** distance between rail centers [m] (standard gauge 1.435) */
+  gauge: number
+  /** rail head/web width [m] */
+  railSize: number
+  /** ballast/trackbed full width [m] */
+  trackbedWidth: number
+  /** distance between sleeper centers [m] */
+  sleeperSpacing: number
+}
+
+export const DEFAULT_RAILWAY: RailwayConfig = {
+  gauge: 1.435,
+  railSize: 0.075,
+  trackbedWidth: 3.0,
+  sleeperSpacing: 0.65,
+}
+
 export interface PortionDef {
   id: string
   name: string
@@ -57,6 +77,9 @@ export interface RoadData {
   // Rich per-lane definition (SCANeR-compatible).
   // When undefined, derived from {lanesLeft, lanesRight, laneWidth}.
   laneSection?: LaneSectionDef
+  // Railway track (Train section): renders as rails + sleepers + ballast
+  // instead of a lane cross-section.
+  railway?: RailwayConfig
 }
 
 export interface GeoReference {

@@ -3,7 +3,7 @@
 //   npx esbuild tests/engine-verify.ts --bundle --platform=node --format=cjs //     --outfile=node_modules/.cache/engine-verify.cjs --external:zustand && node node_modules/.cache/engine-verify.cjs
 // Temporary engine verification (bundled and run via node, then deleted).
 import { evaluatePath } from '../src/engine/geometry'
-import { buildRoadMesh } from '../src/engine/mesh'
+import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { importOpenDrive } from '../src/engine/opendrive'
 import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, invertTrack, linkTrackFunctions, bindTrackFunctions, trackTotalLength } from '../src/engine/tracks'
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
@@ -284,6 +284,39 @@ if (odr) {
       const end = evaluatePath(invPath, invPath.length)
       check('bezier inverted ends at old start', Math.hypot(end.x - farFrame.x, end.y - farFrame.y) < 0.05, `${end.x.toFixed(1)},${end.y.toFixed(1)}`)
       check('bezier inverted length preserved', Math.abs(invPath.length - denseLen) < 0.1)
+    }
+  }
+}
+
+// 20. Railway mesh (Train section): rails at ±(gauge/2 + railSize/2),
+// sleepers at the configured spacing, ballast as the widest strip.
+{
+  const trackPath = fitTrackPath({
+    id: 'rw', name: 'T',
+    points: [{ x: 0, y: 0 }, { x: 1, y: 0 }],
+    lanesLeft: 0, lanesRight: 0, laneWidth: 3.5,
+    functions: [{ kind: 'segment', length: 50 }],
+  })
+  check('railway path fits', !!trackPath)
+  if (trackPath) {
+    const cfg = { gauge: 1.435, railSize: 0.075, trackbedWidth: 3, sleeperSpacing: 0.65 }
+    const mesh = buildRailwayMesh(trackPath, cfg)
+    check('railway mesh builds', !!mesh)
+    if (mesh) {
+      // sleeper count for spacing 0.65 starting at spacing/2 over 50 m
+      const expectedSleepers = 77
+      // 3 strips (ballast + 2 rails) over 201 samples → 3*200*6 base indices
+      const sleeperQuads = (mesh.indices.length - 3 * 200 * 6) / 6
+      check('railway sleepers at spacing', Math.abs(sleeperQuads - expectedSleepers) <= 1, `got ${sleeperQuads}`)
+      // rail head vertices near ±(gauge/2 + railSize/2), raised above the ballast top
+      const railOffset = cfg.gauge / 2 + cfg.railSize / 2
+      let minRailDelta = Number.POSITIVE_INFINITY
+      for (let i = 0; i < mesh.positions.length; i += 3) {
+        const lateral = Math.abs(mesh.positions[i])
+        const height = mesh.positions[i + 1]
+        if (height > 0.3) minRailDelta = Math.min(minRailDelta, Math.abs(lateral - railOffset))
+      }
+      check('railway rails at gauge offset', minRailDelta < 0.02, `min delta ${minRailDelta.toFixed(4)}`)
     }
   }
 }

@@ -1,14 +1,23 @@
 import { Separator } from '@/components/ui/separator'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { TOOL_GROUPS, TOOL_ITEMS } from './tooling'
+import { LANE_TOOL_GROUPS, ROAD_TOOL_GROUPS, TOOL_ITEMS, TRAIN_TOOL_GROUPS } from './tooling'
 import type { Tool } from '../state/store'
 
-/** Left icon rail listing all road tools grouped by category. */
-export default function ToolRail({ tool, onChooseTool }: { tool: Tool; onChooseTool: (tool: Tool) => void }) {
+export type ToolSpace = 'road' | 'lane' | 'train'
+
+const GROUPS_BY_SPACE = {
+  road: ROAD_TOOL_GROUPS,
+  lane: LANE_TOOL_GROUPS,
+  train: TRAIN_TOOL_GROUPS,
+}
+
+/** Left icon rail listing the tools of the active workspace (road/lane/train). */
+export default function ToolRail({ tool, space, onChooseTool }: { tool: Tool; space: ToolSpace; onChooseTool: (tool: Tool) => void }) {
+  const groups = GROUPS_BY_SPACE[space]
   return (
-    <nav aria-label="Road tools" className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 overflow-y-auto border-r border-border bg-card/60 py-3">
-      {TOOL_GROUPS.map((group, groupIndex) => (
+    <nav aria-label={`${space} tools`} className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 overflow-y-auto border-r border-border bg-card/60 py-3">
+      {groups.map((group, groupIndex) => (
         <div key={group.label} className="flex flex-col items-center gap-0.5">
           {groupIndex > 0 && <Separator className="my-2 w-6" />}
           {group.tools.map((toolId) => {
