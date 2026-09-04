@@ -1,29 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import {
-  GitMerge,
-  Map as MapIcon,
-  MousePointer2,
-  Move,
-  MoveDiagonal,
-  PenLine,
-  Plus,
-  RefreshCw,
-  Scissors,
-  Slash,
-  Spline,
-  Trash2,
-  CornerDownLeft,
-  CornerDownRight,
-  Layers,
-  Footprints,
-  TrendingUp,
-  Route,
-  Circle,
-  Waves,
-  Waypoints,
-  FileUp,
-} from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
@@ -33,10 +9,9 @@ import type { MeshData } from '../engine/mesh'
 import type { Vec2 } from '../engine/types'
 import { useStore, uuid, getLaneSection } from '../state/store'
 import type { RoadData, RoadGeometryType, Tool } from '../state/store'
-import { makeDefaultSection, defaultLaneByType, laneLayout } from '../engine/laneLayout'
+import { defaultLaneByType, laneLayout, profileSection, sectionHalfWidth } from '../engine/laneLayout'
 import type { XYFunction, PolylineFunction } from '../engine/xyFunctions'
 import {
-  FUNCTION_COLORS,
   FUNCTION_LABELS,
   bezierConnector,
   convertPolylineToBezier,
@@ -44,10 +19,9 @@ import {
   convertPolylineToClothoidSpline,
   convertSplineToFunctions,
   functionEndFrame,
-  functionLength,
   functionRadiusOut,
   INFINITE_RADIUS,
-  mergeFunctions,
+  invertFunction,
   snapFrame,
   splitFunction,
 } from '../engine/xyFunctions'
@@ -71,7 +45,6 @@ import {
   allWays,
   authorizationKey,
   buildExitConnector,
-  computeWays,
   extractWaysFromIntersection,
   findTrackCrossing,
   makeIntersectionData,
@@ -80,24 +53,24 @@ import {
 } from '../engine/intersections'
 import { importOpenDrive } from '../engine/opendrive'
 import type { IntersectionData } from '../engine/intersections'
-import { terrainHeightAtGeo } from '../terrain/terrainRegistry'
+import { makeTerrainSampler } from '../terrain/terrainRegistry'
 import { buildOverlays } from '../roads/overlays'
-import SelectionPanel from '../roads/SelectionPanel'
 import { RoadsContextMenu } from '../roads/RoadsContextMenu'
 import type { ContextMenuItem } from '../roads/RoadsContextMenu'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import AppHeader from '@/components/layout/AppHeader'
 import RoadViewport from '../viewport/RoadViewport'
 import ElevationProfileEditor from '../elevation/ElevationProfileEditor'
-import LanesTab from '../lanes/LanesTab'
-import PortionProfileEditor from '../lanes/PortionProfileEditor'
+import ToolRail from '../editor/ToolRail'
+import EditorHeaderActions from '../editor/EditorHeaderActions'
+import DraftPointsToolbar from '../editor/DraftPointsToolbar'
+import ToolOptionsPanel from '../editor/ToolOptionsPanel'
+import SelectionTab from '../editor/sidebar/SelectionTab'
+import RoadsTab from '../editor/sidebar/RoadsTab'
+import NetworkTab from '../editor/sidebar/NetworkTab'
+import { useKeyboardShortcuts } from '../editor/useKeyboardShortcuts'
+import { distance, nearestJunction, toolHint } from '../editor/tooling'
 
 interface RoadMeshEntry {
   roadId: string
@@ -110,40 +83,9 @@ interface ExtendSession {
   start: Vec2
 }
 
-const TOOL_ITEMS: { tool: Tool; label: string; icon: typeof MousePointer2; color?: string }[] = [
-  { tool: 'select', label: 'Select', icon: MousePointer2 },
-  { tool: 'draw-straight', label: 'Insert Segment', icon: Slash, color: FUNCTION_COLORS.segment },
-  { tool: 'draw-arc', label: 'Insert Circle Arc', icon: Circle, color: FUNCTION_COLORS.arc },
-  { tool: 'draw-clothoid', label: 'Insert Clothoid Arc', icon: TrendingUp, color: FUNCTION_COLORS.clothoid },
-  { tool: 'draw-polyline', label: 'Insert Polyline', icon: PenLine, color: FUNCTION_COLORS.polyline },
-  { tool: 'draw-bezier', label: 'Insert Bezier', icon: Spline, color: FUNCTION_COLORS.bezier },
-  { tool: 'draw-spline', label: 'Insert ClothoidSpline', icon: Waves, color: FUNCTION_COLORS.clothoidSpline },
-  { tool: 'move', label: 'Move End', icon: Move },
-  { tool: 'extend', label: 'Extend', icon: MoveDiagonal },
-  { tool: 'split', label: 'Split', icon: Scissors },
-  { tool: 'delete', label: 'Delete', icon: Trash2 },
-  { tool: 'insert-intersection', label: 'Insert Intersection', icon: Waypoints, color: '#a3e635' },
-  { tool: 'junction', label: 'Junction', icon: GitMerge },
-  { tool: 'lane-begin', label: 'Begin Lane', icon: CornerDownLeft },
-  { tool: 'lane-end', label: 'End Lane', icon: CornerDownRight },
-  { tool: 'lane-insert', label: 'Insert Lane', icon: Plus },
-  { tool: 'lane-remove', label: 'Remove Lane', icon: Trash2 },
-  { tool: 'lane-border', label: 'Edit Border', icon: Layers },
-  { tool: 'lane-sidewalk', label: 'Add Sidewalk', icon: Footprints },
-]
-
-const TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
-  { label: 'Select', tools: ['select'] },
-  { label: 'Insert curves', tools: ['draw-straight', 'draw-arc', 'draw-clothoid', 'draw-polyline', 'draw-bezier', 'draw-spline'] },
-  { label: 'Modify', tools: ['move', 'extend', 'split', 'delete'] },
-  { label: 'Network', tools: ['insert-intersection', 'junction'] },
-  { label: 'Lanes', tools: ['lane-begin', 'lane-end', 'lane-insert', 'lane-remove', 'lane-border', 'lane-sidewalk'] },
-]
-
 export default function EditorPage({ onBack }: { onBack: () => void }) {
   const projects = useStore((state) => state.projects)
   const activeProjectId = useStore((state) => state.activeProjectId)
-  const closeProject = useStore((state) => state.closeProject)
   const addRoad = useStore((state) => state.addRoad)
   const updateRoad = useStore((state) => state.updateRoad)
   const replaceRoad = useStore((state) => state.replaceRoad)
@@ -158,7 +100,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const setGeoRef = useStore((state) => state.setGeoRef)
   const selection = useStore((state) => state.selection)
   const setSelection = useStore((state) => state.setSelection)
-  const toggleTrackSelection = useStore((state) => state.toggleTrackSelection)
   const editionConstraint = useStore((state) => state.editionConstraint)
   const setEditionConstraint = useStore((state) => state.setEditionConstraint)
   const layers = useStore((state) => state.layers)
@@ -270,7 +211,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   }, [project, layers.intersection3dGeneration])
 
   // ─── Draft preview (function-aware) ────────────────────────────────
-  const draftSection = useMemo(() => profileSection(insertOptions.defaultProfile, config.laneWidth), [insertOptions.defaultProfile, config.laneWidth])
+  const draftSection = useMemo(
+    () => profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight),
+    [insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight],
+  )
   const draftFnPreview = useMemo<XYFunction | null>(() => {
     const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
     if (all.length < 1) return null
@@ -393,27 +337,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   }
 
   // ─── Profile presets ("Default Profile") ───────────────────────────
-  function profileSection(profile: string, laneWidth: number) {
-    switch (profile) {
-      case 'highway': {
-        const side = [defaultLaneByType('hard_shoulder', 1.0), defaultLaneByType('travel', Math.max(3.4, laneWidth)), defaultLaneByType('travel', Math.max(3.4, laneWidth))]
-        return { left: side.map(cloneLane), right: side.map(cloneLane) }
-      }
-      case 'rural': {
-        const side = [defaultLaneByType('soft_shoulder', 1.5), defaultLaneByType('travel', laneWidth)]
-        return { left: side.map(cloneLane), right: side.map(cloneLane) }
-      }
-      case 'urban': {
-        const side = [defaultLaneByType('curb', 0.3), defaultLaneByType('travel', laneWidth), defaultLaneByType('sidewalk', 2)]
-        return { left: side.map(cloneLane), right: side.map(cloneLane) }
-      }
-      default:
-        return makeDefaultSection(config.lanesLeft, config.lanesRight, laneWidth)
-    }
-  }
-  function cloneLane(lane: ReturnType<typeof defaultLaneByType>) {
-    return { ...lane, id: `${lane.id}-${Math.random().toString(36).slice(2, 6)}` }
-  }
 
   // ─── Creating function-based roads ─────────────────────────────────
   function startFramePoints(frame: Frame): Vec2[] {
@@ -443,22 +366,21 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   function applyStickToTerrain(road: RoadData) {
     if (!insertOptions.stickToTerrain || !project) return
-    const geo = project.geoRef
-    const lng = geo?.lng ?? -95.36
-    const lat = geo?.lat ?? 29.76
-    const scale = geo?.scale ?? 1
-    const latRad = (lat * Math.PI) / 180
-    const metersPerDegLng = 111320 * Math.cos(latRad)
-    const sampler = (x: number, y: number) => terrainHeightAtGeo(lng + (x * scale) / metersPerDegLng, lat + (y * scale) / 111320)
+    stickRoadToTerrain(road, 'No background terrain covers this track. Load terrain in the Terrain workspace first.')
+  }
+
+  /** Shared altitude + banking picking for "Stick to Background Terrain". */
+  function stickRoadToTerrain(road: RoadData, missWarning: string) {
+    if (!project) return
+    const sampler = makeTerrainSampler(project.geoRef)
     const section = getLaneSection(road)
-    const halfWidth = Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
-    const result = stickTrackToTerrain({ ...road, elevationProfile: undefined }, sampler, halfWidth)
+    const result = stickTrackToTerrain({ ...road, elevationProfile: undefined }, sampler, sectionHalfWidth(section))
     if (result) {
       updateRoad(road.id, { elevationProfile: result.elevation, bankingProfile: result.banking })
       const maxBankDeg = result.banking.reduce((m, p) => Math.max(m, Math.abs((p.z * 180) / Math.PI)), 0)
       toast.success(`Track stuck to Background Terrain — altitude + banking picked (max cant ${maxBankDeg.toFixed(1)}°)`)
     } else {
-      toast.warning('No background terrain covers this track. Load terrain in the Terrain workspace first.')
+      toast.warning(missWarning)
     }
   }
 
@@ -488,7 +410,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       toast.error('Invalid OpenDRIVE file (XML parse error).')
       return
     }
-    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight)
     for (const road of result.roads) {
       addRoad({ ...road, laneSection: section, filletRadius: config.filletRadius })
     }
@@ -685,7 +607,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           const appended = [...inverted, fn.kind === 'clothoid' && fn.radiusIn === INFINITE_RADIUS
             ? { ...fn, radiusIn: functionRadiusOut(inverted[inverted.length - 1]) }
             : fn]
-          const restored = [...appended].reverse().map((f) => invertFunctionLocal(f))
+          const restored = [...appended].reverse().map((f) => invertFunction(f))
           updateRoad(road.id, { functions: restored })
           selectRoadOnly(road.id)
           toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name} (start)`)
@@ -697,18 +619,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       return
     }
     createFunctionRoad(frame, [fn])
-  }
-
-  function invertFunctionLocal(fn: XYFunction): XYFunction {
-    switch (fn.kind) {
-      case 'segment': return fn
-      case 'arc': return { ...fn, angle: -fn.angle }
-      // reversed clothoid: curvature negates → rIn_rev = -rOut, rOut_rev = -rIn
-      case 'clothoid': return { ...fn, radiusIn: -fn.radiusOut, radiusOut: -fn.radiusIn }
-      case 'polyline': return { ...fn, points: [...fn.points].reverse() }
-      case 'bezier': return { ...fn, p1: fn.p2, p2: fn.p1 }
-      case 'clothoidSpline': return { ...fn, points: [...fn.points].reverse() }
-    }
   }
 
   /** Extend / Move End on a function-based track (constraint aware). */
@@ -738,7 +648,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     for (const s of trackSlices({ ...road, points: invStartPoints, functions }) ?? []) {
       frame = functionEndFrame(s.start, s.fn)
     }
-    const restored = [...functions].reverse().map(invertFunctionLocal)
+    const restored = [...functions].reverse().map(invertFunction)
     updateRoad(road.id, { functions: restored, points: startFramePoints(frame) })
   }
 
@@ -971,7 +881,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         kind: tool === 'lane-begin' ? 'begin' : 'end',
         point,
         tangent: sample.heading,
-        halfWidth: getRoadHalfWidth(hit.road),
+        halfWidth: sectionHalfWidth(getLaneSection(hit.road)),
       })
       return
     }
@@ -1150,24 +1060,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   function stickSelectedToTerrain() {
     const road = selectedRoad
     if (!road || !project) return
-    const geo = project.geoRef
-    const lng = geo?.lng ?? -95.36
-    const lat = geo?.lat ?? 29.76
-    const scale = geo?.scale ?? 1
-    const latRad = (lat * Math.PI) / 180
-    const metersPerDegLng = 111320 * Math.cos(latRad)
-    const sampler = (x: number, y: number) => terrainHeightAtGeo(lng + (x * scale) / metersPerDegLng, lat + (y * scale) / 111320)
-    const full = ensureFunctions(road)
-    const section = getLaneSection(full)
-    const halfWidth = Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
-    const result = stickTrackToTerrain({ ...full, elevationProfile: undefined }, sampler, halfWidth)
-    if (result) {
-      updateRoad(road.id, { elevationProfile: result.elevation, bankingProfile: result.banking })
-      const maxBankDeg = result.banking.reduce((m, p) => Math.max(m, Math.abs((p.z * 180) / Math.PI)), 0)
-      toast.success(`Track stuck to Background Terrain — altitude + banking picked (max cant ${maxBankDeg.toFixed(1)}°)`)
-    } else {
-      toast.warning('No background terrain loaded. Download terrain in the Terrain workspace first.')
-    }
+    stickRoadToTerrain(ensureFunctions(road), 'No background terrain loaded. Download terrain in the Terrain workspace first.')
   }
 
   function linkSelectedTracks() {
@@ -1322,7 +1215,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
   function createExitLinkRoad(frame: Frame, functions: XYFunction[]) {
     if (!project) return
-    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight)
     addRoad({
       id: uuid(),
       name: `Exit Link ${project.roads.length + 1}`,
@@ -1399,12 +1292,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     const sinAngle = Math.max(0.2, crossing.angle)
     // Trim the arms back from the crossing (like the auto junction cut) so
     // the intersection interior has room for its ways, mesh and contours.
-    const halfWidth = (road: RoadData) => {
-      const section = getLaneSection(road)
-      return Math.max(1, (section.left.reduce((s, l) => s + l.width, 0) + section.right.reduce((s, l) => s + l.width, 0)) / 2)
-    }
-    const trimA = halfWidth(roadB) / sinAngle + 3
-    const trimB = halfWidth(roadA) / sinAngle + 3
+    const trimA = sectionHalfWidth(getLaneSection(roadB)) / sinAngle + 3
+    const trimB = sectionHalfWidth(getLaneSection(roadA)) / sinAngle + 3
 
     function trimArm(road: RoadData, contact: 'start' | 'end', trim: number): RoadData | null {
       const len = fitTrackPath(road)?.length ?? 0
@@ -1500,7 +1389,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       toast.error('No authorized ways to extract from this intersection.')
       return
     }
-    const section = profileSection(insertOptions.defaultProfile, config.laneWidth)
+    const section = profileSection(insertOptions.defaultProfile, config.laneWidth, config.lanesLeft, config.lanesRight)
     for (const track of result.wayTracks) {
       const start = track.functions[0].kind === 'polyline' ? track.functions[0].points[0] : { x: 0, y: 0 }
       const nextPt = track.functions[0].kind === 'polyline' ? track.functions[0].points[1] : start
@@ -1704,40 +1593,29 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   }
 
   // ─── Keyboard shortcuts ────────────────────────────────────────────
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement
-      if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return
-      if (event.key === 'Enter' && (tool === 'draw-polyline' || tool === 'draw-spline')) {
-        finishPointDraft()
+  useKeyboardShortcuts({
+    tool,
+    selection,
+    dragSnapRef,
+    onFinishPointDraft: finishPointDraft,
+    onEscape: () => {
+      setDraftPoints([])
+      setHoverPoint(null)
+      dragSnapRef.current = null
+      setContourHandleArmed(false)
+      setLaneGizmo(null)
+    },
+    onDeleteSelection: () => {
+      if (selection.intersectionId) {
+        deleteIntersectionById(selection.intersectionId)
+        setSelection({ ...selection, intersectionId: null })
+      } else if (selection.trackIds.length > 0) {
+        for (const id of selection.trackIds) deleteRoad(id)
+        setSelection({ trackIds: [], intersectionId: null, trackStation: null })
       }
-      if (event.key === 'Escape') {
-        setDraftPoints([])
-        setHoverPoint(null)
-        dragSnapRef.current = null
-        setContourHandleArmed(false)
-        setLaneGizmo(null)
-      }
-      if ((event.key === 'Delete' || event.key === 'Backspace') && tool === 'select') {
-        if (selection.intersectionId) {
-          deleteIntersectionById(selection.intersectionId)
-          setSelection({ ...selection, intersectionId: null })
-        } else if (selection.trackIds.length > 0) {
-          for (const id of selection.trackIds) deleteRoad(id)
-          setSelection({ trackIds: [], intersectionId: null, trackStation: null })
-        }
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
-        event.preventDefault()
-        linkIntersectionToTracks()
-      }
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'i') {
-        event.preventDefault()
-        invertAuthorizations()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    },
+    onLinkIntersectionToTracks: linkIntersectionToTracks,
+    onInvertAuthorizations: invertAuthorizations,
   })
 
   function finishPointDraft() {
@@ -1817,11 +1695,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     toast.success('Sidewalks and curbs added on both sides')
   }
 
-  function getRoadHalfWidth(road: RoadData): number {
-    const section = getLaneSection(road)
-    return Math.max(1, (section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)) / 2)
-  }
-
   /** The two gizmo arrow positions (doc: arrows toward track start/end). */
   function gizmoArrows(gizmo: NonNullable<typeof laneGizmo>): { key: 'before' | 'after'; point: Vec2; heading: number }[] {
     const nx = -Math.sin(gizmo.tangent)
@@ -1888,11 +1761,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return { s: nearest.s, t }
   }
 
-  function reverseSelectedRoad() {
-    if (!selectedRoad) return
-    invertSelectedOrientation()
-  }
-
   function renameRoad(name: string) {
     if (selectedRoad) updateRoad(selectedRoad.id, { name })
   }
@@ -1922,68 +1790,19 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         subtitle={`${project.roads.length} roads · ${activeJunctions.length} junctions · ${(project.intersections ?? []).length} intersections`}
         onBack={onBack}
       >
-        <div className="flex items-center rounded-md border border-border bg-background p-0.5">
-          <Button size="sm" variant={mode === '2d' ? 'default' : 'ghost'} className="h-7 px-3" onClick={() => setMode('2d')}>
-            2D
-          </Button>
-          <Button size="sm" variant={mode === '3d' ? 'default' : 'ghost'} className="h-7 px-3" onClick={() => setMode('3d')}>
-            3D
-          </Button>
-        </div>
-        <input ref={odrInputRef} type="file" accept=".xodr,.xml" className="hidden" onChange={handleOdrImport} />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 gap-1.5 px-3"
-          onClick={() => odrInputRef.current?.click()}
-          title="Import OpenDRIVE (.xodr) — roads and junctions with explicit ways"
-        >
-          <FileUp className="size-3.5" />
-          Import
-        </Button>
-        {mode === '2d' && (
-          <Button size="sm" variant={showMap ? 'default' : 'ghost'} className="h-7 gap-1.5 px-3" onClick={() => setShowMap((v) => !v)} title="Toggle satellite map background">
-            <MapIcon className="size-3.5" />
-            Map
-          </Button>
-        )}
+        <EditorHeaderActions
+          mode={mode}
+          onModeChange={setMode}
+          showMap={showMap}
+          onToggleMap={() => setShowMap((v) => !v)}
+          importInputRef={odrInputRef}
+          onImportClick={() => odrInputRef.current?.click()}
+          onImportFile={handleOdrImport}
+        />
       </AppHeader>
 
       <div className="flex min-h-0 flex-1">
-        {/* Tool rail */}
-        <nav aria-label="Road tools" className="flex w-12 shrink-0 flex-col items-center justify-start gap-0.5 overflow-y-auto border-r border-border bg-card/60 py-3">
-          {TOOL_GROUPS.map((group, groupIndex) => (
-            <div key={group.label} className="flex flex-col items-center gap-0.5">
-              {groupIndex > 0 && <Separator className="my-2 w-6" />}
-              {group.tools.map((toolId) => {
-                const item = TOOL_ITEMS.find((entry) => entry.tool === toolId)
-                if (!item) return null
-                const Icon = item.icon
-                const active = tool === item.tool
-                return (
-                  <Tooltip key={item.tool}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant={active ? 'default' : 'ghost'}
-                        size="icon-sm"
-                        aria-label={item.label}
-                        aria-pressed={active}
-                        onClick={() => chooseTool(item.tool)}
-                        className={item.color ? 'relative' : undefined}
-                      >
-                        <Icon className="size-4" style={item.color && !active ? { color: item.color } : undefined} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      <span>{item.label}</span>
-                      {item.color && <span className="ml-2 inline-block size-2 rounded-full align-middle" style={{ background: item.color }} />}
-                    </TooltipContent>
-                  </Tooltip>
-                )
-              })}
-            </div>
-          ))}
-        </nav>
+        <ToolRail tool={tool} onChooseTool={chooseTool} />
 
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
@@ -2011,76 +1830,24 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
             mapScale={project.geoRef?.scale ?? 1}
           />
 
-          {(draftPoints.length > 0 && ['draw-polyline', 'draw-spline'].includes(tool)) && (
-            <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur">
-              <span className="pl-1 text-xs text-muted-foreground">
-                {draftPoints.length} point{draftPoints.length === 1 ? '' : 's'}
-              </span>
-              <Button size="sm" className="h-7" disabled={draftPoints.length < 2} onClick={finishPointDraft}>
-                Finish
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7" onClick={() => { setDraftPoints([]); setHoverPoint(null); dragSnapRef.current = null }}>
-                Cancel
-              </Button>
-            </div>
+          {draftPoints.length > 0 && ['draw-polyline', 'draw-spline'].includes(tool) && (
+            <DraftPointsToolbar
+              count={draftPoints.length}
+              onFinish={finishPointDraft}
+              onCancel={() => { setDraftPoints([]); setHoverPoint(null); dragSnapRef.current = null }}
+            />
           )}
 
           {/* TOOL: Insert <function> panel (Stick to Background Terrain + Default Profile) */}
           {insertToolActive && (
-            <div className="absolute top-3 left-3 z-10 grid w-56 gap-2 rounded-lg border border-border bg-card/90 p-3 shadow-lg backdrop-blur">
-              <h3 className="text-[10px] font-bold tracking-wider text-muted-foreground uppercase">
-                TOOL: {TOOL_ITEMS.find((i) => i.tool === tool)?.label}
-              </h3>
-              <label className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={insertOptions.stickToTerrain}
-                  onChange={(e) => setInsertOptions({ stickToTerrain: e.target.checked })}
-                />
-                Stick to Background Terrain
-              </label>
-              <div className="grid gap-1">
-                <Label className="text-[11px] text-muted-foreground">Default Profile</Label>
-                <select
-                  className="h-7 rounded-md border border-border bg-background px-2 text-xs"
-                  value={insertOptions.defaultProfile}
-                  onChange={(e) => setInsertOptions({ defaultProfile: e.target.value as typeof insertOptions.defaultProfile })}
-                >
-                  <option value="travel">Travel (default)</option>
-                  <option value="highway">Highway (2+2, shoulders)</option>
-                  <option value="rural">Rural (shoulders)</option>
-                  <option value="urban">Urban (sidewalks)</option>
-                </select>
-              </div>
-              {tool === 'draw-clothoid' && (
-                <>
-                  <div className="grid gap-1">
-                    <Label className="text-[11px] text-muted-foreground">Radius Out (0 = infinite)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      className="h-7 text-xs"
-                      value={config.clothoidRadiusOut}
-                      onChange={(e) => setConfig({ clothoidRadiusOut: Math.max(0, Number.parseFloat(e.target.value) || 0) })}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-1">
-                    <Button size="sm" variant={config.clothoidTurn === 'left' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setConfig({ clothoidTurn: 'left' })}>
-                      Left
-                    </Button>
-                    <Button size="sm" variant={config.clothoidTurn === 'right' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setConfig({ clothoidTurn: 'right' })}>
-                      Right
-                    </Button>
-                  </div>
-                </>
-              )}
-              {draftPath && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Draft length</span>
-                  <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
-                </div>
-              )}
-            </div>
+            <ToolOptionsPanel
+              tool={tool}
+              insertOptions={insertOptions}
+              config={config}
+              draftLength={draftPath?.length ?? null}
+              onInsertOptionsChange={setInsertOptions}
+              onConfigChange={setConfig}
+            />
           )}
 
           {contourHandleArmed && (
@@ -2103,7 +1870,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
             <ScrollArea className="min-h-0 flex-1">
               <TabsContent value="selection" className="grid gap-4 p-4">
-                <SelectionPanel
+                <SelectionTab
                   selectedRoad={selectedRoad}
                   selectedStation={selection.trackStation}
                   roadLength={selectedRoadLength}
@@ -2157,236 +1924,53 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                     }
                   }}
                   onUnlinkIntersection={unlinkIntersection}
+                  config={config}
+                  geoRef={project.geoRef}
+                  onConfigChange={setConfig}
+                  onUpdateRoad={(patch) => selectedRoad && updateRoad(selectedRoad.id, patch)}
+                  onGeoRefChange={setGeoRef}
                 />
-
-                <Separator />
-
-                {/* Model parameters for the selected road (lanes etc.) */}
-                {selectedRoad ? (
-                  <div className="grid gap-3">
-                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Model</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="grid gap-1.5">
-                        <Label htmlFor="lanes-left">Lanes left</Label>
-                        <Input id="lanes-left" type="number" min={0} max={6} value={selectedRoad.lanesLeft}
-                          onChange={(event) => updateRoad(selectedRoad.id, { lanesLeft: clampInt(event.target.value, 0, 6, 0) })} />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label htmlFor="lanes-right">Lanes right</Label>
-                        <Input id="lanes-right" type="number" min={0} max={6} value={selectedRoad.lanesRight}
-                          onChange={(event) => updateRoad(selectedRoad.id, { lanesRight: clampInt(event.target.value, 0, 6, 0) })} />
-                      </div>
-                    </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="lane-width">Lane width (m)</Label>
-                      <Input id="lane-width" type="number" min={2} max={5} step={0.25} value={selectedRoad.laneWidth}
-                        onChange={(event) => updateRoad(selectedRoad.id, { laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-3">
-                    <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">New Road</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="grid gap-1.5">
-                        <Label htmlFor="new-lanes-left">Lanes left</Label>
-                        <Input id="new-lanes-left" type="number" min={0} max={6} value={config.lanesLeft}
-                          onChange={(event) => setConfig({ lanesLeft: clampInt(event.target.value, 0, 6, 1) })} />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label htmlFor="new-lanes-right">Lanes right</Label>
-                        <Input id="new-lanes-right" type="number" min={0} max={6} value={config.lanesRight}
-                          onChange={(event) => setConfig({ lanesRight: clampInt(event.target.value, 0, 6, 1) })} />
-                      </div>
-                    </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="new-lane-width">Lane width (m)</Label>
-                      <Input id="new-lane-width" type="number" min={2} max={5} step={0.25} value={config.laneWidth}
-                        onChange={(event) => setConfig({ laneWidth: clampNumber(event.target.value, 2, 5, 3.5) })} />
-                    </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="new-fillet">Corner radius (m)</Label>
-                      <Input id="new-fillet" type="number" min={5} max={300} step={5} value={config.filletRadius}
-                        onChange={(event) => setConfig({ filletRadius: clampNumber(event.target.value, 5, 300, 50) })} />
-                    </div>
-                  </div>
-                )}
-
-                <Separator />
-
-                {/* Geographic Reference — for map background alignment */}
-                <div className="grid gap-3">
-                  <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Map Location</h3>
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Set the geographic center so the satellite map aligns with your roads. The origin (0,0) in world space maps to this lat/lng.
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="geo-lng">Longitude</Label>
-                      <Input id="geo-lng" type="number" step={0.0001} value={project.geoRef?.lng ?? -95.36}
-                        onChange={(event) => setGeoRef({ lng: parseFloat(event.target.value) || 0, lat: project.geoRef?.lat ?? 29.76, scale: project.geoRef?.scale ?? 1 })} />
-                    </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="geo-lat">Latitude</Label>
-                      <Input id="geo-lat" type="number" step={0.0001} value={project.geoRef?.lat ?? 29.76}
-                        onChange={(event) => setGeoRef({ lng: project.geoRef?.lng ?? -95.36, lat: parseFloat(event.target.value) || 0, scale: project.geoRef?.scale ?? 1 })} />
-                    </div>
-                  </div>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="geo-scale">Scale (meters per world unit)</Label>
-                    <Input id="geo-scale" type="number" step={0.1} min={0.1} value={project.geoRef?.scale ?? 1}
-                      onChange={(event) => setGeoRef({ lng: project.geoRef?.lng ?? -95.36, lat: project.geoRef?.lat ?? 29.76, scale: parseFloat(event.target.value) || 1 })} />
-                  </div>
-                </div>
               </TabsContent>
 
               <TabsContent value="roads" className="grid gap-1.5 p-4">
-                {project.roads.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No roads yet. Pick an insert tool and drag on the canvas.</p>
-                ) : (
-                  <ul className="grid gap-1">
-                    {project.roads.map((road) => (
-                      <li key={road.id} className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          className={
-                            selection.trackIds.includes(road.id)
-                              ? 'flex min-w-0 flex-1 items-center justify-between rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-left text-xs'
-                              : 'flex min-w-0 flex-1 items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-xs hover:bg-accent'
-                          }
-                          onClick={(event) => {
-                            if (event.ctrlKey || event.metaKey) {
-                              setSelection({
-                                trackIds: selection.trackIds.includes(road.id)
-                                  ? selection.trackIds.filter((id) => id !== road.id)
-                                  : [...selection.trackIds, road.id],
-                                // keep the intersection selected so Ctrl+L keeps working
-                                intersectionId: selection.intersectionId,
-                                trackStation: null,
-                              })
-                            } else {
-                              selectRoadOnly(road.id)
-                            }
-                          }}
-                        >
-                          <span className="truncate font-medium">
-                            {road.name}
-                            {road.functions && road.functions.length > 0 && (
-                              <span className="ml-1 text-[10px] text-muted-foreground">
-                                ({(road.functions ?? []).map((f) => FUNCTION_LABELS[f.kind][0]).join('')})
-                              </span>
-                            )}
-                          </span>
-                          <span className="ml-2 shrink-0 text-muted-foreground">
-                            {(roadLengths.get(road.id) ?? 0).toFixed(1)} m
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <Separator className="my-2" />
-                <p className="text-[11px] leading-relaxed text-muted-foreground">{toolHint(tool)}</p>
-                {draftPath && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Draft length</span>
-                    <b className="font-medium text-primary">{draftPath.length.toFixed(1)} m</b>
-                  </div>
-                )}
+                <RoadsTab
+                  roads={project.roads}
+                  selectedIds={selection.trackIds}
+                  roadLengths={roadLengths}
+                  tool={tool}
+                  draftLength={draftPath?.length ?? null}
+                  onRoadClick={(roadId, additive) => {
+                    if (additive) {
+                      setSelection({
+                        trackIds: selection.trackIds.includes(roadId)
+                          ? selection.trackIds.filter((id) => id !== roadId)
+                          : [...selection.trackIds, roadId],
+                        // keep the intersection selected so Ctrl+L keeps working
+                        intersectionId: selection.intersectionId,
+                        trackStation: null,
+                      })
+                    } else {
+                      selectRoadOnly(roadId)
+                    }
+                  }}
+                />
               </TabsContent>
 
               <TabsContent value="network" className="grid gap-2 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <Badge variant="muted">{activeJunctions.length} junctions</Badge>
-                  <Button size="sm" variant="outline" onClick={regenerateJunctions}>
-                    <RefreshCw className="size-3.5" />
-                    Clean up
-                  </Button>
-                </div>
-
-                <h3 className="mt-2 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Intersections</h3>
-                {(project.intersections ?? []).length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    None yet. Use Insert Intersection, or select two crossing tracks → Detect Intersection.
-                  </p>
-                ) : (
-                  <ul className="grid gap-1.5">
-                    {(project.intersections ?? []).map((node) => (
-                      <li key={node.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
-                        <button
-                          type="button"
-                          className={
-                            selection.intersectionId === node.id
-                              ? 'grid min-w-0 flex-1 gap-0.5 rounded text-left text-xs text-primary'
-                              : 'grid min-w-0 flex-1 gap-0.5 text-left text-xs'
-                          }
-                          onClick={() => setSelection({ trackIds: [], intersectionId: node.id, trackStation: null })}
-                        >
-                          <span className="truncate font-medium">{node.id}</span>
-                          <span className="text-muted-foreground">{node.trackEnds.length} tracks · {Object.values(node.authorizations).filter((v) => !v).length} denied</span>
-                        </button>
-                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => deleteIntersectionById(node.id)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <h3 className="mt-2 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Auto junctions</h3>
-                {junctions.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No road overlaps detected.</p>
-                ) : (
-                  <ul className="grid gap-1.5">
-                    {junctions.map((junction) => (
-                      <li key={junction.id} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
-                        <div className="grid min-w-0 flex-1 gap-0.5 text-xs">
-                          <span className="truncate font-medium">{junction.id}</span>
-                          <span className="text-muted-foreground">{junction.connectingRoads.length} connections</span>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant={junction.suppressed ? 'default' : 'ghost'}
-                          className="h-7 px-2.5 text-xs"
-                          onClick={() => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
-                        >
-                          {junction.suppressed ? 'Create' : 'Detach'}
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <Separator className="my-2" />
-
-                <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Layers</h3>
-                <div className="grid gap-1.5">
-                  {([
-                    ['roadLogicalContent', 'Road Logical Content (axes)'],
-                    ['road3dGeneration', 'Road 3D Generation'],
-                    ['intersectionLogicalContent', 'Intersection Logical Content'],
-                    ['intersection3dGeneration', 'Intersection 3D Generation'],
-                    ['wayAxis', 'Way Axis'],
-                    ['wayLogicalContents', 'Way Logical Contents'],
-                    ['otherSubNetworks', 'Other Sub Networks (exits)'],
-                  ] as const).map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 text-xs">
-                      <input type="checkbox" checked={layers[key]} onChange={(e) => setLayer(key, e.target.checked)} />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-
-                <Separator className="my-2" />
-
-                <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Lanes</h3>
-                {selectedRoad ? (
-                  <>
-                    <LanesTab road={selectedRoad} />
-                    <PortionProfileEditor road={selectedRoad} length={roadLengths.get(selectedRoad.id) ?? 0} />
-                  </>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Select a road to edit its lanes.</p>
-                )}
+                <NetworkTab
+                  intersections={project.intersections ?? []}
+                  junctions={junctions}
+                  activeJunctionCount={activeJunctions.length}
+                  layers={layers}
+                  selectedIntersectionId={selection.intersectionId}
+                  selectedRoad={selectedRoad}
+                  selectedRoadLength={selectedRoad ? roadLengths.get(selectedRoad.id) ?? 0 : 0}
+                  onSelectIntersection={(id) => setSelection({ trackIds: [], intersectionId: id, trackStation: null })}
+                  onDeleteIntersection={deleteIntersectionById}
+                  onToggleJunction={(junction) => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
+                  onRegenerateJunctions={regenerateJunctions}
+                  onSetLayer={setLayer}
+                />
               </TabsContent>
             </ScrollArea>
           </Tabs>
@@ -2413,55 +1997,4 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       )}
     </div>
   )
-}
-
-function nearestJunction(junctions: ReturnType<typeof buildJunctionNetwork>['junctions'], point: Vec2) {
-  let best = null
-  let bestDistance = Number.POSITIVE_INFINITY
-  for (const junction of junctions) {
-    const nextDistance = distance(junction.position, point)
-    if (nextDistance < bestDistance) {
-      best = junction
-      bestDistance = nextDistance
-    }
-  }
-  return bestDistance <= 15 ? best : null
-}
-
-function toolHint(tool: Tool): string {
-  return {
-    select: 'Click a track or intersection to select it. Ctrl+click for multi-select. Right-click for actions. Double-click a way to lock its passageway.',
-    'draw-straight': 'Insert Segment: hold left mouse, drag, and release. Start near a track extremity to attach automatically.',
-    'draw-arc': 'Insert Circle Arc: click start, a through point, then the endpoint.',
-    'draw-clothoid': 'Insert Clothoid Arc: drag from start to end. Set radius out and turn direction in the TOOL panel (radius continuity is kept when attaching).',
-    'draw-polyline': 'Insert Polyline: click each vertex; Enter or Finish to complete.',
-    'draw-bezier': 'Insert Bezier: click the start, then the end — control points keep tangent continuity.',
-    'draw-spline': 'Insert ClothoidSpline: click control points; Enter or Finish to complete.',
-    move: 'Move End: drag an existing track endpoint to a new position.',
-    extend: 'Extend: drag from either endpoint of an existing track. Edition constrain (Free / Fixed Radius / Fixed Length) applies to arcs.',
-    split: 'Split: click a track to cut it where you clicked.',
-    delete: 'Delete: click a track or intersection to delete it.',
-    'insert-intersection': 'Insert Intersection: click to place a yellow node, then select tracks and press Ctrl+L to link.',
-    junction: 'Click a detected junction to detach or recreate it.',
-    'lane-begin': 'Begin Lane: click a lane — a gizmo appears; click an arrow to start the new lane toward that direction (express lane over speed × 2 s).',
-    'lane-end': 'End Lane: click a lane — a gizmo appears; click an arrow to end the lane toward that direction.',
-    'lane-insert': 'Click on a lane to select it. The next click inserts a new lane next to it.',
-    'lane-remove': 'Click on a lane to remove it.',
-    'lane-border': 'Click a road to select it, then drag a border to adjust its height (off-road feedback).',
-    'lane-sidewalk': 'Click a road to add a sidewalk and curb on the selected side.',
-  }[tool]
-}
-
-function clampInt(value: string, min: number, max: number, fallback: number): number {
-  const parsed = Number.parseInt(value, 10)
-  return Number.isNaN(parsed) ? fallback : Math.max(min, Math.min(max, parsed))
-}
-
-function clampNumber(value: string, min: number, max: number, fallback: number): number {
-  const parsed = Number.parseFloat(value)
-  return Number.isNaN(parsed) ? fallback : Math.max(min, Math.min(max, parsed))
-}
-
-function distance(a: Vec2, b: Vec2): number {
-  return Math.hypot(a.x - b.x, a.y - b.y)
 }

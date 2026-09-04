@@ -4,7 +4,7 @@
 import type { OverlayLine, OverlayMarker } from '../viewport/RoadViewport'
 import type { Project, RoadData, LayerFlags } from '../state/store'
 import type { IntersectionData, IntersectionWay } from '../engine/intersections'
-import { allWays, computeContours, resolveTracks } from '../engine/intersections'
+import { allWays, computeContours, computeWays, resolveTracks } from '../engine/intersections'
 import { FUNCTION_COLORS } from '../engine/xyFunctions'
 import { trackSlices, trackStartFrame, fitTrackPath } from '../engine/tracks'
 import { samplePath, samplePathRange } from '../engine/geometry'

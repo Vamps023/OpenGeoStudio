@@ -190,3 +190,40 @@ export function totalLanes(section: LaneSectionDef): number {
 export function totalWidth(section: LaneSectionDef): number {
   return section.left.reduce((a, l) => a + l.width, 0) + section.right.reduce((a, l) => a + l.width, 0)
 }
+
+/** Mean lane width, clamped so junction trims and terrain sticks never hit zero. */
+export function sectionHalfWidth(section: LaneSectionDef): number {
+  return Math.max(1, totalWidth(section) / 2)
+}
+
+/**
+ * Preset lane sections for the "Default Profile" insert option
+ * (doc: highway / rural / urban profiles, travel fallback).
+ */
+export function profileSection(
+  profile: string,
+  laneWidth: number,
+  fallbackLanesLeft: number,
+  fallbackLanesRight: number,
+): LaneSectionDef {
+  switch (profile) {
+    case 'highway': {
+      const side = [defaultLaneByType('hard_shoulder', 1.0), defaultLaneByType('travel', Math.max(3.4, laneWidth)), defaultLaneByType('travel', Math.max(3.4, laneWidth))]
+      return { left: side.map(cloneLane), right: side.map(cloneLane) }
+    }
+    case 'rural': {
+      const side = [defaultLaneByType('soft_shoulder', 1.5), defaultLaneByType('travel', laneWidth)]
+      return { left: side.map(cloneLane), right: side.map(cloneLane) }
+    }
+    case 'urban': {
+      const side = [defaultLaneByType('curb', 0.3), defaultLaneByType('travel', laneWidth), defaultLaneByType('sidewalk', 2)]
+      return { left: side.map(cloneLane), right: side.map(cloneLane) }
+    }
+    default:
+      return makeDefaultSection(fallbackLanesLeft, fallbackLanesRight, laneWidth)
+  }
+}
+
+function cloneLane(lane: LaneDef): LaneDef {
+  return { ...lane, id: `${lane.id}-${Math.random().toString(36).slice(2, 6)}`}
+}

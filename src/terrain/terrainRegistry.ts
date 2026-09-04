@@ -36,3 +36,16 @@ export function terrainHeightAtGeo(lng: number, lat: number): number | null {
     at(x0 + 1, y0 + 1) * tx * ty
   return Number.isFinite(h) ? h : null
 }
+
+/**
+ * Build a world (x, y) → terrain height sampler for a project's geo
+ * reference (world origin maps to lng/lat, scaled meters per world unit).
+ */
+export function makeTerrainSampler(geoRef?: { lng?: number; lat?: number; scale?: number }) {
+  const lng = geoRef?.lng ?? -95.36
+  const lat = geoRef?.lat ?? 29.76
+  const scale = geoRef?.scale ?? 1
+  const latRad = (lat * Math.PI) / 180
+  const metersPerDegLng = 111320 * Math.cos(latRad)
+  return (x: number, y: number) => terrainHeightAtGeo(lng + (x * scale) / metersPerDegLng, lat + (y * scale) / 111320)
+}
