@@ -81,6 +81,7 @@ export default function TerrainWorkspace() {
   const projects = useStore((s) => s.projects)
   const activeProjectId = useStore((s) => s.activeProjectId)
   const setGeoRef = useStore((s) => s.setGeoRef)
+  const setProjectTerrain = useStore((s) => s.setProjectTerrain)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [selectedBounds, setSelectedBounds] = useState<GeoBounds | null>(null)
@@ -240,7 +241,8 @@ export default function TerrainWorkspace() {
         }
         setTerrain(terrainData)
         // Register for cross-page sampling (Stick to Background Terrain)
-        setActiveTerrain(terrainData)
+        // and persist on the project so Save/Reopen keeps the terrain
+        setProjectTerrain(terrainData)
         setProgress(null)
         setView('3d')
       }

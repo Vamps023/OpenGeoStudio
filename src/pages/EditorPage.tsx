@@ -78,6 +78,7 @@ import SelectionTab from '../editor/sidebar/SelectionTab'
 import RoadsTab from '../editor/sidebar/RoadsTab'
 import NetworkTab from '../editor/sidebar/NetworkTab'
 import TrainTab from '../editor/sidebar/TrainTab'
+import SidewalkPanel from '../editor/sidebar/SidewalkPanel'
 import type { ToolSpace } from '../editor/ToolRail'
 import { useKeyboardShortcuts } from '../editor/useKeyboardShortcuts'
 import { distance, nearestJunction, toolHint } from '../editor/tooling'
@@ -2259,8 +2260,9 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           ) : section === 'road' ? (
           <Tabs defaultValue="lanes" className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="lanes">Lanes</TabsTrigger>
+                <TabsTrigger value="sidewalks">Sidewalks</TabsTrigger>
                 <TabsTrigger value="roads">Roads</TabsTrigger>
               </TabsList>
             </div>
@@ -2273,6 +2275,13 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground">Select a road to edit its lanes.</p>
+                )}
+              </TabsContent>
+              <TabsContent value="sidewalks" className="grid gap-4 p-4">
+                {selectedRoad ? (
+                  <SidewalkPanel road={selectedRoad} />
+                ) : (
+                  <p className="text-xs text-muted-foreground">Select a road to add sidewalks and curbs along its alignment.</p>
                 )}
               </TabsContent>
               <TabsContent value="roads" className="grid gap-1.5 p-4">

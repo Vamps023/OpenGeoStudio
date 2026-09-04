@@ -5,6 +5,9 @@ import type { LaneSectionDef } from '../engine/laneTypes'
 import { makeDefaultSection, totalLanes, totalWidth } from '../engine/laneLayout'
 import type { XYFunction } from '../engine/xyFunctions'
 import type { IntersectionData } from '../engine/intersections'
+import { decodeTerrain, encodeTerrain, type StoredTerrain } from '../terrain/terrainCodec'
+import { setActiveTerrain } from '../terrain/terrainRegistry'
+import type { TerrainData } from '../engine/terrainMesh'
 
 export type RoadGeometryType = 'straight' | 'polyline' | 'arc'
 
@@ -137,6 +140,8 @@ export interface Project {
   railPoints?: RailPoint[]
   railCrossings?: RailCrossing[]
   catchPoints?: CatchPoint[]
+  /** persisted DEM so a reopened project keeps its terrain (base64 Float32) */
+  terrain?: StoredTerrain
 }
 
 export type Tool =
@@ -233,6 +238,8 @@ interface OgsState {
   removeRailCrossingById: (id: string) => void
   addCatchPoint: (catchPoint: CatchPoint) => void
   removeCatchPointById: (id: string) => void
+  /** persist (or clear) the project's background terrain and activate it */
+  setProjectTerrain: (terrain: TerrainData | null) => void
   // Lane operations (mutate the active road's laneSection)
   insertLaneAt: (roadId: string, side: 'left' | 'right', index: number, lane: import('../engine/laneTypes').LaneDef) => void
   removeLaneAt: (roadId: string, side: 'left' | 'right', index: number) => void
@@ -300,7 +307,12 @@ function loadProjectsLocal(): Project[] {
 }
 
 function persistLocal(projects: Project[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
+  } catch {
+    // localStorage quota exceeded (large DEM payloads) — the Electron file
+    // save is the source of truth in the desktop app
+  }
 }
 
 // ─── File-based persistence via Electron IPC ───
@@ -317,22 +329,23 @@ async function loadProjectsFromDisk(): Promise<Project[]> {
   try {
     const result = await window.ogs.listProjects()
     if (!result.success || !result.projects) return loadProjectsLocal()
+    // keep every persisted field (geoRef, terrain, rail fixtures, portions,
+    // tapers, ...) — only normalize the structural ones below
     return result.projects.map((p) => {
       const { dirName, projectDir, ...projectData } = p
       void dirName
       void projectDir
+      const data = projectData as unknown as Project
       return {
-        id: projectData.id as string,
-        name: projectData.name as string,
-        createdAt: projectData.createdAt as string,
-        roads: Array.isArray(projectData.roads)
-          ? (projectData.roads as RoadData[]).map((road) => ({
+        ...data,
+        roads: Array.isArray(data.roads)
+          ? (data.roads as RoadData[]).map((road) => ({
             ...road,
             laneSection: road.laneSection ?? makeDefaultSection(road.lanesLeft ?? 1, road.lanesRight ?? 1, road.laneWidth ?? 3.5),
           }))
           : [],
-        suppressedJunctions: Array.isArray(projectData.suppressedJunctions) ? projectData.suppressedJunctions as string[] : [],
-        intersections: Array.isArray(projectData.intersections) ? (projectData.intersections as IntersectionData[]) : [],
+        suppressedJunctions: Array.isArray(data.suppressedJunctions) ? data.suppressedJunctions : [],
+        intersections: Array.isArray(data.intersections) ? data.intersections : [],
       }
     })
   } catch {
@@ -438,7 +451,14 @@ export const useStore = create<OgsState>((set, get) => ({
     void saveProjectToFile(project)
   },
 
-  openProject: (id) => set({ activeProjectId: id, history: { past: [], future: [] } }),
+  openProject: (id) => {
+    const project = get().projects.find((p) => p.id === id)
+    if (project?.terrain) {
+      const terrain = decodeTerrain(project.terrain)
+      if (terrain) setActiveTerrain(terrain)
+    }
+    set({ activeProjectId: id, history: { past: [], future: [] } })
+  },
   closeProject: () => set({ activeProjectId: null, history: { past: [], future: [] } }),
 
   undo: () => {
@@ -529,6 +549,13 @@ export const useStore = create<OgsState>((set, get) => ({
     ...project,
     catchPoints: (project.catchPoints ?? []).filter((item) => item.id !== id),
   })),
+  setProjectTerrain: (terrain) => {
+    if (terrain) setActiveTerrain(terrain)
+    updateActiveProject(get, set, (project) => ({
+      ...project,
+      terrain: terrain ? encodeTerrain(terrain) : undefined,
+    }))
+  },
 
   // Lane operations - operate on the active road's laneSection.
   // They ensure the section is materialized first, then mutate it.
