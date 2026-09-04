@@ -88,6 +88,76 @@ export function buildTerrainMesh(
   return { positions, normals, colors, indices, width, height }
 }
 
+/**
+ * Build a terrain mesh in the roads' world space so the 3D Studio shows
+ * terrain and roads aligned: world (x, y) maps to lng/lat through the
+ * project geo reference (origin at lng/lat, scale meters per world unit,
+ * north = +y → three.js -z). The grid is decimated to maxCells per side.
+ */
+export function buildTerrainMeshWorld(
+  terrain: TerrainData,
+  geoRef?: { lng?: number; lat?: number; scale?: number },
+  maxCells = 400,
+): TerrainMeshData | null {
+  const { elevations, width, height, bounds, minElevation, maxElevation } = terrain
+  if (width < 2 || height < 2) return null
+
+  const lng0 = geoRef?.lng ?? -95.36
+  const lat0 = geoRef?.lat ?? 29.76
+  const scale = geoRef?.scale ?? 1
+  const latRad = (lat0 * Math.PI) / 180
+  const metersPerDegLng = 111320 * Math.cos(latRad)
+  const worldX = (lng: number) => ((lng - lng0) * metersPerDegLng) / scale
+  const worldY = (lat: number) => ((lat - lat0) * 111320) / scale
+
+  // decimate so large DEMs stay interactive
+  const stride = Math.max(1, Math.ceil(Math.max(width - 1, height - 1) / maxCells))
+  const gw = Math.floor((width - 1) / stride) + 1
+  const gh = Math.floor((height - 1) / stride) + 1
+  const elevationRange = Math.max(1e-6, maxElevation - minElevation)
+
+  const positions = new Float32Array(gw * gh * 3)
+  const normals = new Float32Array(gw * gh * 3)
+  const colors = new Float32Array(gw * gh * 3)
+
+  for (let gy = 0; gy < gh; gy++) {
+    const lat = bounds.north + ((bounds.south - bounds.north) * (gy * stride)) / (height - 1)
+    for (let gx = 0; gx < gw; gx++) {
+      const lng = bounds.west + ((bounds.east - bounds.west) * (gx * stride)) / (width - 1)
+      const elevation = elevations[gy * stride * width + gx * stride]
+      const normalized = (elevation - minElevation) / elevationRange
+      const i = gy * gw + gx
+      positions[i * 3] = worldX(lng)
+      positions[i * 3 + 1] = elevation
+      positions[i * 3 + 2] = -worldY(lat)
+      // green→brown→gray elevation gradient
+      colors[i * 3] = 0.18 + normalized * 0.34
+      colors[i * 3 + 1] = 0.32 + normalized * 0.14
+      colors[i * 3 + 2] = 0.14 + normalized * 0.16
+    }
+  }
+
+  const indices = new Uint32Array((gw - 1) * (gh - 1) * 6)
+  let idx = 0
+  for (let gy = 0; gy < gh - 1; gy++) {
+    for (let gx = 0; gx < gw - 1; gx++) {
+      const a = gy * gw + gx
+      const b = a + 1
+      const c = a + gw
+      const d = c + 1
+      indices[idx++] = a
+      indices[idx++] = c
+      indices[idx++] = b
+      indices[idx++] = b
+      indices[idx++] = c
+      indices[idx++] = d
+    }
+  }
+
+  computeNormals(positions, indices, normals)
+  return { positions, normals, colors, indices, width: gw, height: gh }
+}
+
 function computeNormals(positions: Float32Array, indices: Uint32Array, normals: Float32Array) {
   normals.fill(0)
   const v0 = [0, 0, 0]

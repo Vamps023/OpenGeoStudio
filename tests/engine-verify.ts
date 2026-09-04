@@ -2,13 +2,15 @@
 // intersection modules. Run with:
 //   npx esbuild tests/engine-verify.ts --bundle --platform=node --format=cjs //     --outfile=node_modules/.cache/engine-verify.cjs --external:zustand && node node_modules/.cache/engine-verify.cjs
 // Temporary engine verification (bundled and run via node, then deleted).
-import { sampleFunction, functionLength, splitFunction, mergeFunctions, convertSplineToFunctions, bezierConnector, functionEndFrame, FUNCTION_COLORS } from '../src/engine/xyFunctions'
-import { stickTrackToTerrain } from '../src/engine/tracks'
+import { evaluatePath } from '../src/engine/geometry'
+import { buildRoadMesh } from '../src/engine/mesh'
 import { importOpenDrive } from '../src/engine/opendrive'
 import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, invertTrack, linkTrackFunctions, bindTrackFunctions, trackTotalLength } from '../src/engine/tracks'
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
-import { evaluatePath } from '../src/engine/geometry'
+import { sampleFunction, functionLength, splitFunction, mergeFunctions, convertSplineToFunctions, bezierConnector, bezierAt, functionEndFrame, FUNCTION_COLORS } from '../src/engine/xyFunctions'
+import { stickTrackToTerrain } from '../src/engine/tracks'
 import type { XYFunction, Frame } from '../src/engine/xyFunctions'
+import type { Vec2 } from '../src/engine/types'
 import type { RoadData } from '../src/state/store'
 
 let failures = 0
@@ -204,8 +206,86 @@ if (odr) {
   check('odr junction with explicit ways', odr.intersections.length === 1 && (odr.intersections![0].explicitWays?.length ?? 0) >= 1)
   check('odr explicit ways flagged', (odr.intersections![0].explicitWays![0] as { explicit: boolean }).explicit === true)
 }
+}
 
 
+// 19. ClothoidSpline / Bezier mesh pipeline: lengths and fitted paths must
+// stay inside the control polygon — no straight extrapolation tails, and
+// bezier length must be measured from the curve's real start, not the origin.
+{
+  const splinePoints: Vec2[] = [
+    { x: 1000, y: 2000 }, { x: 1040, y: 2030 }, { x: 1090, y: 2020 }, { x: 1120, y: 2060 },
+  ]
+  const splineRoad = {
+    id: 'spline-1', name: 'S', points: [{ x: splinePoints[0].x, y: splinePoints[0].y }],
+    lanesLeft: 1, lanesRight: 1, laneWidth: 3.5,
+    functions: [{ kind: 'clothoidSpline', points: splinePoints, tolerance: 0.5, symmetryThreshold: 1 } as never],
+  }
+  const splinePath = fitTrackPath(splineRoad)
+  check('spline path fits', !!splinePath)
+  if (splinePath) {
+    const last = splinePoints[splinePoints.length - 1]
+    const end = evaluatePath(splinePath, splinePath.length)
+    check('spline path ends on last control point', Math.hypot(end.x - last.x, end.y - last.y) < 0.05, `${Math.hypot(end.x - last.x, end.y - last.y).toFixed(3)}`)
+    // no mesh sample may overshoot past the last control point (the 1.02 tail bug)
+    const mesh = buildRoadMesh(splinePath, { left: [{ id: 'l', type: 'travel', width: 3.5, speedLimit: 0, circulation: 'both' as const, vehicles: [], marking: 'none' as const }], right: [] })
+    check('spline mesh builds', !!mesh)
+    if (mesh) {
+      let maxDist = 0
+      for (let i = 0; i < mesh.positions.length; i += 3) {
+        const wx = mesh.positions[i]
+        const wy = -mesh.positions[i + 2]
+        // distance beyond the last control point along the exit direction
+        const ex = end.x - last.x, ey = end.y - last.y
+        const el = Math.hypot(ex, ey) || 1
+        const along = (wx - last.x) * (ex / el) + (wy - last.y) * (ey / el)
+        if (along > maxDist) maxDist = along
+      }
+      check('spline mesh has no straight tail past the end', maxDist < 0.5, `max ${maxDist.toFixed(2)} m`)
+    }
+    check('spline length is chord domain', Math.abs(splinePath.length - functionLength(splineRoad.functions![0])) < 1e-6)
+  }
+
+  // Bezier drawn far from the origin: length must use the real start (p0/frame)
+  const farFrame: Frame = { x: 5000, y: 8000, heading: 0.4 }
+  const farEnd: Frame = { x: 5040, y: 8035, heading: 1.2 }
+  const bz = bezierConnector(farFrame, farEnd)
+  const bzLen = functionLength(bz)
+  const denseLen = (() => {
+    let total = 0
+    let prev = bezierAt(farFrame, bz.p1, bz.p2, bz.p3, 0)
+    for (let i = 1; i <= 400; i++) {
+      const p = bezierAt(farFrame, bz.p1, bz.p2, bz.p3, i / 400)
+      total += Math.hypot(p.x - prev.x, p.y - prev.y)
+      prev = p
+    }
+    return total
+  })()
+  check('bezier length measured from real start', Math.abs(bzLen - denseLen) < 0.1, `${bzLen.toFixed(2)} vs ${denseLen.toFixed(2)}`)
+  const bzRoad = {
+    id: 'bz-1', name: 'B', points: [{ x: farFrame.x, y: farFrame.y }, { x: farFrame.x + 1, y: farFrame.y }],
+    lanesLeft: 1, lanesRight: 1, laneWidth: 3.5,
+    functions: [bz],
+  }
+  const bzPath = fitTrackPath(bzRoad)
+  check('bezier path fits', !!bzPath)
+  if (bzPath) {
+    const end = evaluatePath(bzPath, bzPath.length)
+    check('bezier path ends at p3', Math.hypot(end.x - farEnd.x, end.y - farEnd.y) < 0.05)
+    check('bezier path length matches curve', Math.abs(bzPath.length - denseLen) < 0.1, `${bzPath.length.toFixed(2)} vs ${denseLen.toFixed(2)}`)
+  }
+  // Inversion: reversed chain must start at the old end and end at the old start
+  const inv = invertTrack(bzRoad)
+  check('bezier invert works', !!inv)
+  if (inv) {
+    const invPath = fitTrackPath({ ...bzRoad, points: [{ x: inv.startFrame.x, y: inv.startFrame.y }, { x: inv.startFrame.x + Math.cos(inv.startFrame.heading), y: inv.startFrame.y + Math.sin(inv.startFrame.heading) }], functions: inv.functions })
+    check('bezier inverted path fits', !!invPath)
+    if (invPath) {
+      const end = evaluatePath(invPath, invPath.length)
+      check('bezier inverted ends at old start', Math.hypot(end.x - farFrame.x, end.y - farFrame.y) < 0.05, `${end.x.toFixed(1)},${end.y.toFixed(1)}`)
+      check('bezier inverted length preserved', Math.abs(invPath.length - denseLen) < 0.1)
+    }
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

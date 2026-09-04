@@ -59,8 +59,15 @@ export function trackFunctions(track: TrackLike): XYFunction[] | null {
 
 export function trackTotalLength(track: TrackLike): number {
   const fns = trackFunctions(track)
-  if (!fns) return 0
-  return fns.reduce((sum, fn) => sum + functionLength(fn), 0)
+  const start = trackStartFrame(track)
+  if (!fns || !start) return 0
+  let total = 0
+  let frame: Frame = start
+  for (const fn of fns) {
+    total += functionLength(fn, frame)
+    frame = functionEndFrame(frame, fn)
+  }
+  return total
 }
 
 /** Per-function start frames + lengths for selection/editing. */
@@ -81,7 +88,7 @@ export function trackSlices(track: TrackLike): FunctionSlice[] | null {
   let frame: Frame = start
   let offset = 0
   for (let i = 0; i < fns.length; i++) {
-    const length = functionLength(fns[i])
+    const length = functionLength(fns[i], frame)
     slices.push({ index: i, fn: fns[i], start: { ...frame }, length, offset })
     offset += length
     frame = functionEndFrame(frame, fns[i])
@@ -98,7 +105,7 @@ export function fitTrackPath(track: TrackLike): FittedPath | null {
   let frame: Frame = start
   let total = 0
   for (const fn of fns) {
-    const length = functionLength(fn)
+    const length = functionLength(fn, frame)
     if (length <= 1e-6) continue
     switch (fn.kind) {
       case 'segment':
@@ -155,6 +162,32 @@ export function appendFunction(track: TrackLike, fn: XYFunction): XYFunction[] {
 // ─── Orientation (doc 5.5.4.3.6) ─────────────────────────────────────
 
 /**
+ * Reverse a function chain (flip order, invert each) and re-anchor bezier
+ * control points. Bezier control points are absolute coordinates, so an
+ * inverted chain would otherwise keep stale p0/p3: re-anchor each bezier's
+ * p0 to the walked frame of the new chain and p3 to the original start.
+ */
+function invertFunctionsAnchored(fns: XYFunction[], start: Frame): XYFunction[] {
+  const starts: Frame[] = []
+  let frame: Frame = start
+  for (const fn of fns) {
+    starts.push({ ...frame })
+    frame = functionEndFrame(frame, fn)
+  }
+  const reversed = [...fns].reverse().map(invertFunction)
+  let anchor: Frame = { ...frame, heading: frame.heading + Math.PI }
+  for (let k = 0; k < reversed.length; k++) {
+    const fn = reversed[k]
+    if (fn.kind === 'bezier') {
+      const originalStart = starts[fns.length - 1 - k]
+      reversed[k] = { ...fn, p0: { x: anchor.x, y: anchor.y }, p3: { x: originalStart.x, y: originalStart.y } }
+    }
+    anchor = functionEndFrame(anchor, fn)
+  }
+  return reversed
+}
+
+/**
  * Invert track orientation: reverse function order and geometry.
  * Returns the new start frame (the original end) so callers can update
  * the track's stored start points.
@@ -165,7 +198,7 @@ export function invertTrack(track: TrackLike): { functions: XYFunction[]; startF
   if (!fns || !start) return null
   const end = walkToEnd(start, fns)
   return {
-    functions: [...fns].reverse().map(invertFunction),
+    functions: invertFunctionsAnchored(fns, start),
     // reversed traversal starts at the old end, pointing back into the track
     startFrame: { ...end, heading: end.heading + Math.PI },
   }
@@ -174,8 +207,9 @@ export function invertTrack(track: TrackLike): { functions: XYFunction[]; startF
 /** Function-only inversion (chain start frame unchanged afterwards). */
 export function invertTrackFunctions(track: TrackLike): XYFunction[] | null {
   const fns = trackFunctions(track)
-  if (!fns) return null
-  return [...fns].reverse().map(invertFunction)
+  const start = trackStartFrame(track)
+  if (!fns || !start) return null
+  return invertFunctionsAnchored(fns, start)
 }
 
 // ─── Split (doc 5.5.4.3.5 split track / 5.5.4.3.7 split function) ────
@@ -193,7 +227,7 @@ export function splitTrackFunctions(track: TrackLike, s: number): TrackSplitResu
   let frame = start
   let cursor = 0
   for (let i = 0; i < fns.length; i++) {
-    const length = functionLength(fns[i])
+    const length = functionLength(fns[i], frame)
     if (s < cursor + length) {
       const local = s - cursor
       const pieces = splitFn(frame, fns[i], local)

@@ -35,7 +35,8 @@ export interface PolylineFunction {
 }
 export interface BezierFunction {
   kind: 'bezier'
-  p1: Vec2         // absolute control points; p0 = chain start, p3 = end
+  p0?: Vec2        // absolute start point; control points are absolute, so the
+  p1: Vec2         // chain frame alone cannot measure or invert a bezier
   p2: Vec2
   p3: Vec2
 }
@@ -75,13 +76,18 @@ export const FUNCTION_LABELS: Record<XYFunctionKind, string> = {
 }
 
 // ─── Length ──────────────────────────────────────────────────────────
-export function functionLength(fn: XYFunction): number {
+export function functionLength(fn: XYFunction, frame?: Frame): number {
   switch (fn.kind) {
     case 'segment': return Math.max(0, fn.length)
     case 'arc': return Math.abs(fn.radius * fn.angle)
     case 'clothoid': return Math.max(0, fn.length)
     case 'polyline': return polylinieLength(fn.points)
-    case 'bezier': return bezierLength({ x: 0, y: 0, heading: 0 }, fn) // relative length ≈ absolute length
+    case 'bezier': {
+      // control points are absolute: measure from the chain frame when the
+      // caller knows it, else from the stored p0 (origin fallback is legacy-only)
+      const p0 = frame ?? (fn.p0 ? { x: fn.p0.x, y: fn.p0.y, heading: 0 } : { x: 0, y: 0, heading: 0 })
+      return bezierLength(p0, fn)
+    }
     case 'clothoidSpline': return splineLength(fn.points)
   }
 }
@@ -218,9 +224,12 @@ export function splineSamples(points: Vec2[], endHeadingIn: number | null, endHe
 }
 
 function splineLength(points: Vec2[]): number {
+  // Chord-sum domain: evaluateElement / splineSamples parameterize the curve
+  // by chord length, so the function length must match it exactly. Padding
+  // here made meshes extrapolate straight past the last control point.
   let total = 0
   for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
-  return total * 1.02 // spline is slightly longer than the control polygon
+  return total
 }
 
 // ─── Sampling a function from a frame ────────────────────────────────
@@ -394,8 +403,8 @@ export function splitFunction(frame: Frame, fn: XYFunction, s: number): [XYFunct
       const t = s / length
       const { left, right } = deCasteljau(p0, fn.p1, fn.p2, fn.p3, t)
       return [
-        { kind: 'bezier', p1: left[1], p2: left[2], p3: left[3] },
-        { kind: 'bezier', p1: right[1], p2: right[2], p3: right[3] },
+        { kind: 'bezier', p0: left[0], p1: left[1], p2: left[2], p3: left[3] },
+        { kind: 'bezier', p0: right[0], p1: right[1], p2: right[2], p3: right[3] },
       ]
     }
     case 'clothoidSpline': {
@@ -488,7 +497,9 @@ export function invertFunction(fn: XYFunction): XYFunction {
     // reversed clothoid: curvature negates → rIn_rev = -rOut, rOut_rev = -rIn
     case 'clothoid': return { ...fn, radiusIn: -fn.radiusOut, radiusOut: -fn.radiusIn }
     case 'polyline': return { ...fn, points: [...fn.points].reverse() }
-    case 'bezier': return { ...fn, p1: fn.p2, p2: fn.p1 }
+    // reversed bezier starts at the old end (p3) and ends at the old start
+    // (p0 when known — legacy beziers without p0 keep their old end)
+    case 'bezier': return { ...fn, p0: fn.p3, p1: fn.p2, p2: fn.p1, p3: fn.p0 ?? fn.p3 }
     case 'clothoidSpline': return { ...fn, points: [...fn.points].reverse() }
   }
 }
@@ -505,6 +516,7 @@ export function convertPolylineToBezier(frame: Frame, fn: PolylineFunction): Bez
   const d = chord / 2
   return {
     kind: 'bezier',
+    p0: { x: frame.x, y: frame.y },
     p1: { x: frame.x + dirIn.x * d, y: frame.y + dirIn.y * d },
     p2: { x: end.x - dirOut.x * d, y: end.y - dirOut.y * d },
     p3: end,
@@ -608,6 +620,7 @@ export function bezierConnector(from: Frame, to: Frame): BezierFunction {
   const d = chord * 0.6
   return {
     kind: 'bezier',
+    p0: { x: from.x, y: from.y },
     p1: { x: from.x + Math.cos(from.heading) * d, y: from.y + Math.sin(from.heading) * d },
     p2: { x: to.x - Math.cos(to.heading) * d, y: to.y - Math.sin(to.heading) * d },
     p3: { x: to.x, y: to.y },

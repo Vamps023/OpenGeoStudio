@@ -154,8 +154,17 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
             {projects.map((project) => (
               <Card
                 key={project.id}
-                className="group gap-4 bg-card/70 py-5 transition-colors hover:border-primary/40"
+                className="group relative gap-4 bg-card/70 py-5 transition-colors hover:border-primary/40"
               >
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="absolute right-2 top-2 size-7 p-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                  onClick={() => setDeleteTarget(project)}
+                  title="Delete project"
+                >
+                  <Trash2 className="size-4" />
+                </Button>
                 <CardHeader className="gap-2">
                   <div className="flex items-start justify-between gap-2">
                     <CardTitle className="truncate text-base">{project.name}</CardTitle>
@@ -172,16 +181,16 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
                   <Button
                     size="sm"
                     variant="secondary"
-                    className="flex-1"
+                    className="flex-1 text-xs"
                     onClick={() => openInEditor(project.id)}
                   >
                     <Layers className="size-4" />
-                    Road Editor
+                    Editor
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1"
+                    className="flex-1 text-xs"
                     onClick={() => openInTerrain(project.id)}
                   >
                     <MapIcon className="size-4" />
@@ -190,20 +199,11 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1"
+                    className="flex-1 text-xs"
                     onClick={() => openInStudio3D(project.id)}
                   >
                     <Boxes className="size-4" />
                     3D Studio
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="px-2 text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteTarget(project)}
-                    title="Delete project"
-                  >
-                    <Trash2 className="size-4" />
                   </Button>
                 </CardFooter>
               </Card>

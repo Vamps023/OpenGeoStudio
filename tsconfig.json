@@ -7,8 +7,18 @@
     "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
-    "paths": { "@/*": ["./src/*"] },
-    "types": ["vite/client"]
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "types": [
+      "vite/client",
+      "node"
+    ]
   },
-  "include": ["src", "tests"]
+  "include": [
+    "src",
+    "tests"
+  ]
 }
