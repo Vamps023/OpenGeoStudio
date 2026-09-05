@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Building2, Download, Eraser, Globe, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -50,6 +50,26 @@ export default function OsmBuilderWorkspace() {
 
   const isClosed = polygon.length >= 3
   const polyBounds = useMemo(() => (polygon.length ? polygonBounds(polygon) : null), [polygon])
+
+  /** terrain working-area bounds (from the Terrain workspace) shown as a
+   *  reference rectangle so the user can see where their terrain selection is
+   *  and draw a polygon around it. */
+  const terrainBounds = project?.workingArea?.bounds ?? null
+
+  /** Auto-focus the map on the terrain working area when the workspace opens
+   *  (or when the project changes). Falls back to the geoRef origin, then to
+   *  the default map location. Runs once per project — the user's manual pan/
+   *  zoom after that is preserved. */
+  useEffect(() => {
+    if (terrainBounds) {
+      const lng = (terrainBounds.west + terrainBounds.east) / 2
+      const lat = (terrainBounds.south + terrainBounds.north) / 2
+      setFlyTo({ lng, lat, zoom: 14 })
+    } else if (project?.geoRef) {
+      setFlyTo({ lng: project.geoRef.lng, lat: project.geoRef.lat, zoom: 14 })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id])
 
   /** imported buildings as lng/lat rings for the map overlay */
   const mapBuildings = useMemo(() => {
@@ -197,6 +217,7 @@ export default function OsmBuilderWorkspace() {
           buildings={mapBuildings}
           flyTo={flyTo}
           drawingDisabled={osmStatus === 'fetching'}
+          terrainBounds={terrainBounds}
         />
       </div>
 
@@ -258,6 +279,26 @@ export default function OsmBuilderWorkspace() {
                 <Eraser className="size-3" />
                 Clear
               </Button>
+              {terrainBounds && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() =>
+                    setPolygon([
+                      { lat: terrainBounds.north, lng: terrainBounds.west },
+                      { lat: terrainBounds.north, lng: terrainBounds.east },
+                      { lat: terrainBounds.south, lng: terrainBounds.east },
+                      { lat: terrainBounds.south, lng: terrainBounds.west },
+                    ])
+                  }
+                  disabled={osmStatus === 'fetching'}
+                  title="Set the polygon to the terrain working-area rectangle"
+                >
+                  Use terrain area
+                </Button>
+              )}
             </div>
             {polygon.length > 0 && (
               <Badge variant="muted" className="w-fit">
@@ -334,7 +375,7 @@ export default function OsmBuilderWorkspace() {
 
           <Separator />
 
-          {/* ─── Geo reference info ─── */}
+          {/* ─── Geo reference + terrain area info ─── */}
           <section className="grid gap-2">
             <h3 className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
               Geo Reference
@@ -346,6 +387,15 @@ export default function OsmBuilderWorkspace() {
             ) : (
               <p className="text-[10px] leading-snug text-muted-foreground">
                 No geo reference set. One will be created at the polygon centroid on import.
+              </p>
+            )}
+            {terrainBounds ? (
+              <p className="text-[10px] leading-snug text-cyan-300/80 tabular-nums">
+                Terrain area: {terrainBounds.west.toFixed(4)}, {terrainBounds.south.toFixed(4)} → {terrainBounds.east.toFixed(4)}, {terrainBounds.north.toFixed(4)}
+              </p>
+            ) : (
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                No terrain area set. Use the Terrain workspace to select one.
               </p>
             )}
           </section>

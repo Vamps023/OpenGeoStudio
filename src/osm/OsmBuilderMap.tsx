@@ -3,6 +3,7 @@ import { Map as MapLibreMap, NavigationControl, ScaleControl, Point, setWorkerUr
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import type { LatLngRing } from '../engine/osmBuildings'
+import type { GeoBounds } from '../engine/crs'
 
 // Reuse the same worker setup as TerrainMap (app:// protocol safe).
 setWorkerUrl(new URL(maplibreWorkerUrl, import.meta.url).href)
@@ -17,11 +18,21 @@ interface Props {
   flyTo?: { lng: number; lat: number; zoom?: number } | null
   /** disable drawing interactions (e.g. while fetching) */
   drawingDisabled?: boolean
+  /** terrain working-area bounds shown as a dashed reference rectangle so
+   *  the user can see where their Terrain selection is and draw around it */
+  terrainBounds?: GeoBounds | null
 }
 
 interface PixelPt {
   x: number
   y: number
+}
+
+interface PixelRect {
+  left: number
+  top: number
+  width: number
+  height: number
 }
 
 export default function OsmBuilderMap({
@@ -30,6 +41,7 @@ export default function OsmBuilderMap({
   buildings,
   flyTo,
   drawingDisabled,
+  terrainBounds,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -38,6 +50,8 @@ export default function OsmBuilderMap({
   // polygon vertices + building footprints projected to pixels
   const [polyPx, setPolyPx] = useState<PixelPt[]>([])
   const [buildingPolys, setBuildingPolys] = useState<{ id: string; points: string }[]>([])
+  // terrain working-area rectangle in pixels (reference overlay)
+  const [terrainRectPx, setTerrainRectPx] = useState<PixelRect | null>(null)
   // vertex being dragged (index), or null
   const dragVertexRef = useRef<number | null>(null)
   // hover state for cursor feedback
@@ -248,7 +262,21 @@ export default function OsmBuilderMap({
     } else {
       setBuildingPolys([])
     }
-  }, [polygon, buildings])
+
+    // terrain working-area reference rectangle
+    if (terrainBounds) {
+      const nw = map.project([terrainBounds.west, terrainBounds.north])
+      const se = map.project([terrainBounds.east, terrainBounds.south])
+      setTerrainRectPx({
+        left: nw.x,
+        top: nw.y,
+        width: Math.abs(se.x - nw.x),
+        height: Math.abs(se.y - nw.y),
+      })
+    } else {
+      setTerrainRectPx(null)
+    }
+  }, [polygon, buildings, terrainBounds])
 
   useEffect(() => {
     const map = mapRef.current
@@ -278,6 +306,27 @@ export default function OsmBuilderMap({
   return (
     <div className="terrain-map-container">
       <div ref={containerRef} className="terrain-map-canvas" />
+
+      {/* ─── Terrain working-area reference rectangle (DOM overlay) ─── */}
+      {terrainRectPx && (
+        <div
+          className="pointer-events-none absolute border-2 border-dashed border-cyan-400/70 bg-cyan-400/5"
+          style={{
+            left: terrainRectPx.left,
+            top: terrainRectPx.top,
+            width: terrainRectPx.width,
+            height: terrainRectPx.height,
+            zIndex: 6,
+          }}
+        >
+          <span
+            className="absolute left-1 top-0.5 text-[10px] font-medium select-none text-cyan-300"
+            style={{ textShadow: '0 0 3px #000, 0 0 3px #000' }}
+          >
+            Terrain area
+          </span>
+        </div>
+      )}
 
       {/* ─── Building footprints (SVG overlay) ─── */}
       {buildingPolys.length > 0 && (
