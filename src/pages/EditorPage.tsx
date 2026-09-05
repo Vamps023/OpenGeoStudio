@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { FileDown, Route, TrainFront, Trash2, Undo2, Redo2 } from 'lucide-react'
-import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
-import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
-import { buildRailFixtureMeshes } from '../engine/railFixtures'
-import { buildRoadSamplers, getLaneSection } from '../engine/roadServices'
+import { buildJunctionNetwork } from '../engine/junctions'
+import { buildRailwayMesh, buildRoadMesh } from '../engine/mesh'
+import { buildRoadSamplers, getLaneSection, validateRoad } from '../engine/roadServices'
+import { buildEditorPreviewMeshes, flattenPreviewMeshes } from '../engine/previewMeshes'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
 import { smoothPolylinePoints } from '../engine/tracks'
 import { evaluatePath } from '../engine/geometry'
@@ -60,7 +60,6 @@ import {
 import { importOpenDrive } from '../engine/opendrive'
 import type { IntersectionData } from '../engine/intersections'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
-import { buildTerrainMeshWorld } from '../engine/terrainMesh'
 import { buildOverlays } from '../roads/overlays'
 import { RoadsContextMenu } from '../roads/RoadsContextMenu'
 import type { ContextMenuItem } from '../roads/RoadsContextMenu'
@@ -181,68 +180,29 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const junctions = junctionNetwork?.junctions ?? []
   const activeJunctions = junctions.filter((junction) => !junction.suppressed)
 
-  const roadMeshEntries = useMemo<RoadMeshEntry[]>(() => {
-    if (!project || !junctionNetwork) return []
-    if (!layers.road3dGeneration) return []
-    return project.roads.flatMap((road) => {
-      const path = junctionNetwork.paths.get(road.id)
-      if (!path) return []
-      // railway tracks render as rails + sleepers + ballast
-      if (road.railway) {
-        const mesh = buildRailwayMesh(path, road.railway, elevationSamplers.get(road.id), bankingSamplers.get(road.id))
-        return mesh ? [{ roadId: road.id, mesh }] : []
-      }
-      const laneSection = getLaneSection(road)
-      const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
-      return visibleRoadRanges(path, cuts).flatMap((range) => {
-        const result = buildRoadMeshRange(path, laneSection, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
-        const mesh = result.pavement
-        return mesh ? [{ roadId: road.id, mesh }] : []
-      })
-    })
-  }, [project, junctionNetwork, elevationSamplers, bankingSamplers, layers.road3dGeneration])
-
-  const connectingMeshes = useMemo(() => {
-    if (!junctionNetwork || !layers.intersection3dGeneration) return []
-    return activeJunctions.flatMap((junction) =>
-      junction.connectingRoads.flatMap((connection) => {
-        const result = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
-        const mesh = result.pavement
-        return mesh ? [mesh] : []
-      }),
-    )
-  }, [junctionNetwork, activeJunctions, layers.intersection3dGeneration])
-
-  // Explicit intersections generate 3D from their ways just like auto junctions
-  const intersectionWayMeshes = useMemo(() => {
-    if (!project || !layers.intersection3dGeneration) return []
-    const resolved = resolveTracks(project.roads)
-    const out: MeshData[] = []
-    for (const intersection of project.intersections ?? []) {
-      if (intersection.trackEnds.length < 2) continue
-      for (const way of allWays(intersection, resolved)) {
-        const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
-        const mesh = result.pavement
-        if (mesh) out.push(mesh)
-      }
+  // ─── Preview meshes (built via shared engine service) ──────────────
+  // The Editor's 3D preview uses the shared buildEditorPreviewMeshes()
+  // service so mesh-building logic is not duplicated in the component.
+  const previewMeshes = useMemo(() => {
+    if (!project || !junctionNetwork) {
+      return { roadMeshes: [], connectingMeshes: [], intersectionWayMeshes: [], railFixtureMeshes: [], terrainMesh: null }
     }
-    return out
-  }, [project, layers.intersection3dGeneration])
+    const terrain = mode === '3d' ? getActiveTerrain() : null
+    return buildEditorPreviewMeshes(
+      project,
+      junctionNetwork,
+      roadSamplers,
+      layers,
+      section === 'train',
+      terrain,
+    )
+  }, [project, junctionNetwork, roadSamplers, layers, section, mode])
 
-  // Rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)
-  const railFixtureMeshes = useMemo<MeshData[]>(() => {
-    if (section !== 'train' || !project) return []
-    return buildRailFixtureMeshes(project)
-  }, [project, section])
-
-  // Background terrain shown under the alignment in 3D mode (draw on terrain)
-  const terrain3dMesh = useMemo(() => {
-    if (mode !== '3d' || !project) return null
-    const terrain = getActiveTerrain()
-    if (!terrain) return null
-    const mesh = buildTerrainMeshWorld(terrain, project.geoRef)
-    return mesh ? { positions: mesh.positions, colors: mesh.colors, indices: mesh.indices } : null
-  }, [mode, project])
+  const roadMeshEntries = previewMeshes.roadMeshes
+  const connectingMeshes = previewMeshes.connectingMeshes
+  const intersectionWayMeshes = previewMeshes.intersectionWayMeshes
+  const railFixtureMeshes = previewMeshes.railFixtureMeshes
+  const terrain3dMesh = previewMeshes.terrainMesh
 
   // ─── Draft preview (function-aware) ────────────────────────────────
   const draftSection = useMemo(
@@ -2193,7 +2153,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         {/* Canvas */}
         <div className="relative flex min-w-0 flex-1 flex-col">
           <RoadViewport
-            meshes={[...roadMeshEntries.map((entry) => entry.mesh), ...connectingMeshes, ...intersectionWayMeshes, ...railFixtureMeshes, ...(terrain3dMesh ? [terrain3dMesh] : [])]}
+            meshes={flattenPreviewMeshes(previewMeshes)}
             highlightMeshes={highlightMeshes}
             draftMesh={draftMesh}
             draftPoints={draftPoints}

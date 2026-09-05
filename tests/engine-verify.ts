@@ -17,6 +17,7 @@ import type { Project } from '../src/state/store'
 import { serializeProject, deserializeProject, PROJECT_SCHEMA_VERSION } from '../src/domain'
 import type { RoadData as DomainRoadData, Project as DomainProject } from '../src/domain'
 import { buildRoadSamplers, buildProjectJunctionNetwork, getLaneSection, getRoadTotalWidth, getRoadTotalLanes, validateRoad, validateProjectRoads, ROAD_LIFT } from '../src/engine/roadServices'
+import { buildEditorPreviewMeshes, flattenPreviewMeshes, previewRoadIds } from '../src/engine/previewMeshes'
 import { DOMParser as LinkedomDOMParser } from 'linkedom'
 
 // OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
@@ -997,6 +998,66 @@ if (odr) {
   const validations = validateProjectRoads(project)
   check('roadServices: validateProjectRoads returns one result', validations.length === 1)
   check('roadServices: project road is valid', validations[0].valid)
+}
+
+// ─── Section 31: Editor preview mesh builder (shared service) ──────
+{
+  // Build a project with 2 crossing roads (4-arm junction)
+  const roads: DomainRoadData[] = [
+    { id: 'h1', name: 'Horizontal', points: [{ x: -50, y: 0 }, { x: 50, y: 0 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+    { id: 'v1', name: 'Vertical', points: [{ x: 0, y: -50 }, { x: 0, y: 50 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+  ]
+  const project: DomainProject = {
+    id: 'preview-proj',
+    name: 'Preview Test',
+    createdAt: '2025-01-01T00:00:00Z',
+    roads,
+    suppressedJunctions: [],
+  }
+
+  const jnResult = buildProjectJunctionNetwork(project, false)
+  check('previewMeshes: junction network built', !!jnResult)
+  if (jnResult) {
+    const { network, samplers } = jnResult
+    const layers = { road3dGeneration: true, intersection3dGeneration: true }
+    const meshes = buildEditorPreviewMeshes(project, network, samplers, layers, false, null)
+
+    // Road meshes
+    check('previewMeshes: road meshes exist', meshes.roadMeshes.length > 0)
+    check('previewMeshes: road meshes have positions', meshes.roadMeshes.every((e) => e.mesh.positions.length > 0))
+    check('previewMeshes: road meshes have indices', meshes.roadMeshes.every((e) => e.mesh.indices.length > 0))
+
+    // Connecting meshes (junction connectors)
+    check('previewMeshes: connecting meshes exist', meshes.connectingMeshes.length > 0)
+
+    // Intersection way meshes (may be empty if no explicit intersections)
+    check('previewMeshes: intersection way meshes is array', Array.isArray(meshes.intersectionWayMeshes))
+
+    // Rail fixture meshes (not in rail section, so empty)
+    check('previewMeshes: rail fixtures empty (not rail section)', meshes.railFixtureMeshes.length === 0)
+
+    // Terrain mesh (null since no terrain passed)
+    check('previewMeshes: terrain mesh null', meshes.terrainMesh === null)
+
+    // Flatten
+    const flat = flattenPreviewMeshes(meshes)
+    check('previewMeshes: flatten produces array', Array.isArray(flat))
+    check('previewMeshes: flatten has meshes', flat.length > 0)
+
+    // Preview road IDs
+    const ids = previewRoadIds(meshes)
+    check('previewMeshes: road IDs set has h1', ids.has('h1'))
+    check('previewMeshes: road IDs set has v1', ids.has('v1'))
+    check('previewMeshes: road IDs set size 2', ids.size === 2)
+
+    // Disable road3dGeneration → no road meshes
+    const noRoads = buildEditorPreviewMeshes(project, network, samplers, { road3dGeneration: false, intersection3dGeneration: true }, false, null)
+    check('previewMeshes: no road meshes when disabled', noRoads.roadMeshes.length === 0)
+
+    // Disable intersection3dGeneration → no connecting meshes
+    const noInter = buildEditorPreviewMeshes(project, network, samplers, { road3dGeneration: true, intersection3dGeneration: false }, false, null)
+    check('previewMeshes: no connecting meshes when disabled', noInter.connectingMeshes.length === 0)
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
