@@ -4,13 +4,13 @@ import { FileDown, Route, TrainFront, Trash2, Undo2, Redo2 } from 'lucide-react'
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMeshRange } from '../engine/mesh'
 import { buildRailFixtureMeshes } from '../engine/railFixtures'
-import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
+import { buildRoadSamplers, getLaneSection } from '../engine/roadServices'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
 import { smoothPolylinePoints } from '../engine/tracks'
 import { evaluatePath } from '../engine/geometry'
 import type { MeshData } from '../engine/mesh'
 import type { Vec2 } from '../engine/types'
-import { useStore, uuid, getLaneSection } from '../state/store'
+import { useStore, uuid } from '../state/store'
 import type { RailCrossing, RailPoint, RoadData, RoadGeometryType, Tool } from '../state/store'
 import { DEFAULT_RAILWAY } from '../state/store'
 import { exportNetworkDefinition } from '../engine/railNetwork'
@@ -168,28 +168,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const selectedRoad = project?.roads.find((road) => road.id === selectedRoadId) ?? null
   const selectedIntersection = (project?.intersections ?? []).find((item) => item.id === selection.intersectionId) ?? null
 
-  const elevationSamplers = useMemo(() => {
-    const map = new Map<string, (s: number) => number>()
-    if (!project) return map
-    for (const road of project.roads) {
-      const path = fitRoadGeometry(road)
-      const length = path?.length ?? 0
-      const profile = normalizeElevationProfile(road.elevationProfile, length)
-      map.set(road.id, (s) => evaluateElevation(profile, s))
-    }
-    return map
-  }, [project])
-  const bankingSamplers = useMemo(() => {
-    const map = new Map<string, (s: number) => number>()
-    if (!project) return map
-    for (const road of project.roads) {
-      const path = fitRoadGeometry(road)
-      const length = path?.length ?? 0
-      const profile = normalizeElevationProfile(road.bankingProfile, length)
-      map.set(road.id, (s) => evaluateElevation(profile, s))
-    }
-    return map
-  }, [project])
+  const roadSamplers = useMemo(
+    () => (project ? buildRoadSamplers(project.roads, false) : { elevation: new Map<string, (s: number) => number>(), banking: new Map<string, (s: number) => number>() }),
+    [project],
+  )
+  const elevationSamplers = roadSamplers.elevation
+  const bankingSamplers = roadSamplers.banking
   const junctionNetwork = useMemo(
     () => (project ? buildJunctionNetwork(project.roads, project.suppressedJunctions, elevationSamplers) : null),
     [project, elevationSamplers],

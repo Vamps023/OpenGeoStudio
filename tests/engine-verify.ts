@@ -16,6 +16,7 @@ import { exportOpenDrive } from '../src/engine/opendriveExport'
 import type { Project } from '../src/state/store'
 import { serializeProject, deserializeProject, PROJECT_SCHEMA_VERSION } from '../src/domain'
 import type { RoadData as DomainRoadData, Project as DomainProject } from '../src/domain'
+import { buildRoadSamplers, buildProjectJunctionNetwork, getLaneSection, getRoadTotalWidth, getRoadTotalLanes, validateRoad, validateProjectRoads, ROAD_LIFT } from '../src/engine/roadServices'
 import { DOMParser as LinkedomDOMParser } from 'linkedom'
 
 // OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
@@ -886,6 +887,116 @@ if (odr) {
 
   // Domain module exports compile-time types (verified by typecheck)
   check('domain: exports Vec2/RoadData/Project/LaneSectionDef/RailPoint/GeoReference/IntersectionData types', true)
+}
+
+// ─── Section 30: Shared road services (samplers, junction network, validation) ─
+{
+  // Build a road for testing
+  const road: DomainRoadData = {
+    id: 'svc-1',
+    name: 'Service Test Road',
+    points: [{ x: 0, y: 0 }, { x: 50, y: 0 }],
+    geometryType: 'straight',
+    elevationProfile: [{ s: 0, z: 0 }, { s: 50, z: 10 }],
+    lanesLeft: 1,
+    lanesRight: 1,
+    laneWidth: 3.5,
+    filletRadius: 0,
+  }
+  const project: DomainProject = {
+    id: 'svc-proj',
+    name: 'Service Test',
+    createdAt: '2025-01-01T00:00:00Z',
+    roads: [road],
+    suppressedJunctions: [],
+  }
+
+  // getLaneSection: returns rich section if present, otherwise default
+  const section = getLaneSection(road)
+  check('roadServices: getLaneSection returns section', !!section)
+  check('roadServices: section has 2 lanes', section.left.length + section.right.length === 2)
+
+  // getRoadTotalWidth / getRoadTotalLanes
+  check('roadServices: total width = 7.0', Math.abs(getRoadTotalWidth(road) - 7.0) < 0.01)
+  check('roadServices: total lanes = 2', getRoadTotalLanes(road) === 2)
+
+  // buildRoadSamplers without lift (Editor mode)
+  const samplersNoLift = buildRoadSamplers([road], false)
+  const elevNoLift = samplersNoLift.elevation.get('svc-1')
+  check('roadServices: elevation sampler exists', !!elevNoLift)
+  if (elevNoLift) {
+    check('roadServices: elevation at s=0 is 0 (no lift)', Math.abs(elevNoLift(0)) < 0.01)
+    check('roadServices: elevation at s=50 is 10 (no lift)', Math.abs(elevNoLift(50) - 10) < 0.01)
+  }
+
+  // buildRoadSamplers with lift (3D Studio mode)
+  const samplersWithLift = buildRoadSamplers([road], true)
+  const elevWithLift = samplersWithLift.elevation.get('svc-1')
+  check('roadServices: elevation sampler with lift exists', !!elevWithLift)
+  if (elevWithLift) {
+    check('roadServices: elevation at s=0 is ROAD_LIFT (with lift)', Math.abs(elevWithLift(0) - ROAD_LIFT) < 0.01)
+    check('roadServices: elevation at s=50 is 10+ROAD_LIFT (with lift)', Math.abs(elevWithLift(50) - (10 + ROAD_LIFT)) < 0.01)
+  }
+
+  // banking sampler
+  const bankSampler = samplersNoLift.banking.get('svc-1')
+  check('roadServices: banking sampler exists', !!bankSampler)
+  if (bankSampler) {
+    check('roadServices: banking at s=0 is 0', Math.abs(bankSampler(0)) < 0.01)
+  }
+
+  // buildProjectJunctionNetwork
+  const result = buildProjectJunctionNetwork(project, false)
+  check('roadServices: buildProjectJunctionNetwork returns result', !!result)
+  if (result) {
+    check('roadServices: network has paths', result.network.paths.size >= 1)
+    check('roadServices: samplers included in result', !!result.samplers.elevation.get('svc-1'))
+  }
+
+  // buildProjectJunctionNetwork with empty project returns null
+  const emptyProject: DomainProject = {
+    id: 'empty', name: 'Empty', createdAt: '', roads: [], suppressedJunctions: [],
+  }
+  check('roadServices: empty project returns null', buildProjectJunctionNetwork(emptyProject) === null)
+
+  // Validation: valid road
+  const validResult = validateRoad(road)
+  check('roadServices: valid road passes validation', validResult.valid)
+  check('roadServices: valid road has no errors', validResult.errors.length === 0)
+
+  // Validation: invalid road (NaN coordinates)
+  const nanRoad: DomainRoadData = {
+    ...road,
+    id: 'nan-road',
+    points: [{ x: NaN, y: 0 }, { x: 50, y: 0 }],
+  }
+  const nanResult = validateRoad(nanRoad)
+  check('roadServices: NaN road fails validation', !nanResult.valid)
+  check('roadServices: NaN road has errors', nanResult.errors.length > 0)
+
+  // Validation: invalid road (negative lanes)
+  const badLaneRoad: DomainRoadData = {
+    ...road,
+    id: 'bad-lane',
+    lanesLeft: -1,
+    lanesRight: 1,
+  }
+  const badLaneResult = validateRoad(badLaneRoad)
+  check('roadServices: negative lanes fails validation', !badLaneResult.valid)
+
+  // Validation: invalid road (zero lane width)
+  const zeroWidthRoad: DomainRoadData = {
+    ...road,
+    id: 'zero-width',
+    laneWidth: 0,
+  }
+  const zeroWidthResult = validateRoad(zeroWidthRoad)
+  check('roadServices: zero lane width fails validation', !zeroWidthResult.valid)
+
+  // validateProjectRoads
+  const validations = validateProjectRoads(project)
+  check('roadServices: validateProjectRoads returns one result', validations.length === 1)
+  check('roadServices: project road is valid', validations[0].valid)
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

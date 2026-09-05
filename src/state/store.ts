@@ -19,6 +19,7 @@ import type { RailPoint, RailCrossing, CatchPoint } from '../domain/rail'
 import type { GeoReference, WorkingArea } from '../domain/terrain'
 import type { Project, SerializedProject } from '../domain/project'
 import { PROJECT_SCHEMA_VERSION, serializeProject, deserializeProject } from '../domain/project'
+import { getLaneSection, getRoadTotalWidth, getRoadTotalLanes } from '../engine/roadServices'
 
 export type { RoadGeometryType, RoadType, LaneTaper, PortionDef, RailwayConfig, RoadData } from '../domain/road'
 export { DEFAULT_RAILWAY } from '../domain/road'
@@ -150,25 +151,10 @@ interface OgsState {
 
 const STORAGE_KEY = 'ogs.projects.v2'
 
-/**
- * Returns the effective lane section for a road.
- * If the road has a rich laneSection it is used as-is.
- * Otherwise a default travel-lane section is built from the legacy counts.
- */
-export function getLaneSection(road: RoadData): LaneSectionDef {
-  if (road.laneSection) return road.laneSection
-  return makeDefaultSection(road.lanesLeft, road.lanesRight, road.laneWidth)
-}
-
-/** Sum of all lane widths on both sides. */
-export function getRoadTotalWidth(road: RoadData): number {
-  return totalWidth(getLaneSection(road))
-}
-
-/** Total lane count on both sides. */
-export function getRoadTotalLanes(road: RoadData): number {
-  return totalLanes(getLaneSection(road))
-}
+// getLaneSection, getRoadTotalWidth, and getRoadTotalLanes are now
+// canonical in engine/roadServices.ts. Re-export here for backwards
+// compatibility with existing imports from state/store.
+export { getLaneSection, getRoadTotalWidth, getRoadTotalLanes } from '../engine/roadServices'
 
 // ─── localStorage fallback (used until Electron bridge is available) ───
 function loadProjectsLocal(): Project[] {

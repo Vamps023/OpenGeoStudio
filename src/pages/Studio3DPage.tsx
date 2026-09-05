@@ -10,11 +10,11 @@ import { buildRailFixtureObjects } from '../engine/railFixtures'
 import { buildTerrainMeshWorld, type TerrainMeshData } from '../engine/terrainMesh'
 import { loadImageryTexture } from '../terrain/imageryTexture'
 import { allWays, resolveTracks } from '../engine/intersections'
-import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry } from '../engine/roadGeometry'
 import { samplePath } from '../engine/geometry'
 import { stickTrackToTerrain } from '../engine/tracks'
 import { sectionHalfWidth } from '../engine/laneLayout'
+import { buildRoadSamplers, ROAD_LIFT as SHARED_ROAD_LIFT } from '../engine/roadServices'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
 import { buildBuildingMesh, ringCentroid } from '../engine/osmBuildings'
 import { generatePcgBuildingMesh, DEFAULT_PCG_CONFIG, type PcgStyle, type PcgDetail } from '../engine/pcgBuildings'
@@ -37,8 +37,9 @@ function roadSection(road: RoadData) {
 }
 
 /** Lift roads above the terrain surface to avoid z-fighting (the decimated
- *  terrain grid interpolates up to ~0.5 m off the true surface). */
-const ROAD_LIFT = 1.0
+ *  terrain grid interpolates up to ~0.5 m off the true surface).
+ *  Uses the shared constant from engine/roadServices. */
+const ROAD_LIFT = SHARED_ROAD_LIFT
 
 /** Shared vehicle body geometry (SCANeR-style surrogate vehicle). */
 const CAR_GEOMETRY = new THREE.BoxGeometry(4.2, 1.5, 1.9)
@@ -72,16 +73,9 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
     return { ...road, elevationProfile: result.elevation, bankingProfile: result.banking }
   })
 
-  const elevationSamplers = new Map<string, (s: number) => number>()
-  const bankingSamplers = new Map<string, (s: number) => number>()
-  for (const road of effective) {
-    const path = fitRoadGeometry(road)
-    const length = path?.length ?? 0
-    const elevation = normalizeElevationProfile(road.elevationProfile, length)
-    const banking = normalizeElevationProfile(road.bankingProfile, length)
-    elevationSamplers.set(road.id, (s) => evaluateElevation(elevation, s) + ROAD_LIFT)
-    bankingSamplers.set(road.id, (s) => evaluateElevation(banking, s))
-  }
+  const samplers = buildRoadSamplers(effective, true)
+  const elevationSamplers = samplers.elevation
+  const bankingSamplers = samplers.banking
 
   const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, elevationSamplers)
   if (!junctionNetwork) return []
