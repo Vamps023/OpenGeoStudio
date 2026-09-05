@@ -82,6 +82,7 @@ export default function TerrainWorkspace() {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const setGeoRef = useStore((s) => s.setGeoRef)
   const setProjectTerrain = useStore((s) => s.setProjectTerrain)
+  const setWorkingArea = useStore((s) => s.setWorkingArea)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [selectedBounds, setSelectedBounds] = useState<GeoBounds | null>(null)
@@ -169,7 +170,9 @@ export default function TerrainWorkspace() {
     const half = areaKm / 2
     const dLat = half / 111.32
     const dLng = half / (111.32 * Math.max(0.1, Math.cos((lat * Math.PI) / 180)))
-    setSelectedBounds({ west: lng - dLng, east: lng + dLng, south: lat - dLat, north: lat + dLat })
+    const bounds = { west: lng - dLng, east: lng + dLng, south: lat - dLat, north: lat + dLat }
+    setSelectedBounds(bounds)
+    setWorkingArea({ bounds, tileSizeKm: areaKm })
     setGeoRef({ lng, lat, scale: 1 })
     setFlyTo({ lng, lat, zoom })
     setView('map')
@@ -200,6 +203,17 @@ export default function TerrainWorkspace() {
       setSearching(false)
     }
   }
+
+  // Restore the persisted working area and fly to it (auto-focus on open)
+  useEffect(() => {
+    const area = project?.workingArea
+    if (!area) return
+    setSelectedBounds(area.bounds)
+    setTileSizeKm(area.tileSizeKm)
+    const lng = (area.bounds.west + area.bounds.east) / 2
+    const lat = (area.bounds.south + area.bounds.north) / 2
+    setFlyTo({ lng, lat, zoom: 13 })
+  }, [project?.id])
 
   // Subscribe to export progress
   useEffect(() => {
@@ -452,7 +466,7 @@ export default function TerrainWorkspace() {
                   size="sm"
                   variant={tileSizeKm === size ? 'default' : 'outline'}
                   className="h-7 px-2.5 text-xs"
-                  onClick={() => setTileSizeKm(size)}
+                  onClick={() => { setTileSizeKm(size); if (project?.workingArea) setWorkingArea({ bounds: project.workingArea.bounds, tileSizeKm: size }) }}
                   title={`${size}km tiles`}
                 >
                   {size}km

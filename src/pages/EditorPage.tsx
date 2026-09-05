@@ -2387,11 +2387,17 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
               <TabsContent value="lanes" className="grid gap-4 p-4">
                 {selectedRoad ? (
                   <>
+                    <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      Editing <b className="font-medium text-foreground">{selectedRoad.name}</b> — click a lane in the list or on the canvas, then use the lane tools.
+                    </p>
                     <LanesTab road={selectedRoad} />
                     <PortionProfileEditor road={selectedRoad} length={roadLengths.get(selectedRoad.id) ?? 0} />
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Select a road to edit its lanes.</p>
+                  <div className="grid gap-2 rounded-md border border-dashed border-border/60 p-4 text-center">
+                    <p className="text-xs font-medium text-foreground">No road selected</p>
+                    <p className="text-xs text-muted-foreground">Pick a road from the Roads tab, or click one on the canvas with the Select tool.</p>
+                  </div>
                 )}
               </TabsContent>
               <TabsContent value="sidewalks" className="grid gap-4 p-4">

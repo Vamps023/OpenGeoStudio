@@ -161,6 +161,8 @@ export default function RoadViewport({
     renderer.setSize(container.clientWidth, container.clientHeight)
     renderer.setClearColor(0x0b1220, 1)
     renderer.domElement.style.display = 'block'
+    const suppressMenu = (e: MouseEvent) => e.preventDefault()
+    renderer.domElement.addEventListener('contextmenu', suppressMenu)
     container.appendChild(renderer.domElement)
 
     const scene = new THREE.Scene()

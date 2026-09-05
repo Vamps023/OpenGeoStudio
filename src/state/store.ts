@@ -142,6 +142,8 @@ export interface Project {
   catchPoints?: CatchPoint[]
   /** persisted DEM so a reopened project keeps its terrain (base64 Float32) */
   terrain?: StoredTerrain
+  /** persisted working area + tile grid size (Terrain workspace) */
+  workingArea?: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }
 }
 
 export type Tool =
@@ -248,6 +250,7 @@ interface OgsState {
   setLaneBorder: (roadId: string, side: 'left' | 'right', index: number, edge: 'inner' | 'outer', height: number, offset?: number) => void
   refreshProjects: () => Promise<void>
   markHydrated: () => void
+  setWorkingArea: (area: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }) => void
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
@@ -568,6 +571,7 @@ export const useStore = create<OgsState>((set, get) => ({
     catchPoints: (project.catchPoints ?? []).filter((item) => item.id !== id),
   })),
   markHydrated: () => set({ hydrated: true }),
+  setWorkingArea: (area) => updateActiveProject(get, set, (project) => ({ ...project, workingArea: area })),
   setProjectTerrain: (terrain) => {
     if (terrain) setActiveTerrain(terrain)
     updateActiveProject(get, set, (project) => ({

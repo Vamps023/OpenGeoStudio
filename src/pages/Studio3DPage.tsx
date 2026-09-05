@@ -328,6 +328,8 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.setSize(container.clientWidth, container.clientHeight)
     renderer.domElement.style.display = 'block'
+    const suppressMenu = (e: MouseEvent) => e.preventDefault()
+    renderer.domElement.addEventListener('contextmenu', suppressMenu)
     container.appendChild(renderer.domElement)
 
     const scene = new THREE.Scene()
@@ -362,6 +364,48 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     scene.add(simGroup)
     sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, simGroup, grid, renderer }
 
+    // WASD fly controls (Unreal-style): move on the ground plane relative to view
+    const keys = new Set<string>()
+    const keyDown = (e: KeyboardEvent) => {
+      const tag = e.target as HTMLElement | null
+      if (tag && (tag.tagName === 'INPUT' || tag.tagName === 'SELECT' || tag.tagName === 'TEXTAREA')) return
+      keys.add(e.code)
+    }
+    const keyUp = (e: KeyboardEvent) => keys.delete(e.code)
+    window.addEventListener('keydown', keyDown)
+    window.addEventListener('keyup', keyUp)
+    let flyLast = performance.now()
+    const flyTick = () => {
+      const now = performance.now()
+      const dt = Math.min(0.1, (now - flyLast) / 1000)
+      flyLast = now
+      if (keys.size === 0) return
+      const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 240 : 80) * dt
+      const forward = new THREE.Vector3()
+      camera.getWorldDirection(forward)
+      forward.y = 0
+      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1)
+      forward.normalize()
+      const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).negate()
+      const move = new THREE.Vector3()
+      if (keys.has('KeyW')) move.addScaledVector(forward, speed)
+      if (keys.has('KeyS')) move.addScaledVector(forward, -speed)
+      if (keys.has('KeyA')) move.addScaledVector(right, speed)
+      if (keys.has('KeyD')) move.addScaledVector(right, -speed)
+      if (keys.has('KeyE') || keys.has('Space')) move.y += speed
+      if (keys.has('KeyQ')) move.y -= speed
+      if (move.lengthSq() > 0) {
+        camera.position.add(move)
+        controls.target.add(move)
+      }
+    }
+    const flyInterval = window.setInterval(flyTick, 16)
+    ;(window as unknown as Record<string, unknown>).__ogsFlyCleanup = () => {
+      window.clearInterval(flyInterval)
+      window.removeEventListener('keydown', keyDown)
+      window.removeEventListener('keyup', keyUp)
+    }
+
     function resize() {
       const w = container!.clientWidth
       const h = container!.clientHeight
@@ -387,6 +431,8 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
       controls.dispose()
       disposeGroup(terrainGroup)
       disposeGroup(roadGroup)
+      renderer.domElement.removeEventListener('contextmenu', suppressMenu)
+      ;(window as unknown as { __ogsFlyCleanup?: () => void }).__ogsFlyCleanup?.()
       renderer.dispose()
       renderer.domElement.remove()
       sceneRef.current = null

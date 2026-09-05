@@ -84,6 +84,7 @@ export const ROAD_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
 
 /** Tools for the Lane workspace: lane editing on the selected road. */
 export const LANE_TOOL_GROUPS: { label: string; tools: Tool[] }[] = [
+  { label: 'Select', tools: ['select'] },
   { label: 'Lanes', tools: ['lane-begin', 'lane-end', 'lane-insert', 'lane-remove', 'lane-border', 'lane-sidewalk'] },
 ]
 
