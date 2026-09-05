@@ -1,5 +1,5 @@
 import type { RefObject } from 'react'
-import { FileUp, Map as MapIcon } from 'lucide-react'
+import { FileUp, FileDown, Map as MapIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 export interface EditorHeaderActionsProps {
@@ -10,6 +10,7 @@ export interface EditorHeaderActionsProps {
   importInputRef: RefObject<HTMLInputElement | null>
   onImportClick: () => void
   onImportFile: (event: import('react').ChangeEvent<HTMLInputElement>) => void
+  onExportXodr: () => void
 }
 
 /** Header controls: 2D/3D toggle, OpenDRIVE import, map background toggle. */
@@ -21,6 +22,7 @@ export default function EditorHeaderActions({
   importInputRef,
   onImportClick,
   onImportFile,
+  onExportXodr,
 }: EditorHeaderActionsProps) {
   return (
     <>
@@ -33,6 +35,16 @@ export default function EditorHeaderActions({
         </Button>
       </div>
       <input ref={importInputRef} type="file" accept=".xodr,.xml" className="hidden" onChange={onImportFile} />
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 gap-1.5 px-3"
+        onClick={onExportXodr}
+        title="Export the network as OpenDRIVE (.xodr)"
+      >
+        <FileDown className="size-3.5" />
+        .xodr
+      </Button>
       <Button
         size="sm"
         variant="ghost"

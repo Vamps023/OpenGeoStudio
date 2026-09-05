@@ -13,6 +13,7 @@ import { useStore, uuid, getLaneSection } from '../state/store'
 import type { RailCrossing, RailPoint, RoadData, RoadGeometryType, Tool } from '../state/store'
 import { DEFAULT_RAILWAY } from '../state/store'
 import { exportNetworkDefinition } from '../engine/railNetwork'
+import { exportOpenDrive } from '../engine/opendriveExport'
 import { defaultLaneByType, laneLayout, profileSection, sectionHalfWidth } from '../engine/laneLayout'
 import type { XYFunction, PolylineFunction } from '../engine/xyFunctions'
 import {
@@ -2064,6 +2065,19 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     toast.success(`Catch point added on ${best.road.name}`, { description: `${best.contact} end, blade on the ${side} side` })
   }
 
+  function handleExportXodr() {
+    if (!project) return
+    const xml = exportOpenDrive(project)
+    const blob = new Blob([xml], { type: 'application/xml' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${project.name || 'network'}.xodr`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast.success('OpenDRIVE exported', { description: `${project.roads.length} roads as line / arc / spiral geometry` })
+  }
+
   function handleExportNetwork() {
     if (!project) return
     const xml = exportNetworkDefinition(project)
@@ -2116,6 +2130,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
           importInputRef={odrInputRef}
           onImportClick={() => odrInputRef.current?.click()}
           onImportFile={handleOdrImport}
+          onExportXodr={handleExportXodr}
         />
       </AppHeader>
 

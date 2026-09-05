@@ -7,7 +7,14 @@ import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
 import { buildJunctionNetwork } from '../src/engine/junctions'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
+import { exportOpenDrive } from '../src/engine/opendriveExport'
 import type { Project } from '../src/state/store'
+import { DOMParser as LinkedomDOMParser } from 'linkedom'
+
+// OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
+if (typeof globalThis.DOMParser === 'undefined') {
+  (globalThis as unknown as { DOMParser: unknown }).DOMParser = LinkedomDOMParser
+}
 import { importOpenDrive } from '../src/engine/opendrive'
 import { fitTrackPath, trackSlices, splitTrackFunctions, mergeFunctionPair, invertTrack, linkTrackFunctions, bindTrackFunctions, trackTotalLength } from '../src/engine/tracks'
 import { makeIntersectionData, computeWays, resolveTracks, authorizationKey } from '../src/engine/intersections'
@@ -531,6 +538,51 @@ if (odr) {
   check('phase24: section-side connections exist', secConns.length >= 2, `got ${secConns.length}`)
   const secCounts = secConns.map((c) => (c.laneLinks.filter((l) => l.fromRoadId === 'sec' || l.toRoadId === 'sec')).length)
   check('phase24: section lane counts used', secCounts.some((n) => n >= 2), JSON.stringify(secCounts))
+}
+
+
+// 25. OpenDRIVE export -> import round trip (SCANeR Export/OpenDRIVE parity)
+{
+  const mk = (id: string, name: string, x: number, y: number, heading: number, lanesLeft: number, lanesRight: number): RoadData => ({
+    id, name,
+    points: [{ x, y }, { x: x + Math.cos(heading), y: y + Math.sin(heading) }],
+    lanesLeft, lanesRight, laneWidth: 3.5, filletRadius: 50,
+    functions: [
+      { kind: 'segment', length: 80 },
+      { kind: 'arc', radius: 100, angle: Math.PI / 3 },
+      { kind: 'clothoid', radiusIn: 0, radiusOut: 150, length: 60 },
+    ],
+    elevationProfile: [{ s: 0, z: 10 }, { s: 120, z: 18 }, { s: 200, z: 14 }],
+  })
+  const masterProject = {
+    id: 'exp', name: 'RoundTrip', createdAt: '', suppressedJunctions: [],
+    geoRef: { lng: -95.36, lat: 29.76, scale: 1 },
+    roads: [
+      mk('r1', 'Main', 0, 0, 0, 1, 2),
+      mk('r2', 'Cross', -40, -60, Math.PI / 2, 2, 1),
+    ],
+  } as unknown as Project
+  const xodr = exportOpenDrive(masterProject)
+  check('odr: header written', xodr.startsWith('<?xml') && xodr.includes('<OpenDRIVE>'))
+  check('odr: planView line element', xodr.includes('<line/>'))
+  check('odr: arc element with curvature', xodr.includes('<arc curvature="0.01000000"/>'))
+  check('odr: spiral element with curvEnd', xodr.includes('<spiral') && xodr.includes('curvEnd="0.00666667"/>'))
+  check('odr: elevation profile exported', xodr.includes('<elevationProfile>') && xodr.includes('<elevation s="120.0000" a="18'))
+  check('odr: lanes section with driving lanes', xodr.includes('<lane id="2" type="driving"') && xodr.includes('<lane id="-1" type="driving"'))
+  check('odr: green centre road mark', xodr.includes('color="green"'))
+
+  // re-import our own export (round trip)
+  const parsed = importOpenDrive(xodr)
+  check('odr: round trip parses', !!parsed)
+  if (parsed) {
+    check('odr: round trip road count', parsed.roads.length === 2, String(parsed.roads.length))
+    const rt = parsed.roads[0]
+    check('odr: round trip has functions', !!rt && !!rt.functions && rt.functions.length >= 3, JSON.stringify(rt?.functions?.map((f) => f.kind)))
+    const rtLen = rt!.functions!.reduce((a, f) => a + functionLength(f), 0)
+    const srcLen = masterProject.roads[0].functions!.reduce((a, f) => a + functionLength(f), 0)
+    check('odr: round trip length preserved', Math.abs(rtLen - srcLen) < 0.5, `${rtLen.toFixed(2)} vs ${srcLen.toFixed(2)}`)
+  }
+
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
