@@ -223,6 +223,7 @@ export default function RoadViewport({
       activeCamera = camera
     }
     attach(ortho, true)
+    roadGroup.position.y = 480 // 2D plan view: ignore road elevation
 
     // ── Tile fetching + compositing ──
     const tileCache = new Map<string, HTMLImageElement>()
@@ -590,6 +591,7 @@ export default function RoadViewport({
       applyMode(next) {
         if (next === activeMode) return
         activeMode = next
+        roadGroup.position.y = next === '2d' ? 480 : 0
         attach(next === '2d' ? ortho : persp, next === '2d')
         const mapActive = next === '2d' && showMapRef.current
         renderer.setClearColor(0x0b1220, mapActive ? 0 : 1)
