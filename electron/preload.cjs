@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('ogs', {
+  // ── OSM buildings (Overpass fetch runs in main process to avoid CORS) ──
+  fetchOsmBuildings: (query) => ipcRenderer.invoke('osm:fetchBuildings', query),
+
   // ── Terrain ──
   // onProgress (a function) cannot cross the structured-clone IPC boundary —
   // strip it; downloads report progress via the final result only.

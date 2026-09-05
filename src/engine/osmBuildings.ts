@@ -315,3 +315,62 @@ export function ringCentroid(ring: Point2[]): Point2 {
 export function overpassQuery(bounds: { west: number; south: number; east: number; north: number }): string {
   return `[out:json][timeout:30];way["building"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});out tags geom;`
 }
+
+/** A lat/lng polygon ring (no closing duplicate). */
+export interface LatLngRing {
+  lat: number
+  lng: number
+}
+
+/** Bounding box of a lat/lng polygon ring. */
+export function polygonBounds(ring: LatLngRing[]): { west: number; south: number; east: number; north: number } {
+  if (ring.length === 0) return { west: 0, south: 0, east: 0, north: 0 }
+  let west = Infinity
+  let south = Infinity
+  let east = -Infinity
+  let north = -Infinity
+  for (const p of ring) {
+    if (p.lng < west) west = p.lng
+    if (p.lng > east) east = p.lng
+    if (p.lat < south) south = p.lat
+    if (p.lat > north) north = p.lat
+  }
+  return { west, south, east, north }
+}
+
+/** Build the Overpass QL query for a polygon area of interest.
+ *  Uses the `poly:"lat lng lat lng …"` filter so only buildings intersecting
+ *  the drawn polygon are returned. The polygon must have ≥ 3 vertices. */
+export function overpassQueryPolygon(ring: LatLngRing[]): string {
+  if (ring.length < 3) throw new Error('Polygon needs at least 3 vertices')
+  const poly = ring.map((p) => `${p.lat} ${p.lng}`).join(' ')
+  return `[out:json][timeout:45];way["building"](poly:"${poly}");out tags geom;`
+}
+
+/** Even-odd point-in-polygon test (ray casting) for lat/lng rings.
+ *  Used to filter Overpass results to buildings whose centroid is inside the
+ *  drawn polygon (the `poly` filter returns intersecting ways, which can
+ *  include buildings that straddle the boundary). */
+export function pointInPolygon(lng: number, lat: number, ring: LatLngRing[]): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].lng
+    const yi = ring[i].lat
+    const xj = ring[j].lng
+    const yj = ring[j].lat
+    const intersect = yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+/** Centroid of a lat/lng ring (simple average — fine for the polygon filter). */
+export function ringCentroidLatLng(ring: LatLngRing[]): LatLngRing {
+  let lat = 0
+  let lng = 0
+  for (const p of ring) {
+    lat += p.lat
+    lng += p.lng
+  }
+  return { lat: lat / ring.length, lng: lng / ring.length }
+}

@@ -106,6 +106,9 @@ interface OgsWorkspacePathResult {
 }
 
 interface OgsBridge {
+  // ── OSM buildings (Overpass fetch runs in main process to avoid CORS) ──
+  fetchOsmBuildings: (query: string) => Promise<{ success: boolean; error?: string; data?: unknown }>
+
   // ── Terrain ──
   downloadTerrain: (
     bounds: GeoBounds,

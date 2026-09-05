@@ -452,6 +452,25 @@ ipcMain.handle('terrain:download', async (event, bounds, options) => {
   }
 })
 
+// ─── IPC: OSM building fetch (main-process Overpass request) ────
+// The renderer builds the Overpass QL query string (see
+// src/engine/osmBuildings.ts) and passes it here. Performing the request
+// from the main process avoids the browser CORS restriction that blocks
+// `app://localhost` from calling overpass-api.de directly (issue #46).
+ipcMain.handle('osm:fetchBuildings', async (event, query) => {
+  try {
+    if (typeof query !== 'string' || !query.trim()) {
+      return { success: false, error: 'Missing Overpass query string' }
+    }
+    const { fetchOverpass } = require('./osm/overpassFetcher.cjs')
+    const json = await fetchOverpass(query)
+    return { success: true, data: json }
+  } catch (err) {
+    console.error('[ogs] osm:fetchBuildings error:', err.message)
+    return { success: false, error: err.message }
+  }
+})
+
 // ─── IPC: Save GeoTIFF ──────────────────────────────────────────
 ipcMain.handle('terrain:save-geotiff', async (event, data, options) => {
   try {

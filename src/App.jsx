@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import EditorPage from './pages/EditorPage'
 import LoginPage from './pages/LoginPage'
+import OsmBuilderPage from './pages/OsmBuilderPage'
 import ProjectsPage from './pages/ProjectsPage'
 import Studio3DPage from './pages/Studio3DPage'
 import TerrainPage from './pages/TerrainPage'
@@ -58,12 +59,27 @@ export default function App() {
     )
   }
 
+  if (workspace === 'osmBuilder' && activeProjectId) {
+    return (
+      <TooltipProvider>
+        <OsmBuilderPage
+          onBack={() => {
+            closeProject()
+            setWorkspace('projects')
+          }}
+        />
+        <Toaster position="bottom-right" />
+      </TooltipProvider>
+    )
+  }
+
   return (
     <TooltipProvider>
       <ProjectsPage
         onOpenEditor={() => setWorkspace('editor')}
         onOpenTerrain={() => setWorkspace('terrain')}
         onOpenStudio3D={() => setWorkspace('studio3d')}
+        onOpenOsmBuilder={() => setWorkspace('osmBuilder')}
       />
       <Toaster position="bottom-right" />
     </TooltipProvider>

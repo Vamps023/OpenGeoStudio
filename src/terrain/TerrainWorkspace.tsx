@@ -132,13 +132,24 @@ export default function TerrainWorkspace() {
     setOsmStatus('fetching')
     setOsmError(null)
     try {
-      const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(overpassQuery(selectedBounds)),
-      })
-      if (!response.ok) throw new Error(`Overpass API returned ${response.status}`)
-      const json = await response.json()
+      // Route the Overpass request through the Electron main process to
+      // avoid the browser CORS restriction on `app://localhost` (issue #46).
+      // Falls back to a direct fetch in non-Electron (dev/browser) contexts.
+      const query = overpassQuery(selectedBounds)
+      let json: unknown
+      if (window.ogs?.fetchOsmBuildings) {
+        const result = await window.ogs.fetchOsmBuildings(query)
+        if (!result.success) throw new Error(result.error || 'Overpass request failed')
+        json = result.data
+      } else {
+        const response = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(query),
+        })
+        if (!response.ok) throw new Error(`Overpass API returned ${response.status}`)
+        json = await response.json()
+      }
       const raw = parseOverpassBuildings(json)
       const projected = raw.map((building) => toBuildingData(building, geoRef))
       // area-sync merge: drop existing buildings whose centroid lies inside

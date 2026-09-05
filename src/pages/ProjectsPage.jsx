@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Boxes, FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Trash2 } from 'lucide-react'
+import { Boxes, Building2, FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import LogoMark from '@/components/layout/LogoMark'
@@ -24,7 +24,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useStore } from '../state/store'
 
-export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio3D }) {
+export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio3D, onOpenOsmBuilder }) {
   const projects = useStore((s) => s.projects)
   const createProject = useStore((s) => s.createProject)
   const openProject = useStore((s) => s.openProject)
@@ -61,6 +61,11 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
   function openInStudio3D(id) {
     openProject(id)
     onOpenStudio3D()
+  }
+
+  function openInOsmBuilder(id) {
+    openProject(id)
+    onOpenOsmBuilder()
   }
 
   async function handleDelete() {
@@ -176,33 +181,44 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
                   </CardDescription>
                 </CardHeader>
                 <CardFooter className="mt-auto gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="min-w-0 flex-1 px-2 text-xs"
-                    onClick={() => openInTerrain(project.id)}
-                  >
-                    <MapIcon className="size-3.5 shrink-0" />
-                    <span className="truncate">Terrain</span>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="min-w-0 flex-1 px-2 text-xs"
-                    onClick={() => openInEditor(project.id)}
-                  >
-                    <Layers className="size-3.5 shrink-0" />
-                    <span className="truncate">Editor</span>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="min-w-0 flex-1 px-2 text-xs"
-                    onClick={() => openInStudio3D(project.id)}
-                  >
-                    <Boxes className="size-3.5 shrink-0" />
-                    <span className="truncate">3D Studio</span>
-                  </Button>
+                  <div className="grid w-full grid-cols-2 gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="min-w-0 px-2 text-xs"
+                      onClick={() => openInTerrain(project.id)}
+                    >
+                      <MapIcon className="size-3.5 shrink-0" />
+                      <span className="truncate">Terrain</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="min-w-0 px-2 text-xs"
+                      onClick={() => openInOsmBuilder(project.id)}
+                    >
+                      <Building2 className="size-3.5 shrink-0" />
+                      <span className="truncate">OSM Builder</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="min-w-0 px-2 text-xs"
+                      onClick={() => openInEditor(project.id)}
+                    >
+                      <Layers className="size-3.5 shrink-0" />
+                      <span className="truncate">Editor</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="min-w-0 px-2 text-xs"
+                      onClick={() => openInStudio3D(project.id)}
+                    >
+                      <Boxes className="size-3.5 shrink-0" />
+                      <span className="truncate">3D Studio</span>
+                    </Button>
+                  </div>
                 </CardFooter>
               </Card>
             ))}

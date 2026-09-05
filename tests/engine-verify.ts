@@ -7,7 +7,7 @@ import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
 import { buildJunctionNetwork } from '../src/engine/junctions'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, simPoseAt } from '../src/engine/simulation'
-import { parseOverpassBuildings, toBuildingData, triangulatePolygon, buildBuildingMesh } from '../src/engine/osmBuildings'
+import { parseOverpassBuildings, toBuildingData, triangulatePolygon, buildBuildingMesh, overpassQuery, overpassQueryPolygon, polygonBounds, pointInPolygon, ringCentroidLatLng } from '../src/engine/osmBuildings'
 import { generatePcgBuildingMesh } from '../src/engine/pcgBuildings'
 import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
@@ -671,6 +671,44 @@ if (odr) {
   const flatVariant = buildBuildingMesh({ ...buildings[2], roofShape: 'flat' }, 0)
   const gabled = buildBuildingMesh(buildings[2], 0)
   check('osm: gabled roof adds ridge geometry', !!gabled && !!flatVariant && gabled.positions.length > flatVariant.positions.length)
+}
+
+// ─── Section 26b: OSM polygon query + point-in-polygon filter ───────
+{
+  // bbox query
+  const bbox = { west: 73.85, south: 18.52, east: 73.86, north: 18.53 }
+  const q = overpassQuery(bbox)
+  check('osm: bbox query contains coords', q.includes('(18.52,73.85,18.53,73.86)') && q.includes('out:json'))
+
+  // polygon query
+  const ring = [
+    { lat: 18.52, lng: 73.85 }, { lat: 18.53, lng: 73.85 },
+    { lat: 18.53, lng: 73.86 }, { lat: 18.52, lng: 73.86 },
+  ]
+  const pq = overpassQueryPolygon(ring)
+  check('osm: polygon query uses poly filter', pq.includes('poly:"18.52 73.85 18.53 73.85') && pq.includes('timeout:45'))
+  let threw = false
+  try { overpassQueryPolygon([{ lat: 1, lng: 1 }]) } catch { threw = true }
+  check('osm: polygon query rejects < 3 vertices', threw)
+
+  // polygon bounds
+  const pb = polygonBounds(ring)
+  check('osm: polygon bounds computed', Math.abs(pb.west - 73.85) < 1e-9 && Math.abs(pb.north - 18.53) < 1e-9)
+  check('osm: empty polygon bounds zero', (() => { const z = polygonBounds([]); return z.west === 0 && z.north === 0 })())
+
+  // point-in-polygon: square ring
+  check('osm: pip inside', pointInPolygon(73.855, 18.525, ring))
+  check('osm: pip outside', !pointInPolygon(73.90, 18.60, ring))
+  // concave L-shape
+  const lRing = [
+    { lat: 0, lng: 0 }, { lat: 0, lng: 10 }, { lat: 5, lng: 10 }, { lat: 5, lng: 5 }, { lat: 10, lng: 5 }, { lat: 10, lng: 0 },
+  ]
+  check('osm: pip concave inside notch', pointInPolygon(7.5, 2.5, lRing))
+  check('osm: pip concave outside notch', !pointInPolygon(7.5, 7.5, lRing))
+
+  // ring centroid (lat/lng)
+  const c = ringCentroidLatLng(ring)
+  check('osm: latlng ring centroid', Math.abs(c.lat - 18.525) < 1e-9 && Math.abs(c.lng - 73.855) < 1e-9)
 }
 
 // ─── Section 27: PCG building generation ────────────────────────────
