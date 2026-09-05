@@ -97,6 +97,7 @@ export default function OsmBuilderMap({
     })
 
     map.boxZoom.disable()
+    map.doubleClickZoom.disable()
     map.addControl(new NavigationControl({ visualizePitch: false }), 'top-right')
     map.addControl(new ScaleControl(), 'bottom-left')
     map.on('load', () => setMapReady(true))
@@ -117,51 +118,52 @@ export default function OsmBuilderMap({
       return { x: clientX - r.left, y: clientY - r.top }
     }
 
-    // ── Click: add a vertex (unless clicking an existing vertex to drag) ──
-    const onClick = (e: MouseEvent) => {
+    // ── MapLibre native click: add a vertex ──
+    // Using map.on('click') instead of a DOM listener on the container because
+    // MapLibre's canvas can consume/stopPropagation on DOM click events, and
+    // the SVG overlay (pointer-events) would block container clicks once
+    // vertices exist. map.on('click') fires after MapLibre has processed the
+    // interaction and gives us e.lngLat directly.
+    const onMapClick = (e: { lngLat: { lng: number; lat: number }; point: { x: number; y: number } }) => {
       if (drawingDisabledRef.current) return
-      // If a drag just ended, the click is consumed by mouseup — skip.
       if (dragVertexRef.current !== null) return
-      // Only left-click without modifier
-      if (e.button !== 0) return
-      const p = canvasPoint(e.clientX, e.clientY)
-      const lngLat = map.unproject(new Point(p.x, p.y))
       const ring = polygonRef.current
       // If clicking near the first vertex and we have ≥3 vertices, close the polygon
       if (ring.length >= 3) {
         const firstPx = map.project([ring[0].lng, ring[0].lat])
-        if (Math.hypot(firstPx.x - p.x, firstPx.y - p.y) < 10) {
-          // close — no new vertex, just keep as is (already closed visually)
+        if (Math.hypot(firstPx.x - e.point.x, firstPx.y - e.point.y) < 10) {
           return
         }
       }
-      onPolygonChangeRef.current([...ring, { lng: lngLat.lng, lat: lngLat.lat }])
+      onPolygonChangeRef.current([...ring, { lng: e.lngLat.lng, lat: e.lngLat.lat }])
     }
 
-    // ── Double-click: finish/close the polygon (no new vertex) ──
-    const onDblClick = (e: MouseEvent) => {
-      e.preventDefault()
-      // Double-click adds a vertex via the click handler too; remove the
-      // duplicate last vertex if it was just added within a few px of prev.
+    // ── MapLibre native dblclick: finish/close the polygon ──
+    // Double-click also fires a click event first (adding a vertex). Remove
+    // the stray duplicate if the last vertex is within a few px of the click.
+    const onMapDblClick = (e: { point: { x: number; y: number } }) => {
       const ring = polygonRef.current
       if (ring.length >= 2) {
-        const p = canvasPoint(e.clientX, e.clientY)
         const last = ring[ring.length - 1]
         const lastPx = map.project([last.lng, last.lat])
-        if (Math.hypot(lastPx.x - p.x, lastPx.y - p.y) < 6) {
-          // remove the stray duplicate from the preceding click
+        if (Math.hypot(lastPx.x - e.point.x, lastPx.y - e.point.y) < 6) {
           onPolygonChangeRef.current(ring.slice(0, -1))
         }
       }
     }
 
+    map.on('click', onMapClick)
+    map.on('dblclick', onMapDblClick)
+
     // ── Vertex drag: mousedown on a vertex marker starts a drag ──
     // Vertex markers are SVG <circle> elements with data-vertex-index.
+    // These are DOM events on the SVG circles (which opt into pointer-events),
+    // bubbling to the container.
     const onVertexMouseDown = (e: MouseEvent) => {
       if (drawingDisabledRef.current) return
-      const target = e.target as SVGElement
-      const idxAttr = target.getAttribute('data-vertex-index')
-      if (idxAttr === null) return
+      const target = e.target as SVGElement | null
+      const idxAttr = target?.getAttribute('data-vertex-index')
+      if (idxAttr === null || idxAttr === undefined) return
       e.preventDefault()
       e.stopPropagation()
       const idx = Number(idxAttr)
@@ -189,8 +191,8 @@ export default function OsmBuilderMap({
       map.dragPan.enable()
     }
 
-    container.addEventListener('click', onClick)
-    container.addEventListener('dblclick', onDblClick)
+    // Vertex drag listeners go on the container — they check e.target for the
+    // data-vertex-index attribute, so only vertex circle mousedowns trigger a drag.
     container.addEventListener('mousedown', onVertexMouseDown)
     container.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
@@ -202,8 +204,8 @@ export default function OsmBuilderMap({
 
     return () => {
       resizeObserver.disconnect()
-      container.removeEventListener('click', onClick)
-      container.removeEventListener('dblclick', onDblClick)
+      map.off('click', onMapClick)
+      map.off('dblclick', onMapDblClick)
       container.removeEventListener('mousedown', onVertexMouseDown)
       container.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
@@ -293,8 +295,10 @@ export default function OsmBuilderMap({
       )}
 
       {/* ─── Drawn polygon (SVG overlay) ─── */}
+      {/* pointer-events-none on the SVG so map clicks pass through; vertex
+          hit circles opt back in with pointer-events: auto for dragging. */}
       {polyPx.length > 0 && (
-        <svg className="absolute inset-0" style={{ zIndex: 15 }} width="100%" height="100%">
+        <svg className="pointer-events-none absolute inset-0" style={{ zIndex: 15 }} width="100%" height="100%">
           {/* polygon fill + outline */}
           {isClosed && polyPath && (
             <polygon
@@ -319,13 +323,15 @@ export default function OsmBuilderMap({
           {/* vertex markers */}
           {polyPx.map((p, i) => (
             <g key={i}>
-              {/* larger transparent hit area for dragging */}
+              {/* larger transparent hit area for dragging — opts into
+                  pointer-events so the SVG's pointer-events:none doesn't
+                  block vertex interaction */}
               <circle
                 cx={p.x}
                 cy={p.y}
                 r={12}
                 fill="transparent"
-                style={{ cursor: drawingDisabled ? 'default' : 'grab' }}
+                style={{ cursor: drawingDisabled ? 'default' : 'grab', pointerEvents: 'auto' }}
                 data-vertex-index={i}
                 onMouseEnter={() => setHoverVertex(i)}
                 onMouseLeave={() => setHoverVertex(null)}
