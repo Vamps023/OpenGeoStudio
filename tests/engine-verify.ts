@@ -18,6 +18,7 @@ import { serializeProject, deserializeProject, PROJECT_SCHEMA_VERSION } from '..
 import type { RoadData as DomainRoadData, Project as DomainProject } from '../src/domain'
 import { buildRoadSamplers, buildProjectJunctionNetwork, getLaneSection, getRoadTotalWidth, getRoadTotalLanes, validateRoad, validateProjectRoads, ROAD_LIFT } from '../src/engine/roadServices'
 import { buildEditorPreviewMeshes, flattenPreviewMeshes, previewRoadIds } from '../src/engine/previewMeshes'
+import { buildExportScene, encodeGLB, exportProjectToGLB } from '../src/engine/gltfExport'
 import { DOMParser as LinkedomDOMParser } from 'linkedom'
 
 // OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
@@ -1058,6 +1059,115 @@ if (odr) {
     const noInter = buildEditorPreviewMeshes(project, network, samplers, { road3dGeneration: true, intersection3dGeneration: false }, false, null)
     check('previewMeshes: no connecting meshes when disabled', noInter.connectingMeshes.length === 0)
   }
+}
+
+// ─── Section 32: GLTF/GLB export pipeline ──────────────────────────
+{
+  // Build a project with 2 crossing roads (4-arm junction)
+  const roads: DomainRoadData[] = [
+    { id: 'h1', name: 'Main Street', points: [{ x: -50, y: 0 }, { x: 50, y: 0 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+    { id: 'v1', name: 'Cross Ave', points: [{ x: 0, y: -50 }, { x: 0, y: 50 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+  ]
+  const project: DomainProject = {
+    id: 'export-proj',
+    name: 'Export Test',
+    createdAt: '2025-01-01T00:00:00Z',
+    roads,
+    suppressedJunctions: [],
+    geoRef: { lng: -122.4194, lat: 37.7749, scale: 1 },
+  }
+
+  // ── buildExportScene ──
+  const scene = buildExportScene(project, { drape: false, includeTerrain: false })
+  check('gltfExport: scene has meshes', scene.meshes.length > 0)
+  check('gltfExport: scene version is 1', scene.version === 1)
+  check('gltfExport: scene has origin', !!scene.origin)
+  check('gltfExport: origin lng matches', scene.origin?.lng === -122.4194)
+  check('gltfExport: origin lat matches', scene.origin?.lat === 37.7749)
+
+  // Road meshes exist
+  const roadMeshes = scene.meshes.filter((m) => m.category === 'road')
+  check('gltfExport: road meshes exist', roadMeshes.length > 0)
+  check('gltfExport: road mesh names start with Road:', roadMeshes.every((m) => m.name.startsWith('Road:')))
+  check('gltfExport: road mesh IDs match project', roadMeshes.some((m) => m.id === 'h1' || m.id === 'v1'))
+
+  // Marking meshes exist
+  const markingMeshes = scene.meshes.filter((m) => m.category === 'marking')
+  check('gltfExport: marking meshes exist', markingMeshes.length > 0)
+
+  // Junction meshes exist (2 crossing roads → 1 junction)
+  const junctionMeshes = scene.meshes.filter((m) => m.category === 'junction')
+  check('gltfExport: junction meshes exist', junctionMeshes.length > 0)
+
+  // All meshes have valid data
+  for (const mesh of scene.meshes) {
+    check(`gltfExport: ${mesh.name} has positions`, mesh.mesh.positions.length > 0)
+    check(`gltfExport: ${mesh.name} has colors`, mesh.mesh.colors.length > 0)
+    check(`gltfExport: ${mesh.name} has indices`, mesh.mesh.indices.length > 0)
+    check(`gltfExport: ${mesh.name} positions/3 === colors/3`, mesh.mesh.positions.length / 3 === mesh.mesh.colors.length / 3)
+  }
+
+  // ── encodeGLB ──
+  const glb = encodeGLB(scene)
+  check('gltfExport: GLB is ArrayBuffer', glb instanceof ArrayBuffer)
+  check('gltfExport: GLB size > 0', glb.byteLength > 0)
+
+  // Parse GLB header
+  const view = new DataView(glb)
+  const magic = view.getUint32(0, true)
+  const version = view.getUint32(4, true)
+  const length = view.getUint32(8, true)
+  check('gltfExport: GLB magic is glTF', magic === 0x46546c67)
+  check('gltfExport: GLB version is 2', version === 2)
+  check('gltfExport: GLB length matches buffer', length === glb.byteLength)
+
+  // Parse JSON chunk
+  const jsonLength = view.getUint32(12, true)
+  const jsonType = view.getUint32(16, true)
+  check('gltfExport: JSON chunk type', jsonType === 0x4e4f534a)
+  check('gltfExport: JSON chunk length > 0', jsonLength > 0)
+
+  const jsonBytes = new Uint8Array(glb, 20, jsonLength)
+  const jsonStr = new TextDecoder().decode(jsonBytes).replace(/\0+$/, '')
+  const gltfJson = JSON.parse(jsonStr)
+
+  check('gltfExport: GLTF asset version 2.0', gltfJson.asset?.version === '2.0')
+  check('gltfExport: GLTF has scenes', Array.isArray(gltfJson.scenes))
+  check('gltfExport: GLTF has nodes', Array.isArray(gltfJson.nodes) && gltfJson.nodes.length > 0)
+  check('gltfExport: GLTF has meshes', Array.isArray(gltfJson.meshes) && gltfJson.meshes.length > 0)
+  check('gltfExport: GLTF has materials', Array.isArray(gltfJson.materials) && gltfJson.materials.length >= 4)
+  check('gltfExport: GLTF has accessors', Array.isArray(gltfJson.accessors))
+  check('gltfExport: GLTF has bufferViews', Array.isArray(gltfJson.bufferViews))
+  check('gltfExport: GLTF has buffers', Array.isArray(gltfJson.buffers) && gltfJson.buffers.length === 1)
+  check('gltfExport: GLTF node count = scene mesh count', gltfJson.nodes.length === scene.meshes.length)
+
+  // Geographic metadata extension
+  check('gltfExport: GLTF has OGS_origin extension', gltfJson.extensions?.OGS_origin?.lng === -122.4194)
+  check('gltfExport: GLTF extensionsUsed includes OGS_origin', Array.isArray(gltfJson.extensionsUsed) && gltfJson.extensionsUsed.includes('OGS_origin'))
+
+  // Parse BIN chunk
+  const binChunkOffset = 20 + jsonLength
+  const binLength2 = view.getUint32(binChunkOffset, true)
+  const binType = view.getUint32(binChunkOffset + 4, true)
+  check('gltfExport: BIN chunk type', binType === 0x004e4942)
+  check('gltfExport: BIN chunk length > 0', binLength2 > 0)
+  check('gltfExport: BIN chunk + JSON chunk + header = total', binChunkOffset + 8 + binLength2 === glb.byteLength)
+
+  // ── exportProjectToGLB (convenience) ──
+  const glb2 = exportProjectToGLB(project, { drape: false, includeTerrain: false })
+  check('gltfExport: convenience GLB is ArrayBuffer', glb2 instanceof ArrayBuffer)
+  check('gltfExport: convenience GLB size > 0', glb2.byteLength > 0)
+
+  // ── Empty project ──
+  const emptyProject: DomainProject = {
+    id: 'empty', name: 'Empty', createdAt: '', roads: [], suppressedJunctions: [],
+  }
+  const emptyScene = buildExportScene(emptyProject)
+  check('gltfExport: empty project has no meshes', emptyScene.meshes.length === 0)
+  const emptyGlb = encodeGLB(emptyScene)
+  check('gltfExport: empty GLB is valid', emptyGlb.byteLength > 0)
+  const emptyView = new DataView(emptyGlb)
+  check('gltfExport: empty GLB magic', emptyView.getUint32(0, true) === 0x46546c67)
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
