@@ -16,6 +16,7 @@ import { samplePath } from '../engine/geometry'
 import { stickTrackToTerrain } from '../engine/tracks'
 import { sectionHalfWidth } from '../engine/laneLayout'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
+import { getAsphaltTextures, type RoadWear } from '../viewport/asphaltMaterial'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, type SimVehicle, type SimPath } from '../engine/simulation'
 import type { MeshData } from '../engine/mesh'
 import { useStore, getLaneSection } from '../state/store'
@@ -133,6 +134,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   const [showTerrain, setShowTerrain] = useState(true)
   const [wireframe, setWireframe] = useState(false)
   const [drape, setDrape] = useState(true)
+  const [roadWear, setRoadWear] = useState<RoadWear>('normal')
   const [fitSignal, setFitSignal] = useState(0)
   const [saving, setSaving] = useState(false)
 
@@ -255,6 +257,18 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         <ToolbarToggle active={drape} onClick={() => setDrape((v) => !v)} icon={<Route className="size-3.5" />} label="Drape on Terrain" />
         <ToolbarToggle active={imagery} onClick={() => setImagery((v) => !v)} icon={<Images className="size-3.5" />} label="Imagery" />
         <ToolbarToggle active={wireframe} onClick={() => setWireframe((v) => !v)} icon={<Boxes className="size-3.5" />} label="Wireframe" />
+        <label className="flex items-center gap-1.5 text-muted-foreground" title="Procedural asphalt material variant">
+          Asphalt
+          <select
+            className="h-6 rounded-md border border-border bg-background px-1 text-xs text-foreground"
+            value={roadWear}
+            onChange={(e) => setRoadWear(e.target.value as RoadWear)}
+          >
+            <option value="fresh">Fresh</option>
+            <option value="normal">Normal</option>
+            <option value="worn">Worn</option>
+          </select>
+        </label>
         <Separator orientation="vertical" className="h-5" />
         <ToolbarToggle active={playing} onClick={() => setPlaying((v) => !v)} icon={playing ? <Pause className="size-3.5" /> : <Car className="size-3.5" />} label={playing ? 'Pause Traffic' : 'Traffic'} />
         {playing && (
@@ -323,6 +337,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         imageryTexture={imagery ? imageryTexture : null}
         heightScale={heightScale}
         wireframe={wireframe}
+        roadWear={roadWear}
         fitSignal={fitSignal}
         focusSignal={focusSignal}
         outlinerOpen={outlinerOpen}
@@ -366,6 +381,7 @@ interface Studio3DViewportProps {
   imageryTexture: THREE.CanvasTexture | null
   heightScale: number
   wireframe: boolean
+  roadWear: RoadWear
   fitSignal: number
   focusSignal: number
   outlinerOpen: boolean
@@ -386,7 +402,7 @@ interface Studio3DViewportProps {
   simPaths: SimPath[]
 }
 
-function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
+function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScale, wireframe, roadWear, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -585,6 +601,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     disposeGroup(ref.roadGroup)
     ref.entryGroups.clear()
 
+    const asphalt = getAsphaltTextures(roadWear)
     if (terrainMesh) {
       const mesh = meshFromData(terrainMesh.positions, terrainMesh.normals, terrainMesh.colors, terrainMesh.indices, 0.95, terrainMesh.uvs, imageryTexture)
       mesh.userData.outlinerId = 'terrain'
@@ -601,11 +618,13 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
         ref.roadGroup.add(group)
         ref.entryGroups.set(object.id, group)
       }
-      const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 0.85, undefined, null, true)
+      // asphalt PBR set multiplies the vertex colors, so the lane-marking
+      // strips keep their exact geometry alignment while gaining surface wear
+      const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 1.0, object.mesh.uvs, asphalt.map, true, asphalt.roughnessMap, asphalt.normalMap, true)
       mesh.userData.outlinerId = object.id
       group.add(mesh)
     }
-  }, [terrainMesh, roadObjects, imageryTexture])
+  }, [terrainMesh, roadObjects, imageryTexture, roadWear])
 
   // ── Outliner visibility (eye icons + Roads toolbar toggle) ──
   useEffect(() => {
@@ -942,6 +961,10 @@ function meshFromData(
   map?: THREE.Texture | null,
   /** pull the surface toward the camera so draped roads win the depth test against the terrain */
   draped?: boolean,
+  roughnessMap?: THREE.Texture | null,
+  normalMap?: THREE.Texture | null,
+  /** multiply vertex colors AND the albedo map (roads: markings stay geometry-aligned) */
+  vertexColorsWithMap?: boolean,
 ): THREE.Mesh {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
@@ -951,8 +974,11 @@ function meshFromData(
   if (uvs) geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   const material = new THREE.MeshStandardMaterial({
-    vertexColors: !map,
+    vertexColors: !map || !!vertexColorsWithMap,
     map: map ?? null,
+    roughnessMap: roughnessMap ?? null,
+    normalMap: normalMap ?? null,
+    normalScale: new THREE.Vector2(0.55, 0.55),
     side: THREE.DoubleSide,
     roughness,
     metalness: 0.0,

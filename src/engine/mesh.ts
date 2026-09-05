@@ -10,6 +10,8 @@ export interface MeshData {
   positions: Float32Array
   colors: Float32Array
   indices: Uint32Array
+  /** optional per-vertex UVs (u = lateral meters, v = station meters, ÷ 6) for textured materials */
+  uvs?: Float32Array
 }
 
 type Rgb = [number, number, number]
@@ -299,6 +301,7 @@ function buildStrips(
   const n = samples.length
   const positions = new Float32Array(strips.length * n * 6)
   const colors = new Float32Array(strips.length * n * 6)
+  const uvs = new Float32Array(strips.length * n * 2)
   const indices: number[] = []
 
   strips.forEach((strip, stripIndex) => {
@@ -334,6 +337,12 @@ function buildStrips(
         colors[colorBase + 1] = strip.color[1]
         colors[colorBase + 2] = strip.color[2]
       }
+      // constant texel density: one texture tile spans 6 m both across and along
+      const uvBase = (stripIndex * n + i) * 2
+      uvs[uvBase] = inner / 6
+      uvs[uvBase + 1] = sample.s / 6
+      uvs[uvBase + 2] = outer / 6
+      uvs[uvBase + 3] = sample.s / 6
     })
     for (let i = 0; i < n - 1; i++) {
       const inner0 = (stripIndex * n + i) * 2
@@ -344,5 +353,5 @@ function buildStrips(
     }
   })
 
-  return { positions, colors, indices: new Uint32Array(indices) }
+  return { positions, colors, uvs, indices: new Uint32Array(indices) }
 }
