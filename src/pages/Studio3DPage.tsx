@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { Boxes, Car, Images, Maximize, Mountain, Pause, Play, Route, Save, RotateCcw } from 'lucide-react'
+import { Boxes, Car, ChevronDown, ChevronRight, Eye, EyeOff, Images, List, Lock, Maximize, Mountain, Pause, Play, RotateCcw, Route, Save, Search, Target, Trash2, Unlock } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMeshRange } from '../engine/mesh'
-import { buildRailFixtureMeshes } from '../engine/railFixtures'
+import { buildRailFixtureObjects } from '../engine/railFixtures'
 import { buildTerrainMeshWorld, type TerrainMeshData } from '../engine/terrainMesh'
 import { loadImageryTexture } from '../terrain/imageryTexture'
 import { allWays, resolveTracks } from '../engine/intersections'
@@ -42,8 +42,17 @@ const CAR_GEOMETRY = new THREE.BoxGeometry(4.2, 1.5, 1.9)
 
 // ─── Scene content built from project + registry terrain ───────────
 
-/** Build all road meshes (roads + junction connectors + intersection ways) in world space. */
-function buildProjectRoadMeshes(project: Project, drape: boolean): MeshData[] {
+/** One selectable scene object in the 3D Studio outliner. */
+export interface StudioRoadObject {
+  id: string
+  name: string
+  kind: 'road' | 'junction' | 'intersection' | 'rail'
+  mesh: MeshData
+}
+
+/** Build all road meshes (roads + junction connectors + intersection ways +
+ *  rail fixtures) in world space, tagged with outliner identity. */
+function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadObject[] {
   if (project.roads.length === 0) return []
 
   // Drape roads that have no elevation profile yet onto the background terrain
@@ -69,22 +78,23 @@ function buildProjectRoadMeshes(project: Project, drape: boolean): MeshData[] {
   const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, elevationSamplers)
   if (!junctionNetwork) return []
 
-  const meshes: MeshData[] = []
+  const objects: StudioRoadObject[] = []
+  const push = (id: string, name: string, kind: StudioRoadObject['kind'], mesh: MeshData | null) => {
+    if (mesh) objects.push({ id, name, kind, mesh })
+  }
   for (const road of effective) {
     const path = junctionNetwork.paths.get(road.id)
     if (!path) continue
     const section = roadSection(road)
     const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
     for (const range of visibleRoadRanges(path, cuts)) {
-      const mesh = buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
-      if (mesh) meshes.push(mesh)
+      push(road.id, road.name, 'road', buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers))
     }
   }
 
   for (const junction of junctionNetwork.junctions.filter((j) => !j.suppressed)) {
     for (const connection of junction.connectingRoads) {
-      const mesh = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
-      if (mesh) meshes.push(mesh)
+      push(`jx:${junction.id}`, `Junction · ${junction.approaches.length} arms`, 'junction', buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth))
     }
   }
 
@@ -93,16 +103,24 @@ function buildProjectRoadMeshes(project: Project, drape: boolean): MeshData[] {
   for (const intersection of project.intersections ?? []) {
     if (intersection.trackEnds.length < 2) continue
     for (const way of allWays(intersection, resolved)) {
-      const mesh = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
-      if (mesh) meshes.push(mesh)
+      push(`ix:${intersection.id}`, intersection.groundName || 'Intersection', 'intersection', buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth))
     }
   }
   // rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)
-  meshes.push(...buildRailFixtureMeshes(project))
-  return meshes
+  for (const fixture of buildRailFixtureObjects(project)) {
+    for (const mesh of fixture.meshes) objects.push({ id: fixture.id, name: fixture.name, kind: 'rail', mesh })
+  }
+  return objects
 }
 
 // ─── Page ──────────────────────────────────────────────────────────
+
+/** One row in the scene outliner. */
+export interface OutlinerEntry {
+  id: string
+  name: string
+  kind: 'terrain' | 'road' | 'junction' | 'intersection' | 'rail' | 'traffic' | 'helpers'
+}
 
 export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   const projects = useStore((s) => s.projects)
@@ -124,10 +142,49 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [terrain],
   )
-  const roadMeshes = useMemo(
-    () => (project ? buildProjectRoadMeshes(project, drape) : []),
+  const roadObjects = useMemo(
+    () => (project ? buildProjectRoadObjects(project, drape) : []),
     [project, drape],
   )
+
+  // ── Scene outliner state ──
+  const [playing, setPlaying] = useState(false)
+  const [outlinerOpen, setOutlinerOpen] = useState(true)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [hiddenIds, setHiddenIds] = useState<Record<string, boolean>>({})
+  const [lockedIds, setLockedIds] = useState<Record<string, boolean>>({})
+  const [focusSignal, setFocusSignal] = useState(0)
+
+  const outlinerEntries = useMemo<OutlinerEntry[]>(() => {
+    const entries: OutlinerEntry[] = []
+    if (terrainMesh) entries.push({ id: 'terrain', name: 'Terrain surface', kind: 'terrain' })
+    for (const object of roadObjects) {
+      entries.push({ id: object.id, name: object.name, kind: object.kind })
+    }
+    if (playing) entries.push({ id: 'traffic', name: 'Traffic vehicles', kind: 'traffic' })
+    entries.push({ id: 'helpers', name: 'Grid (helper)', kind: 'helpers' })
+    return entries
+  }, [terrainMesh, roadObjects, playing])
+
+  // drop selections that no longer exist after project edits
+  useEffect(() => {
+    const alive = new Set(outlinerEntries.map((entry) => entry.id))
+    setSelectedIds((ids) => ids.filter((id) => alive.has(id)))
+  }, [outlinerEntries])
+
+  function selectFromViewport(id: string | null, additive: boolean) {
+    setSelectedIds((ids) => {
+      if (id === null) return additive ? ids : []
+      if (additive) return ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
+      return ids.includes(id) ? ids : [id]
+    })
+  }
+  function toggleHidden(id: string) {
+    setHiddenIds((map) => ({ ...map, [id]: !map[id] }))
+  }
+  function toggleLocked(id: string) {
+    setLockedIds((map) => ({ ...map, [id]: !map[id] }))
+  }
   // simulation paths: plan polylines sampled at 2 m per road
   const simPaths = useMemo<SimPath[]>(() => {
     if (!project) return []
@@ -139,8 +196,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     })
   }, [project])
 
-  // traffic simulation (SCANeR Simulation parity): vehicles driving the network
-  const [playing, setPlaying] = useState(false)
+  // traffic simulation (simulation parity): vehicles driving the network
   const [simSpeed, setSimSpeed] = useState(1)
   const [vehicleCount, setVehicleCount] = useState(8)
   // satellite imagery draped onto the terrain surface
@@ -170,7 +226,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     }
   }
 
-  const hasContent = roadMeshes.length > 0 || !!terrainMesh
+  const hasContent = roadObjects.length > 0 || !!terrainMesh
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -245,10 +301,15 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
           <span className="w-8 tabular-nums text-foreground">{heightScale.toFixed(1)}x</span>
         </label>
         <Separator orientation="vertical" className="h-5" />
+        <Button size="sm" variant="ghost" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setFocusSignal((v) => v + 1)} disabled={selectedIds.length === 0} title="Focus selected (F)">
+          <Target className="size-3.5" />
+          Focus
+        </Button>
         <Button size="sm" variant="ghost" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setFitSignal((v) => v + 1)}>
           <Maximize className="size-3.5" />
           Fit View
         </Button>
+        <ToolbarToggle active={outlinerOpen} onClick={() => setOutlinerOpen((v) => !v)} icon={<List className="size-3.5" />} label="Outliner" />
         {!terrain && (
           <span className="ml-auto text-[11px] text-muted-foreground">
             No background terrain — download terrain in the Terrain workspace to see it here.
@@ -257,12 +318,22 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
       </div>
 
       <Studio3DViewport
-        roadMeshes={showRoads ? roadMeshes : []}
+        roadObjects={roadObjects}
         terrainMesh={showTerrain ? terrainMesh : null}
         imageryTexture={imagery ? imageryTexture : null}
         heightScale={heightScale}
         wireframe={wireframe}
         fitSignal={fitSignal}
+        focusSignal={focusSignal}
+        outlinerOpen={outlinerOpen}
+        entries={outlinerEntries}
+        selectedIds={selectedIds}
+        hiddenIds={{ ...hiddenIds, ...(showRoads ? {} : { __ALL_ROADS__: true }) }}
+        lockedIds={lockedIds}
+        onSelect={(id, additive) => selectFromViewport(id, additive)}
+        onToggleHidden={toggleHidden}
+        onToggleLocked={toggleLocked}
+        onFocus={() => setFocusSignal((v) => v + 1)}
         hasContent={hasContent}
         roadCount={project?.roads.length ?? 0}
         onFit={() => setFitSignal((v) => v + 1)}
@@ -290,12 +361,22 @@ function ToolbarToggle({ active, onClick, icon, label }: { active: boolean; onCl
 // ─── 3D Viewport ───────────────────────────────────────────────────
 
 interface Studio3DViewportProps {
-  roadMeshes: MeshData[]
+  roadObjects: StudioRoadObject[]
   terrainMesh: TerrainMeshData | null
   imageryTexture: THREE.CanvasTexture | null
   heightScale: number
   wireframe: boolean
   fitSignal: number
+  focusSignal: number
+  outlinerOpen: boolean
+  entries: OutlinerEntry[]
+  selectedIds: string[]
+  hiddenIds: Record<string, boolean>
+  lockedIds: Record<string, boolean>
+  onSelect: (id: string | null, additive: boolean) => void
+  onToggleHidden: (id: string) => void
+  onToggleLocked: (id: string) => void
+  onFocus: () => void
   hasContent: boolean
   roadCount: number
   onFit: () => void
@@ -305,7 +386,7 @@ interface Studio3DViewportProps {
   simPaths: SimPath[]
 }
 
-function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
+function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -316,8 +397,15 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     simGroup: THREE.Group
     grid: THREE.GridHelper
     renderer: THREE.WebGLRenderer
+    /** per-outliner-entry groups with pickable, tagged meshes */
+    entryGroups: Map<string, THREE.Group>
   } | null>(null)
   const simRef = useRef<{ vehicles: SimVehicle[]; paths: SimPath[]; last: number } | null>(null)
+  // latest props for one-time event listeners (viewport picks / shortcuts)
+  const pickRef = useRef({ hiddenIds, lockedIds, onSelect })
+  pickRef.current = { hiddenIds, lockedIds, onSelect }
+  const keyRef = useRef({ onFocus, onSelect })
+  keyRef.current = { onFocus, onSelect }
 
   // ── One-time scene setup ──
   useEffect(() => {
@@ -362,7 +450,54 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
 
     const simGroup = new THREE.Group()
     scene.add(simGroup)
-    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, simGroup, grid, renderer }
+    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, simGroup, grid, renderer, entryGroups: new Map() }
+
+    // ── Viewport picking: click (no drag) selects the outliner object under the cursor ──
+    const raycaster = new THREE.Raycaster()
+    const pickDown = { x: 0, y: 0 }
+    let pickArmed = false
+    const onPickDown = (e: PointerEvent) => {
+      if (e.button !== 0) return
+      pickDown.x = e.clientX
+      pickDown.y = e.clientY
+      pickArmed = true
+    }
+    const onPickUp = (e: PointerEvent) => {
+      if (e.button !== 0 || !pickArmed) return
+      pickArmed = false
+      if (Math.hypot(e.clientX - pickDown.x, e.clientY - pickDown.y) > 5) return // drag, not a pick
+      const ref = sceneRef.current
+      if (!ref) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+      raycaster.setFromCamera(ndc, ref.camera)
+      const hits = raycaster.intersectObjects([ref.terrainGroup, ref.roadGroup], true)
+      const { hiddenIds: hidden, lockedIds: locked, onSelect: select } = pickRef.current
+      for (const hit of hits) {
+        let node: THREE.Object3D | null = hit.object
+        while (node && node.userData.outlinerId === undefined) node = node.parent
+        const id = node?.userData.outlinerId as string | undefined
+        if (!id) continue
+        if (locked[id] || hidden[id]) continue // locked/hidden objects are not pickable
+        select(id, e.ctrlKey || e.shiftKey)
+        return
+      }
+      select(null, e.ctrlKey || e.shiftKey) // empty space clears (unless additive)
+    }
+    renderer.domElement.addEventListener('pointerdown', onPickDown)
+    renderer.domElement.addEventListener('pointerup', onPickUp)
+
+    // F = focus selected, Esc = clear selection
+    const onShortcut = (e: KeyboardEvent) => {
+      const tag = e.target as HTMLElement | null
+      if (tag && (tag.tagName === 'INPUT' || tag.tagName === 'SELECT' || tag.tagName === 'TEXTAREA')) return
+      if (e.code === 'KeyF') keyRef.current.onFocus()
+      if (e.code === 'Escape') keyRef.current.onSelect(null, false)
+    }
+    window.addEventListener('keydown', onShortcut)
 
     // WASD fly controls (Unreal-style): move on the ground plane relative to view
     const keys = new Set<string>()
@@ -432,6 +567,9 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
       disposeGroup(terrainGroup)
       disposeGroup(roadGroup)
       renderer.domElement.removeEventListener('contextmenu', suppressMenu)
+      renderer.domElement.removeEventListener('pointerdown', onPickDown)
+      renderer.domElement.removeEventListener('pointerup', onPickUp)
+      window.removeEventListener('keydown', onShortcut)
       ;(window as unknown as { __ogsFlyCleanup?: () => void }).__ogsFlyCleanup?.()
       renderer.dispose()
       renderer.domElement.remove()
@@ -439,23 +577,70 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     }
   }, [])
 
-  // ── Populate terrain + road meshes ──
+  // ── Populate terrain + road meshes, tagged per outliner entry ──
   useEffect(() => {
     const ref = sceneRef.current
     if (!ref) return
     disposeGroup(ref.terrainGroup)
     disposeGroup(ref.roadGroup)
+    ref.entryGroups.clear()
 
     if (terrainMesh) {
-      ref.terrainGroup.add(meshFromData(terrainMesh.positions, terrainMesh.normals, terrainMesh.colors, terrainMesh.indices, 0.95, terrainMesh.uvs, imageryTexture))
+      const mesh = meshFromData(terrainMesh.positions, terrainMesh.normals, terrainMesh.colors, terrainMesh.indices, 0.95, terrainMesh.uvs, imageryTexture)
+      mesh.userData.outlinerId = 'terrain'
+      ref.terrainGroup.add(mesh)
       ref.grid.visible = false
     } else {
       ref.grid.visible = true
     }
-    for (const mesh of roadMeshes) {
-      ref.roadGroup.add(meshFromData(mesh.positions, null, mesh.colors, mesh.indices, 0.85, undefined, null, true))
+    for (const object of roadObjects) {
+      let group = ref.entryGroups.get(object.id)
+      if (!group) {
+        group = new THREE.Group()
+        group.userData.outlinerId = object.id
+        ref.roadGroup.add(group)
+        ref.entryGroups.set(object.id, group)
+      }
+      const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 0.85, undefined, null, true)
+      mesh.userData.outlinerId = object.id
+      group.add(mesh)
     }
-  }, [terrainMesh, roadMeshes, imageryTexture])
+  }, [terrainMesh, roadObjects, imageryTexture])
+
+  // ── Outliner visibility (eye icons + Roads toolbar toggle) ──
+  useEffect(() => {
+    const ref = sceneRef.current
+    if (!ref) return
+    ref.roadGroup.visible = !hiddenIds['__ALL_ROADS__']
+    ref.terrainGroup.visible = !hiddenIds['terrain']
+    ref.simGroup.visible = !hiddenIds['traffic']
+    ref.grid.visible = !hiddenIds['helpers'] && !terrainMesh
+    for (const [id, group] of ref.entryGroups) {
+      group.visible = !hiddenIds[id]
+    }
+  }, [hiddenIds, terrainMesh, roadObjects])
+
+  // ── Selection highlight: green emissive silhouette on selected objects ──
+  useEffect(() => {
+    const ref = sceneRef.current
+    if (!ref) return
+    const selected = new Set(selectedIds)
+    const paint = (root: THREE.Object3D) => {
+      root.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return
+        const material = child.material as THREE.MeshStandardMaterial
+        if (selected.has((child.userData.outlinerId ?? root.userData.outlinerId) as string)) {
+          material.emissive.set(0x2fd57a)
+          material.emissiveIntensity = 0.5
+        } else {
+          material.emissive.set(0x000000)
+          material.emissiveIntensity = 1
+        }
+      })
+    }
+    paint(ref.terrainGroup)
+    paint(ref.roadGroup)
+  }, [selectedIds, terrainMesh, roadObjects])
 
   // ── Traffic simulation runtime (SCANeR Simulation parity) ──
   useEffect(() => {
@@ -508,11 +693,11 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     ref.terrainGroup.scale.y = heightScale
     ref.roadGroup.scale.y = heightScale
     for (const group of [ref.terrainGroup, ref.roadGroup]) {
-      for (const child of group.children) {
-        ((child as THREE.Mesh).material as THREE.MeshStandardMaterial).wireframe = wireframe
-      }
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh) (child.material as THREE.MeshStandardMaterial).wireframe = wireframe
+      })
     }
-  }, [heightScale, wireframe, terrainMesh, roadMeshes])
+  }, [heightScale, wireframe, terrainMesh, roadObjects])
 
   // ── Fit camera to content ──
   useEffect(() => {
@@ -530,7 +715,7 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
       }
     }
     if (terrainMesh) expand(terrainMesh.positions, 96)
-    for (const mesh of roadMeshes) expand(mesh.positions, 64)
+    for (const object of roadObjects) expand(object.mesh.positions, 64)
     if (!any) return
 
     const center = box.getCenter(new THREE.Vector3())
@@ -542,11 +727,63 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     ref.camera.far = Math.max(20000, radius * 12)
     ref.camera.updateProjectionMatrix()
     ref.controls.update()
-  }, [fitSignal, terrainMesh, roadMeshes])
+  }, [fitSignal, terrainMesh, roadObjects])
+
+  // ── Focus selected: frame the active outliner object ──
+  const selectionRef = useRef(selectedIds)
+  selectionRef.current = selectedIds
+  useEffect(() => {
+    const ref = sceneRef.current
+    if (!ref) return
+    const ids = selectionRef.current
+    if (ids.length === 0) return
+    const box = new THREE.Box3()
+    let any = false
+    const expand = (positions: Float32Array, stride: number) => {
+      const p = new THREE.Vector3()
+      for (let i = 0; i + 2 < positions.length; i += 3 * stride) {
+        p.set(positions[i], positions[i + 1], positions[i + 2])
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue
+        box.expandByPoint(p)
+        any = true
+      }
+    }
+    for (const id of ids) {
+      const group = ref.entryGroups.get(id)
+      if (!group) continue
+      for (const child of group.children) expand((child as THREE.Mesh).geometry.getAttribute('position').array as Float32Array, 8)
+    }
+    if (!any) return
+    const center = box.getCenter(new THREE.Vector3())
+    const size = box.getSize(new THREE.Vector3())
+    const radius = Math.max(8, Math.max(size.x, size.y, size.z) / 2)
+    ref.controls.target.copy(center)
+    // keep the current viewing direction, just change distance
+    const dir = ref.camera.position.clone().sub(ref.controls.target).normalize()
+    if (!Number.isFinite(dir.x) || dir.lengthSq() < 0.5) dir.set(0.65, 0.55, 0.75).normalize()
+    ref.camera.position.copy(center).addScaledVector(dir, radius * 3)
+    ref.camera.far = Math.max(20000, radius * 12)
+    ref.camera.updateProjectionMatrix()
+    ref.controls.update()
+  }, [focusSignal])
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[#0b1220]">
       <div ref={containerRef} className="absolute inset-0" />
+
+      {/* Scene outliner */}
+      {outlinerOpen && (
+        <SceneOutliner
+          entries={entries}
+          selectedIds={selectedIds}
+          hiddenIds={hiddenIds}
+          lockedIds={lockedIds}
+          onSelect={onSelect}
+          onToggleHidden={onToggleHidden}
+          onToggleLocked={onToggleLocked}
+          onFocus={onFocus}
+        />
+      )}
 
       {/* Stats */}
       {hasContent && (
@@ -559,7 +796,7 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
       {/* Controls hint */}
       {hasContent && (
         <div className="pointer-events-none absolute bottom-3 right-3 rounded-md border border-border bg-card/80 px-2.5 py-1 text-[11px] text-muted-foreground backdrop-blur">
-          Drag orbit · Right-drag pan · Scroll zoom
+          Drag orbit · Right-drag pan · Scroll zoom · Click select · F focus · Esc clear
         </div>
       )}
 
@@ -583,6 +820,114 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Scene Outliner panel ──────────────────────────────────────────
+
+const OUTLINER_CATEGORIES: { kind: OutlinerEntry['kind']; label: string }[] = [
+  { kind: 'terrain', label: 'Terrain' },
+  { kind: 'road', label: 'Roads' },
+  { kind: 'junction', label: 'Junctions' },
+  { kind: 'intersection', label: 'Intersections' },
+  { kind: 'rail', label: 'Rail fixtures' },
+  { kind: 'traffic', label: 'Traffic' },
+  { kind: 'helpers', label: 'Helpers' },
+]
+
+function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus }: {
+  entries: OutlinerEntry[]
+  selectedIds: string[]
+  hiddenIds: Record<string, boolean>
+  lockedIds: Record<string, boolean>
+  onSelect: (id: string | null, additive: boolean) => void
+  onToggleHidden: (id: string) => void
+  onToggleLocked: (id: string) => void
+  onFocus: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const activeId = selectedIds.length > 0 ? selectedIds[selectedIds.length - 1] : null
+  const needle = query.trim().toLowerCase()
+  const filtered = needle ? entries.filter((entry) => entry.name.toLowerCase().includes(needle)) : entries
+
+  return (
+    <div className="absolute right-3 top-3 z-10 flex max-h-[72%] w-64 flex-col overflow-hidden rounded-lg border border-border bg-card/90 text-xs shadow-lg backdrop-blur">
+      <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search scene…"
+          className="h-5 w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        {selectedIds.length > 0 && (
+          <button
+            className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => onSelect(null, false)}
+            title="Clear selection (Esc)"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="overflow-y-auto py-1">
+        {OUTLINER_CATEGORIES.map(({ kind, label }) => {
+          const items = filtered.filter((entry) => entry.kind === kind)
+          if (items.length === 0) return null
+          const isCollapsed = !!collapsed[kind]
+          return (
+            <div key={kind}>
+              <button
+                className="flex w-full items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                onClick={() => setCollapsed((map) => ({ ...map, [kind]: !map[kind] }))}
+              >
+                {isCollapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+                {label}
+                <span className="ml-auto font-normal normal-case tabular-nums">{items.length}</span>
+              </button>
+              {!isCollapsed && items.map((entry) => {
+                const isSelected = selectedIds.includes(entry.id)
+                const isHidden = !!hiddenIds[entry.id]
+                const isLocked = !!lockedIds[entry.id]
+                return (
+                  <div
+                    key={entry.id}
+                    className={`group flex items-center gap-1 px-2.5 py-1 ${isSelected ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-muted/60'} ${isHidden ? 'opacity-50' : ''}`}
+                  >
+                    <button
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                      title={isHidden ? 'Show object' : 'Hide object'}
+                      onClick={() => onToggleHidden(entry.id)}
+                    >
+                      {isHidden ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    </button>
+                    <button
+                      className={`min-w-0 flex-1 truncate text-left ${entry.id === activeId ? 'font-semibold' : ''}`}
+                      title={entry.name}
+                      onClick={(e) => onSelect(entry.id, e.ctrlKey || e.shiftKey)}
+                      onDoubleClick={onFocus}
+                    >
+                      {entry.name}
+                    </button>
+                    <button
+                      className={`shrink-0 hover:text-foreground ${isLocked ? 'text-amber-400' : 'text-muted-foreground opacity-0 group-hover:opacity-100'}`}
+                      title={isLocked ? 'Unlock (allow viewport picking)' : 'Lock (exclude from viewport picking)'}
+                      onClick={() => onToggleLocked(entry.id)}
+                    >
+                      {isLocked ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })}
+        {filtered.length === 0 && (
+          <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">No matching objects</p>
+        )}
+      </div>
     </div>
   )
 }

@@ -219,11 +219,20 @@ function sampleAt(path: FittedPath, s: number): { x: number; y: number; heading:
   return evaluatePath(path, s)
 }
 
-/** Build meshes for all rail fixtures of a project (Train section). */
-export function buildRailFixtureMeshes(project: RailFixtureProject): MeshData[] {
+/** One scene object's worth of fixture meshes (a turnout, a crossing or a
+ *  catch point) — lets the 3D Studio outliner address fixtures individually. */
+export interface RailFixtureObject {
+  id: string
+  name: string
+  kind: 'turnout' | 'crossing' | 'catch'
+  meshes: MeshData[]
+}
+
+/** Build meshes per fixture object (turnout / crossing / catch point). */
+export function buildRailFixtureObjects(project: RailFixtureProject): RailFixtureObject[] {
   const byId = new Map(project.roads.map((road) => [road.id, road]))
   const ctx = (id: string) => contextFor(byId.get(id))
-  const out: MeshData[] = []
+  const out: RailFixtureObject[] = []
 
   for (const point of project.railPoints ?? []) {
     const facing = ctx(point.facingTrackId)
@@ -251,27 +260,32 @@ export function buildRailFixtureMeshes(project: RailFixtureProject): MeshData[] 
     const ny = Math.cos(tipSample.heading)
     const throughSide: 'left' | 'right' = (throughPoint.x - tipSample.x) * nx + (throughPoint.y - tipSample.y) * ny >= 0 ? 'left' : 'right'
     const blade = buildPointBlade(branch, branchContact, throughSide)
-    if (blade) out.push(blade)
+    if (blade) out.push({ id: `rp:${point.id}`, name: point.name || 'Turnout', kind: 'turnout', meshes: [blade] })
   }
 
   for (const crossing of project.railCrossings ?? []) {
     const a = ctx(crossing.trackAId)
     const b = ctx(crossing.trackBId)
     if (!a || !b) continue
-    out.push(...buildCrossingWings(a, crossing.sA))
-    out.push(...buildGuardRails(a, crossing.sA))
+    const meshes: MeshData[] = [...buildCrossingWings(a, crossing.sA), ...buildGuardRails(a, crossing.sA)]
     if (crossing.kind === 'diamond') {
       // plain crossing: both tracks get wings + guards; a frog only has them on one
-      out.push(...buildCrossingWings(b, crossing.sB))
-      out.push(...buildGuardRails(b, crossing.sB))
+      meshes.push(...buildCrossingWings(b, crossing.sB), ...buildGuardRails(b, crossing.sB))
     }
+    out.push({ id: `rx:${crossing.id}`, name: crossing.kind === 'diamond' ? 'Diamond crossing' : 'Frog', kind: 'crossing', meshes })
   }
 
   for (const catchPoint of project.catchPoints ?? []) {
     const track = ctx(catchPoint.trackId)
     if (!track) continue
-    out.push(...buildCatchPoint(track, catchPoint.contact, catchPoint.side))
+    const meshes = buildCatchPoint(track, catchPoint.contact, catchPoint.side)
+    if (meshes.length) out.push({ id: `cp:${catchPoint.id}`, name: 'Catch point', kind: 'catch', meshes })
   }
 
   return out
+}
+
+/** Build meshes for all rail fixtures of a project (Train section). */
+export function buildRailFixtureMeshes(project: RailFixtureProject): MeshData[] {
+  return buildRailFixtureObjects(project).flatMap((object) => object.meshes)
 }
