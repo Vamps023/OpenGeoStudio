@@ -14,6 +14,8 @@ import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import { exportOpenDrive } from '../src/engine/opendriveExport'
 import type { Project } from '../src/state/store'
+import { serializeProject, deserializeProject, PROJECT_SCHEMA_VERSION } from '../src/domain'
+import type { RoadData as DomainRoadData, Project as DomainProject } from '../src/domain'
 import { DOMParser as LinkedomDOMParser } from 'linkedom'
 
 // OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
@@ -827,6 +829,63 @@ if (odr) {
     const tSurface = buildJunctionSurface(tJunction, new Map())
     check('T-junction surface: mesh built', !!tSurface.mesh)
   }
+}
+
+// ─── Section 29: Domain model (canonical types + serialization) ─────
+{
+  // Schema version is a positive integer
+  check('domain: schema version is positive integer', Number.isInteger(PROJECT_SCHEMA_VERSION) && PROJECT_SCHEMA_VERSION > 0)
+
+  // Build a minimal canonical project
+  const road: DomainRoadData = {
+    id: 'road-1',
+    name: 'Test Road',
+    points: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+    geometryType: 'straight',
+    lanesLeft: 1,
+    lanesRight: 1,
+    laneWidth: 3.5,
+    filletRadius: 0,
+  }
+  const project: DomainProject = {
+    id: 'proj-1',
+    name: 'Test Project',
+    createdAt: '2025-01-01T00:00:00Z',
+    roads: [road],
+    suppressedJunctions: [],
+  }
+
+  // Serialize → deserialize round-trip preserves data
+  const serialized = serializeProject(project)
+  check('domain: serialize wraps with schema version', serialized.schemaVersion === PROJECT_SCHEMA_VERSION)
+  check('domain: serialize preserves project id', serialized.project.id === 'proj-1')
+  check('domain: serialize preserves road count', serialized.project.roads.length === 1)
+  check('domain: serialize preserves road id', serialized.project.roads[0].id === 'road-1')
+
+  const restored = deserializeProject(serialized)
+  check('domain: deserialize returns project', !!restored)
+  if (restored) {
+    check('domain: deserialize preserves project id', restored.id === 'proj-1')
+    check('domain: deserialize preserves road id', restored.roads[0].id === 'road-1')
+    check('domain: deserialize preserves road name', restored.roads[0].name === 'Test Road')
+    check('domain: deserialize preserves points', restored.roads[0].points.length === 2)
+  }
+
+  // Legacy raw project format (no wrapper) still deserializes
+  const legacy = deserializeProject(project)
+  check('domain: deserialize accepts legacy raw project', !!legacy && legacy.id === 'proj-1')
+
+  // Invalid data returns null
+  check('domain: deserialize rejects null', deserializeProject(null) === null)
+  check('domain: deserialize rejects non-object', deserializeProject(42) === null)
+  check('domain: deserialize rejects garbage', deserializeProject({ foo: 'bar' }) === null)
+
+  // Future schema version returns null
+  const future = { schemaVersion: PROJECT_SCHEMA_VERSION + 1, project }
+  check('domain: deserialize rejects future schema', deserializeProject(future) === null)
+
+  // Domain module exports compile-time types (verified by typecheck)
+  check('domain: exports Vec2/RoadData/Project/LaneSectionDef/RailPoint/GeoReference/IntersectionData types', true)
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

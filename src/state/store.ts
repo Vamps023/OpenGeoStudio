@@ -9,151 +9,23 @@ import { decodeTerrain, encodeTerrain, type StoredTerrain } from '../terrain/ter
 import { setActiveTerrain } from '../terrain/terrainRegistry'
 import type { TerrainData } from '../engine/terrainMesh'
 
-export type RoadGeometryType = 'straight' | 'polyline' | 'arc'
+// ─── Canonical domain model ─────────────────────────────────────────
+// The domain layer (src/domain/) is the single source of truth for road,
+// rail, terrain, and project types. Import here for local use and
+// re-export so existing imports from state/store continue to work.
+import type { RoadGeometryType, RoadType, LaneTaper, PortionDef, RailwayConfig, RoadData } from '../domain/road'
+import { DEFAULT_RAILWAY } from '../domain/road'
+import type { RailPoint, RailCrossing, CatchPoint } from '../domain/rail'
+import type { GeoReference, WorkingArea } from '../domain/terrain'
+import type { Project, SerializedProject } from '../domain/project'
+import { PROJECT_SCHEMA_VERSION, serializeProject, deserializeProject } from '../domain/project'
 
-export interface LaneTaper {
-  side: 'left' | 'right'
-  index: number              // lane index on that side
-  mode: 'in' | 'out'         // 'in': grows from startS; 'out': shrinks to endS
-  length: number             // [m] SPEED_LIMIT × REACTION_TIME
-  /** abscissa where the express lane begins (mode 'in'; default 0) */
-  startS?: number
-  /** abscissa where the express lane disappears (mode 'out'; default track length) */
-  endS?: number
-}
-
-export type RoadType = 'none' | 'bridge' | 'tunnel'
-
-/** Railway track parameters (Train section). Values follow the Track Mesh
- *  Builder defaults: standard gauge 1.435, rail 0.075, trackbed 3.0. */
-export interface RailwayConfig {
-  /** distance between rail centers [m] (standard gauge 1.435) */
-  gauge: number
-  /** rail head/web width [m] */
-  railSize: number
-  /** ballast/trackbed full width [m] */
-  trackbedWidth: number
-  /** distance between sleeper centers [m] */
-  sleeperSpacing: number
-}
-
-export const DEFAULT_RAILWAY: RailwayConfig = {
-  gauge: 1.435,
-  railSize: 0.075,
-  trackbedWidth: 3.0,
-  sleeperSpacing: 0.65,
-}
-
-/** Turnout (switch): the facing track's extremity splits into a trailing
- *  (straight-through, main line) and a branch (diverging) track — the
- *  Track Mesh Builder "Point" component. */
-export interface RailPoint {
-  id: string
-  name: string
-  facingTrackId: string
-  facingContact: 'start' | 'end'
-  trailingTrackId: string
-  branchTrackId: string
-}
-
-/** Interior crossing of two railway tracks: frog (part of a divergence)
- *  or diamond (plain level crossing) with wing + guard rails. */
-export interface RailCrossing {
-  id: string
-  trackAId: string
-  trackBId: string
-  /** station of the crossing on each track */
-  sA: number
-  sB: number
-  position: Vec2
-  /** crossing angle [rad] */
-  angle: number
-  kind: 'frog' | 'diamond'
-}
-
-/** Single-blade derail point at a track extremity (catch point). */
-export interface CatchPoint {
-  id: string
-  trackId: string
-  contact: 'start' | 'end'
-  /** which side the blade sits on ('left' = left of travel direction) */
-  side: 'left' | 'right'
-}
-
-export interface PortionDef {
-  id: string
-  name: string
-  /** end abscissa along the track [m]; last portion uses the track length */
-  sEnd: number
-  roadType: RoadType
-}
-
-export interface RoadData {
-  id: string
-  name: string
-  points: Vec2[]
-  geometryType?: RoadGeometryType
-  elevationProfile?: ElevationPoint[]
-  // SCANeR-style XY function chain (track). When present it defines the
-  // road axis instead of `points`.
-  functions?: XYFunction[]
-  // Lane expansion/reduction tapers created by the Begin/End Lane tools
-  // (express lane grows/shrinks over SPEED_LIMIT × REACTION_TIME meters)
-  tapers?: LaneTaper[]
-  // Road portions (SCANeR portion editing)
-  portions?: PortionDef[]
-  // Profile (road style) name of this road's cross-section
-  profileName?: string
-  // Sub-network exits marked on track extremities (doc 5.5.4.2.16)
-  subNetworkExits?: ('start' | 'end')[]
-  // Banking/cant profile from Stick to Background Terrain (station → signed radians)
-  bankingProfile?: ElevationPoint[]
-  // Legacy simple lane counts (kept for backwards compatibility and quick UI).
-  lanesLeft: number
-  lanesRight: number
-  laneWidth: number
-  filletRadius: number
-  // Rich per-lane definition (SCANeR-compatible).
-  // When undefined, derived from {lanesLeft, lanesRight, laneWidth}.
-  laneSection?: LaneSectionDef
-  // Railway track (Train section): renders as rails + sleepers + ballast
-  // instead of a lane cross-section.
-  railway?: RailwayConfig
-}
-
-export interface GeoReference {
-  lng: number
-  lat: number
-  scale: number // meters per world unit
-}
-
-export interface Project {
-  id: string
-  name: string
-  createdAt: string
-  roads: RoadData[]
-  suppressedJunctions: string[]
-  /** Explicit intersections (SCANeR Roads tab) */
-  intersections?: IntersectionData[]
-  geoRef?: GeoReference
-  // Rail fixtures (Train section turnout pipeline)
-  railPoints?: RailPoint[]
-  railCrossings?: RailCrossing[]
-  catchPoints?: CatchPoint[]
-  /** persisted DEM so a reopened project keeps its terrain (base64 Float32) */
-  terrain?: StoredTerrain
-  /** persisted working area + tile grid size (Terrain workspace) */
-  workingArea?: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }
-  /** persisted tile keys (`row:col` within the working-area grid) so a reopened
-   *  project restores the exact selected/deselected tile combination */
-  selectedTiles?: string[]
-  /** imported OSM building footprints (world meters, project frame) */
-  osmBuildings?: import('../engine/osmBuildings').OsmBuildingData[]
-  /** OSM import metadata (attribution + refresh semantics) */
-  osmImport?: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }
-  /** PCG building generation settings (style/seed/detail + per-building overrides) */
-  pcgConfig?: import('../engine/pcgBuildings').PcgProjectConfig
-}
+export type { RoadGeometryType, RoadType, LaneTaper, PortionDef, RailwayConfig, RoadData } from '../domain/road'
+export { DEFAULT_RAILWAY } from '../domain/road'
+export type { RailPoint, RailCrossing, CatchPoint } from '../domain/rail'
+export type { GeoReference, WorkingArea } from '../domain/terrain'
+export type { Project, SerializedProject } from '../domain/project'
+export { PROJECT_SCHEMA_VERSION, serializeProject, deserializeProject } from '../domain/project'
 
 export type Tool =
   | 'select' | 'draw-straight' | 'draw-polyline' | 'draw-arc'
