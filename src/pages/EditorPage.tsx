@@ -211,7 +211,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       const laneSection = getLaneSection(road)
       const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
       return visibleRoadRanges(path, cuts).flatMap((range) => {
-        const mesh = buildRoadMeshRange(path, laneSection, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
+        const result = buildRoadMeshRange(path, laneSection, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
+        const mesh = result.pavement
         return mesh ? [{ roadId: road.id, mesh }] : []
       })
     })
@@ -221,7 +222,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     if (!junctionNetwork || !layers.intersection3dGeneration) return []
     return activeJunctions.flatMap((junction) =>
       junction.connectingRoads.flatMap((connection) => {
-        const mesh = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
+        const result = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
+        const mesh = result.pavement
         return mesh ? [mesh] : []
       }),
     )
@@ -235,7 +237,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     for (const intersection of project.intersections ?? []) {
       if (intersection.trackEnds.length < 2) continue
       for (const way of allWays(intersection, resolved)) {
-        const mesh = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
+        const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
+        const mesh = result.pavement
         if (mesh) out.push(mesh)
       }
     }
@@ -331,7 +334,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     () => (draftPath && tool !== 'select' && tool !== 'insert-intersection' && tool !== 'junction' && !tool.startsWith('lane-')
       ? section === 'train'
         ? buildRailwayMesh(draftPath, DEFAULT_RAILWAY)
-        : buildRoadMesh(draftPath, draftSection)
+        : buildRoadMesh(draftPath, draftSection).pavement
       : null),
     [draftPath, draftSection, tool, section],
   )

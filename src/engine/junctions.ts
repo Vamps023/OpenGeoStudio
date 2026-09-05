@@ -3,6 +3,7 @@ import type { PathSample } from './geometry'
 import { fitRoadGeometry } from './roadGeometry'
 import { getLaneSection } from '../state/store'
 import type { FittedPath, Vec2 } from './types'
+import type { MeshData } from './mesh'
 
 export interface JunctionRoad {
   id: string
@@ -516,4 +517,195 @@ function distance(a: Vec2, b: Vec2): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+// ─── Unified junction surface ───────────────────────────────────────
+//
+// Instead of rendering each turning connection as a standalone full-width
+// road strip (which produces overlapping star-shaped surfaces in a 4-arm
+// junction), build ONE continuous pavement polygon from the approach
+// boundaries and triangulate it. Turning centerlines are kept only for
+// lane connectivity — they are not rendered as pavement.
+
+/** A 2D point in world space (x, y) with an elevation z. */
+interface SurfacePoint {
+  x: number
+  y: number
+  z: number
+}
+
+/** Build a unified pavement surface for a junction from its approaches.
+ *  Returns a triangulated mesh (positions + indices + colors + UVs) that
+ *  covers the junction area as one continuous surface, plus the boundary
+ *  polygon for marking placement. */
+export function buildJunctionSurface(
+  junction: LaneMakerJunction,
+  elevationSamplers: Map<string, ElevationSampler>,
+): { mesh: MeshData | null; boundary: Vec2[] } {
+  if (junction.approaches.length < 2) return { mesh: null, boundary: [] }
+
+  // Collect approach corner points (left + right edges of each approach)
+  const corners: Vec2[] = []
+  for (const approach of junction.approaches) {
+    const sd = {
+      left: approach.outgoingLaneCount,
+      right: approach.incomingLaneCount,
+      leftWidth: (approach.outgoingLaneWidth ?? 3.5) * approach.outgoingLaneCount,
+      rightWidth: (approach.incomingLaneWidth ?? 3.5) * approach.incomingLaneCount,
+    }
+    const totalWidth = sd.leftWidth + sd.rightWidth
+    // approach.heading is the forward direction of the road at this point
+    // left = +90° from heading, right = -90°
+    const cosH = Math.cos(approach.heading)
+    const sinH = Math.sin(approach.heading)
+    // perpendicular (left)
+    const px = -sinH
+    const py = cosH
+    // Right edge of the approach (incoming side, -perpendicular)
+    const rightOffset = -sd.rightWidth
+    // Left edge of the approach (outgoing side, +perpendicular)
+    const leftOffset = sd.leftWidth
+    corners.push(
+      { x: approach.position.x + px * leftOffset, y: approach.position.y + py * leftOffset },
+      { x: approach.position.x + px * rightOffset, y: approach.position.y + py * rightOffset },
+    )
+  }
+
+  // Build a convex hull of the corner points — this gives us one continuous
+  // polygon that covers the junction area without overlaps.
+  const hull = convexHull(corners)
+  if (hull.length < 3) return { mesh: null, boundary: [] }
+
+  // Triangulate the hull polygon (fan triangulation for convex polygons)
+  const positions: number[] = []
+  const colors: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  // Compute centroid for UV origin and elevation
+  let cx = 0
+  let cy = 0
+  for (const p of hull) { cx += p.x; cy += p.y }
+  cx /= hull.length
+  cy /= hull.length
+
+  // Sample elevation at the centroid from any available sampler
+  let baseZ = 0
+  for (const approach of junction.approaches) {
+    const sampler = elevationSamplers.get(approach.roadId)
+    if (sampler) {
+      baseZ = sampler(approach.station)
+      break
+    }
+  }
+
+  // Asphalt color (slightly varied per-vertex for natural look)
+  const asphaltColor: [number, number, number] = [0.17, 0.19, 0.22]
+
+  // Add vertices
+  for (let i = 0; i < hull.length; i++) {
+    const p = hull[i]
+    // interpolate z toward the centroid (smooth, flat junction surface)
+    const z = baseZ + 0.02 // tiny lift above terrain to avoid z-fighting
+    positions.push(p.x, z, -p.y)
+    colors.push(asphaltColor[0], asphaltColor[1], asphaltColor[2])
+    // UV: local coordinates relative to centroid, 6 m per tile
+    uvs.push((p.x - cx) / 6, (p.y - cy) / 6)
+  }
+
+  // Fan triangulation (convex hull is always convex, so this is safe)
+  for (let i = 1; i < hull.length - 1; i++) {
+    // winding: ensure upward-facing (check cross product)
+    const ax = positions[0], az = positions[2]
+    const bx = positions[i * 3], bz = positions[i * 3 + 2]
+    const ccx = positions[(i + 1) * 3], ccz = positions[(i + 1) * 3 + 2]
+    const cross = (bx - ax) * (ccz - az) - (bz - az) * (ccx - ax)
+    if (cross < 0) {
+      indices.push(0, i + 1, i)
+    } else {
+      indices.push(0, i, i + 1)
+    }
+  }
+
+  const mesh: MeshData = {
+    positions: new Float32Array(positions),
+    colors: new Float32Array(colors),
+    indices: new Uint32Array(indices),
+    uvs: new Float32Array(uvs),
+  }
+
+  return { mesh, boundary: hull }
+}
+
+/** Andrew's monotone chain convex hull algorithm.
+ *  Returns the hull in counter-clockwise order. */
+function convexHull(points: Vec2[]): Vec2[] {
+  if (points.length < 3) return points.slice()
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y)
+  const cross = (o: Vec2, a: Vec2, b: Vec2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+
+  const lower: Vec2[] = []
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop()
+    lower.push(p)
+  }
+  const upper: Vec2[] = []
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i]
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop()
+    upper.push(p)
+  }
+  lower.pop()
+  upper.pop()
+  return lower.concat(upper)
+}
+
+/** Build lane markings for a junction: draw the turning paths as thin
+ *  dashed lines on top of the unified surface. Returns a marking mesh
+ *  (plain vertex-colored, no asphalt texture). */
+export function buildJunctionMarkings(
+  junction: LaneMakerJunction,
+): MeshData | null {
+  if (junction.connectingRoads.length === 0) return null
+  const positions: number[] = []
+  const colors: number[] = []
+  const indices: number[] = []
+  let vertexCount = 0
+
+  for (const connection of junction.connectingRoads) {
+    // Draw the centerline of each turning path as a thin strip
+    if (connection.samples.length < 2) continue
+    const lineWidth = 0.1
+    const white: [number, number, number] = [0.88, 0.9, 0.93]
+
+    for (let i = 0; i < connection.samples.length - 1; i++) {
+      const s0 = connection.samples[i]
+      const s1 = connection.samples[i + 1]
+      const dx = s1.x - s0.x
+      const dy = s1.y - s0.y
+      const len = Math.hypot(dx, dy)
+      if (len < 0.01) continue
+      const nx = -dy / len
+      const ny = dx / len
+      const z = (s0.z ?? 0) + 0.03 // slightly above pavement
+
+      // quad: s0-left, s0-right, s1-left, s1-right
+      positions.push(
+        s0.x + nx * lineWidth, z, -(s0.y + ny * lineWidth),
+        s0.x - nx * lineWidth, z, -(s0.y - ny * lineWidth),
+        s1.x + nx * lineWidth, z, -(s1.y + ny * lineWidth),
+        s1.x - nx * lineWidth, z, -(s1.y - ny * lineWidth),
+      )
+      for (let v = 0; v < 4; v++) colors.push(white[0], white[1], white[2])
+      indices.push(vertexCount, vertexCount + 1, vertexCount + 2, vertexCount + 1, vertexCount + 3, vertexCount + 2)
+      vertexCount += 4
+    }
+  }
+
+  if (positions.length === 0) return null
+  return {
+    positions: new Float32Array(positions),
+    colors: new Float32Array(colors),
+    indices: new Uint32Array(indices),
+  }
 }

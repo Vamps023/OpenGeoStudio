@@ -3,12 +3,13 @@
 //   npx esbuild tests/engine-verify.ts --bundle --platform=node --format=cjs //     --outfile=node_modules/.cache/engine-verify.cjs --external:zustand && node node_modules/.cache/engine-verify.cjs
 // Temporary engine verification (bundled and run via node, then deleted).
 import { evaluatePath } from '../src/engine/geometry'
-import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
+import { buildRailwayMesh, buildRoadMesh, buildConnectingRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
-import { buildJunctionNetwork } from '../src/engine/junctions'
+import { buildJunctionNetwork, buildJunctionSurface, buildJunctionMarkings } from '../src/engine/junctions'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, simPoseAt } from '../src/engine/simulation'
 import { parseOverpassBuildings, toBuildingData, triangulatePolygon, buildBuildingMesh, overpassQuery, overpassQueryPolygon, polygonBounds, pointInPolygon, ringCentroidLatLng } from '../src/engine/osmBuildings'
 import { generatePcgBuildingMesh } from '../src/engine/pcgBuildings'
+import { fitRoadGeometry } from '../src/engine/roadGeometry'
 import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import { exportOpenDrive } from '../src/engine/opendriveExport'
@@ -246,7 +247,8 @@ if (odr) {
     const end = evaluatePath(splinePath, splinePath.length)
     check('spline path ends on last control point', Math.hypot(end.x - last.x, end.y - last.y) < 0.05, `${Math.hypot(end.x - last.x, end.y - last.y).toFixed(3)}`)
     // no mesh sample may overshoot past the last control point (the 1.02 tail bug)
-    const mesh = buildRoadMesh(splinePath, { left: [{ id: 'l', type: 'travel', width: 3.5, speedLimit: 0, circulation: 'both' as const, vehicles: [], marking: 'none' as const }], right: [] })
+    const meshResult = buildRoadMesh(splinePath, { left: [{ id: 'l', type: 'travel', width: 3.5, speedLimit: 0, circulation: 'both' as const, vehicles: [], marking: 'none' as const }], right: [] })
+    const mesh = meshResult.pavement
     check('spline mesh builds', !!mesh)
     if (mesh) {
       let maxDist = 0
@@ -749,6 +751,82 @@ if (odr) {
   let maxY = -Infinity
   for (let i = 1; i < mesh.positions.length; i += 3) maxY = Math.max(maxY, mesh.positions[i])
   check('pcg: building stays within height + parapet', maxY <= 3 + 12.8 + 1.0, String(maxY))
+}
+
+// ─── Section 28: Road mesh split (pavement + markings) + junction surface ─
+{
+  // Straight road: pavement and markings are separate meshes
+  const straightPath = fitRoadGeometry({ points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], geometryType: 'straight', filletRadius: 0 })
+  const section = {
+    left: [{ id: 'l1', type: 'travel' as const, width: 3.5, speedLimit: 0, circulation: 'both' as const, vehicles: [], marking: 'none' as const }],
+    right: [{ id: 'r1', type: 'travel' as const, width: 3.5, speedLimit: 0, circulation: 'both' as const, vehicles: [], marking: 'none' as const }],
+  }
+  const result = buildRoadMesh(straightPath, section)
+  check('road split: pavement exists', !!result.pavement)
+  check('road split: markings exist', !!result.markings)
+  check('road split: pavement has positions', !!result.pavement && result.pavement.positions.length > 0)
+  check('road split: markings have positions', !!result.markings && result.markings.positions.length > 0)
+  // Both pavement and markings should have valid geometry
+  if (result.pavement && result.markings) {
+    check('road split: pavement has indices', result.pavement.indices.length > 0)
+    check('road split: markings have indices', result.markings.indices.length > 0)
+  }
+
+  // Connecting road mesh: also split
+  const connResult = buildConnectingRoadMesh(
+    [{ s: 0, x: 0, y: 0, z: 0, heading: 0 }, { s: 10, x: 10, y: 0, z: 0, heading: 0 }],
+    2, 3.5,
+  )
+  check('connector split: pavement exists', !!connResult.pavement)
+  check('connector split: markings exist', !!connResult.markings)
+
+  // Junction surface: 4-arm junction produces one continuous mesh
+  const roads: import('../src/engine/junctions').JunctionRoad[] = [
+    { id: 'h1', points: [{ x: -50, y: 0 }, { x: 50, y: 0 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+    { id: 'v1', points: [{ x: 0, y: -50 }, { x: 0, y: 50 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+  ]
+  const network = buildJunctionNetwork(roads)
+  const junction = network.junctions.find((j) => !j.suppressed)
+  check('junction surface: junction found', !!junction)
+  if (junction) {
+    const surface = buildJunctionSurface(junction, new Map())
+    check('junction surface: mesh built', !!surface.mesh)
+    check('junction surface: boundary computed', surface.boundary.length >= 3)
+    if (surface.mesh) {
+      check('junction surface: has positions', surface.mesh.positions.length > 0)
+      check('junction surface: has indices', surface.mesh.indices.length > 0)
+      check('junction surface: has UVs', !!surface.mesh.uvs && surface.mesh.uvs.length > 0)
+      // no NaN/Infinity in positions
+      let clean = true
+      for (const v of surface.mesh.positions) { if (!Number.isFinite(v)) { clean = false; break } }
+      check('junction surface: no NaN/Infinity positions', clean)
+      // no zero-area triangles (all indices valid and distinct)
+      let validTris = true
+      for (let i = 0; i < surface.mesh.indices.length; i += 3) {
+        const a = surface.mesh.indices[i], b = surface.mesh.indices[i + 1], c = surface.mesh.indices[i + 2]
+        if (a === b || b === c || a === c) { validTris = false; break }
+      }
+      check('junction surface: no degenerate triangles', validTris)
+    }
+    // junction markings
+    const markings = buildJunctionMarkings(junction)
+    check('junction markings: built', !!markings)
+    if (markings) {
+      check('junction markings: has positions', markings.positions.length > 0)
+    }
+  }
+
+  // 3-arm junction (T-junction)
+  const tRoads: import('../src/engine/junctions').JunctionRoad[] = [
+    { id: 'h1', points: [{ x: -30, y: 0 }, { x: 30, y: 0 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+    { id: 'v1', points: [{ x: 0, y: 0 }, { x: 0, y: 30 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+  ]
+  const tNetwork = buildJunctionNetwork(tRoads)
+  const tJunction = tNetwork.junctions.find((j) => !j.suppressed)
+  if (tJunction) {
+    const tSurface = buildJunctionSurface(tJunction, new Map())
+    check('T-junction surface: mesh built', !!tSurface.mesh)
+  }
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

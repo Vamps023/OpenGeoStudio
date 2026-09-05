@@ -3,11 +3,13 @@
 //
 // Generates a seamless, tileable asphalt texture set (albedo, roughness,
 // normal) on canvas — no external assets, so no licensing questions and
-// it works offline. The albedo is authored near-white because three.js
-// multiplies map × vertexColor: the road mesh's vertex colors (asphalt
-// grey + lane markings) provide the actual tones, the texture adds
-// aggregate speckle, mottling and wear. UVs come from the mesh builders
-// at a constant 6 m per tile, so texel density never stretches.
+// it works offline. The albedo is dark asphalt grey (not near-white) so
+// it can be applied directly to the pavement mesh without relying on
+// vertex-color multiplication. Lane markings are now a separate mesh
+// with their own plain vertex-colored material, so they stay clean
+// white/yellow/green and are not affected by the asphalt texture.
+// UVs come from the mesh builders at a constant 6 m per tile, so texel
+// density never stretches.
 // ─────────────────────────────────────────────────────────────────────
 import * as THREE from 'three'
 
@@ -108,9 +110,10 @@ interface AsphaltSet {
 }
 
 const WEAR_CONFIG: Record<RoadWear, { base: number; mottle: number; speckle: number; crack: number; rough: number; roughAmp: number }> = {
-  fresh: { base: 0.99, mottle: 0.03, speckle: 0.04, crack: 0.0, rough: 0.78, roughAmp: 0.06 },
-  normal: { base: 0.96, mottle: 0.05, speckle: 0.05, crack: 0.03, rough: 0.86, roughAmp: 0.08 },
-  worn: { base: 0.93, mottle: 0.07, speckle: 0.06, crack: 0.07, rough: 0.92, roughAmp: 0.09 },
+  // Dark asphalt albedo — fresh is darker/polished, worn is lighter/rougher
+  fresh:  { base: 0.14, mottle: 0.04, speckle: 0.05, crack: 0.0,  rough: 0.78, roughAmp: 0.06 },
+  normal: { base: 0.18, mottle: 0.06, speckle: 0.06, crack: 0.04, rough: 0.86, roughAmp: 0.08 },
+  worn:   { base: 0.22, mottle: 0.08, speckle: 0.07, crack: 0.09, rough: 0.92, roughAmp: 0.09 },
 }
 
 function buildAsphaltSet(wear: RoadWear): AsphaltSet {
@@ -126,14 +129,14 @@ function buildAsphaltSet(wear: RoadWear): AsphaltSet {
   const rough = new Float32Array(SIZE * SIZE)
   const height = new Float32Array(SIZE * SIZE)
   for (let i = 0; i < albedo.length; i++) {
-    // near-white albedo: vertex colors carry the tone, this adds variation
+    // dark asphalt albedo: base grey + mottling + aggregate speckle + wear
     let v = cfg.base
     v += (mottle[i] - 0.5) * 2 * cfg.mottle
     v += (streaks[i] - 0.5) * 2 * cfg.mottle * 0.6
     v += (aggregate[i] - 0.5) * 2 * cfg.speckle
     v += (fine[i] - 0.5) * 2 * cfg.speckle * 0.5
     if (cfg.crack > 0 && cracks[i] < 0.09) v -= cfg.crack // dark fatigue patches
-    albedo[i] = v
+    albedo[i] = Math.max(0.05, Math.min(0.45, v))
     rough[i] = cfg.rough + (aggregate[i] - 0.5) * 2 * cfg.roughAmp
     height[i] = aggregate[i] * 0.7 + fine[i] * 0.3
   }

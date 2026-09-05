@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { Boxes, Car, ChevronDown, ChevronRight, Eye, EyeOff, Images, List, Lock, Maximize, Mountain, Pause, Play, RotateCcw, Route, Save, Search, Target, Trash2, Unlock } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
+import { buildJunctionNetwork, visibleRoadRanges, buildJunctionSurface, buildJunctionMarkings } from '../engine/junctions'
 import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMeshRange } from '../engine/mesh'
 import { buildRailFixtureObjects } from '../engine/railFixtures'
 import { buildTerrainMeshWorld, type TerrainMeshData } from '../engine/terrainMesh'
@@ -51,6 +51,9 @@ export interface StudioRoadObject {
   name: string
   kind: 'road' | 'junction' | 'intersection' | 'rail' | 'building'
   mesh: MeshData
+  /** semantic surface type — pavement gets the asphalt PBR set, markings get
+   *  a plain vertex-colored material so they stay clean white/yellow/green */
+  surface?: 'pavement' | 'marking' | 'misc'
   /** OSM tags etc. for the inspector */
   tags?: Record<string, string>
 }
@@ -84,8 +87,8 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
   if (!junctionNetwork) return []
 
   const objects: StudioRoadObject[] = []
-  const push = (id: string, name: string, kind: StudioRoadObject['kind'], mesh: MeshData | null) => {
-    if (mesh) objects.push({ id, name, kind, mesh })
+  const push = (id: string, name: string, kind: StudioRoadObject['kind'], mesh: MeshData | null, surface?: 'pavement' | 'marking' | 'misc') => {
+    if (mesh) objects.push({ id, name, kind, mesh, surface })
   }
   for (const road of effective) {
     const path = junctionNetwork.paths.get(road.id)
@@ -93,14 +96,19 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
     const section = roadSection(road)
     const cuts = junctionNetwork.cuts.filter((cut) => cut.roadId === road.id)
     for (const range of visibleRoadRanges(path, cuts)) {
-      push(road.id, road.name, 'road', buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers))
+      const result = buildRoadMeshRange(path, section, range.sStart, range.sEnd, 1, elevationSamplers.get(road.id), bankingSamplers.get(road.id), road.tapers)
+      push(road.id, road.name, 'road', result.pavement, 'pavement')
+      push(`${road.id}:markings`, `${road.name} (markings)`, 'road', result.markings, 'marking')
     }
   }
 
+  // Unified junction surfaces: one continuous pavement polygon per junction
+  // instead of overlapping full-width turning-road strips
   for (const junction of junctionNetwork.junctions.filter((j) => !j.suppressed)) {
-    for (const connection of junction.connectingRoads) {
-      push(`jx:${junction.id}`, `Junction · ${junction.approaches.length} arms`, 'junction', buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth))
-    }
+    const surface = buildJunctionSurface(junction, elevationSamplers)
+    push(`jx:${junction.id}`, `Junction · ${junction.approaches.length} arms`, 'junction', surface.mesh, 'pavement')
+    const markings = buildJunctionMarkings(junction)
+    push(`jx:${junction.id}:markings`, `Junction markings`, 'junction', markings, 'marking')
   }
 
   // explicit intersections render their ways just like auto junctions
@@ -108,7 +116,9 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
   for (const intersection of project.intersections ?? []) {
     if (intersection.trackEnds.length < 2) continue
     for (const way of allWays(intersection, resolved)) {
-      push(`ix:${intersection.id}`, intersection.groundName || 'Intersection', 'intersection', buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth))
+      const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
+      push(`ix:${intersection.id}`, intersection.groundName || 'Intersection', 'intersection', result.pavement, 'pavement')
+      push(`ix:${intersection.id}:markings`, `${intersection.groundName || 'Intersection'} (markings)`, 'intersection', result.markings, 'marking')
     }
   }
   // rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)
@@ -588,6 +598,8 @@ function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTe
     const simGroup = new THREE.Group()
     scene.add(simGroup)
     sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, buildingGroup, simGroup, grid, renderer, entryGroups: new Map() }
+    // dev aid: inspect the live scene from the console / automation
+    ;(window as unknown as Record<string, unknown>).__ogsScene3d = { scene, camera, terrainGroup, roadGroup, buildingGroup, simGroup, grid }
 
     // ── Viewport picking: click (no drag) selects the outliner object under the cursor ──
     const raycaster = new THREE.Raycaster()
@@ -743,11 +755,20 @@ function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTe
         ref.roadGroup.add(group)
         ref.entryGroups.set(object.id, group)
       }
-      // asphalt PBR set multiplies the vertex colors, so the lane-marking
-      // strips keep their exact geometry alignment while gaining surface wear
-      const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 1.0, object.mesh.uvs, asphalt.map, true, asphalt.roughnessMap, asphalt.normalMap, true)
-      mesh.userData.outlinerId = object.id
-      group.add(mesh)
+      // Pavement gets the dark asphalt PBR set (texture only, vertex colors
+      // add subtle lane-type variation). Markings get a plain vertex-colored
+      // material so white/yellow/green strips stay clean and are not affected
+      // by the asphalt texture.
+      if (object.surface === 'marking') {
+        const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 0.6, undefined, null, true)
+        mesh.userData.outlinerId = object.id
+        group.add(mesh)
+      } else {
+        // pavement (or untagged legacy): asphalt PBR with vertex color tint
+        const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 1.0, object.mesh.uvs, asphalt.map, true, asphalt.roughnessMap, asphalt.normalMap, true)
+        mesh.userData.outlinerId = object.id
+        group.add(mesh)
+      }
     }
   }, [terrainMesh, roadObjects, imageryTexture, roadWear])
 
