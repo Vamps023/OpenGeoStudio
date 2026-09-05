@@ -301,7 +301,7 @@ function buildStrips(
   const n = samples.length
   const positions = new Float32Array(strips.length * n * 6)
   const colors = new Float32Array(strips.length * n * 6)
-  const uvs = new Float32Array(strips.length * n * 2)
+  const uvs = new Float32Array(strips.length * n * 4)
   const indices: number[] = []
 
   strips.forEach((strip, stripIndex) => {
@@ -337,19 +337,30 @@ function buildStrips(
         colors[colorBase + 1] = strip.color[1]
         colors[colorBase + 2] = strip.color[2]
       }
-      // constant texel density: one texture tile spans 6 m both across and along
-      const uvBase = (stripIndex * n + i) * 2
+      // constant texel density: one texture tile spans 6 m both across and along.
+      // 4 floats per row (2 vertices × uv) — keep the stride in sync with the
+      // 6-float position stride or every UV lands on the wrong vertex.
+      const uvBase = (stripIndex * n + i) * 4
       uvs[uvBase] = inner / 6
       uvs[uvBase + 1] = sample.s / 6
       uvs[uvBase + 2] = outer / 6
       uvs[uvBase + 3] = sample.s / 6
     })
     for (let i = 0; i < n - 1; i++) {
-      const inner0 = (stripIndex * n + i) * 2
-      const outer0 = inner0 + 1
-      const inner1 = inner0 + 2
-      const outer1 = inner0 + 3
-      indices.push(inner0, inner1, outer0, outer0, inner1, outer1)
+      const A = (stripIndex * n + i) * 2
+      const B = A + 1
+      const C = A + 2
+      const D = A + 3
+      // Winding must face UP (+y): strips on either side of the centre line
+      // (and edge/centre markings) wind in opposite lateral directions, so
+      // branch on the quad's actual orientation. Down-facing quads render
+      // black under the directional lights (the old "checkerboard" bug).
+      const ax = positions[A * 3], az = positions[A * 3 + 2]
+      const bx = positions[B * 3], bz = positions[B * 3 + 2]
+      const cx = positions[C * 3], cz = positions[C * 3 + 2]
+      const ny = (cx - ax) * (bz - az) - (bx - ax) * (cz - az)
+      if (ny < 0) indices.push(A, C, B, B, C, D)
+      else indices.push(A, B, C, B, D, C)
     }
   })
 
