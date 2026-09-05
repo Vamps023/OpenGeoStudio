@@ -6,6 +6,7 @@ import { buildConnectingRoadMesh, buildRailwayMesh, buildRoadMesh, buildRoadMesh
 import { buildRailFixtureMeshes } from '../engine/railFixtures'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry, nearestPointOnPath, sampledControlPoints } from '../engine/roadGeometry'
+import { smoothPolylinePoints } from '../engine/tracks'
 import { evaluatePath } from '../engine/geometry'
 import type { MeshData } from '../engine/mesh'
 import type { Vec2 } from '../engine/types'
@@ -1650,6 +1651,9 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       items.push({ label: 'Split Track', onSelect: () => splitRoadAt(road, hit.s), separatorBefore: true })
       items.push({ label: 'Invert Track Orientation', onSelect: () => { selectRoadOnly(road.id); setTimeout(invertSelectedOrientation, 0) } })
       items.push({ label: 'Stick Track to Background Terrain', onSelect: () => { selectRoadOnly(road.id); setTimeout(stickSelectedToTerrain, 0) } })
+      if (!isFn && (road.geometryType ?? 'polyline') === 'polyline') {
+        items.push({ label: 'Smooth Track (Polyline)', onSelect: () => { selectRoadOnly(road.id); setTimeout(smoothSelectedPolyline, 0) } })
+      }
 
       // exits
       const nearStart = distance(hit.road.points[0] ?? { x: 1e9, y: 1e9 }, world) < 12
@@ -2076,6 +2080,23 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     anchor.click()
     URL.revokeObjectURL(url)
     toast.success('OpenDRIVE exported', { description: `${project.roads.length} roads as line / arc / spiral geometry` })
+  }
+
+  /** Doc 5.5.2.1.13 track smoothing: Chaikin-smooth a legacy polyline track. */
+  function smoothSelectedPolyline() {
+    const road = selectedRoad
+    if (!road) return
+    if (road.functions && road.functions.length > 0) {
+      toast.error('Smoothing applies to polyline roads (convert to polyline first).')
+      return
+    }
+    if (!road.points || road.points.length < 3) {
+      toast.error('Not enough control points to smooth.')
+      return
+    }
+    const smoothed = smoothPolylinePoints(road.points, 2)
+    updateRoad(road.id, { points: smoothed, geometryType: 'polyline' })
+    toast.success('Track smoothed', { description: `${road.points.length} -> ${smoothed.length} control points` })
   }
 
   function handleExportNetwork() {

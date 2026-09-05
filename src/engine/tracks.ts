@@ -375,6 +375,30 @@ function transformFunctionPoints(fn: XYFunction, f: (p: Vec2) => Vec2, rotation 
   }
 }
 
+// ─── Smoothing (doc 5.5.2.1.13) ──────────────────────────────────────
+
+/**
+ * Track smoothing for legacy polyline tracks: one Chaikin corner-cutting
+ * pass doubles the control points and rounds every interior corner while
+ * keeping the two endpoints fixed (the doc's "track smoothing").
+ */
+export function smoothPolylinePoints(points: Vec2[], passes = 2): Vec2[] {
+  let current = points.map((p) => ({ x: p.x, y: p.y }))
+  for (let pass = 0; pass < passes; pass++) {
+    if (current.length < 3) return current
+    const next: Vec2[] = [current[0]]
+    for (let i = 0; i < current.length - 1; i++) {
+      const a = current[i]
+      const b = current[i + 1]
+      next.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 })
+      next.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 })
+    }
+    next.push(current[current.length - 1])
+    current = next
+  }
+  return current
+}
+
 // ─── Stick to background terrain (doc 5.5.4.3.2) ─────────────────────
 
 export interface StickResult {

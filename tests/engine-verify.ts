@@ -6,6 +6,8 @@ import { evaluatePath } from '../src/engine/geometry'
 import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
 import { buildJunctionNetwork } from '../src/engine/junctions'
+import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, simPoseAt } from '../src/engine/simulation'
+import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import { exportOpenDrive } from '../src/engine/opendriveExport'
 import type { Project } from '../src/state/store'
@@ -583,6 +585,36 @@ if (odr) {
     check('odr: round trip length preserved', Math.abs(rtLen - srcLen) < 0.5, `${rtLen.toFixed(2)} vs ${srcLen.toFixed(2)}`)
   }
 
+}
+
+
+// 26. Simulation runtime (vehicles on the network) + track smoothing
+{
+  const poly = [
+    { x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 50 },
+  ]
+  const paths = buildSimPaths([{ id: 'r1', name: 'R1', polyline: poly, length: 100 }])
+  check('sim: path builds', paths.length === 1 && Math.abs(paths[0].length - 100) < 1)
+  const pose0 = simPoseAt(paths[0], 0)
+  check('sim: pose at start', Math.abs(pose0.x) < 0.01 && Math.abs(pose0.y) < 0.01)
+  const poseMid = simPoseAt(paths[0], 75)
+  check('sim: pose mid on second leg', Math.abs(poseMid.x - 50) < 0.01 && Math.abs(poseMid.y - 25) < 0.01)
+  check('sim: heading along first leg', Math.abs(simPoseAt(paths[0], 20).heading) < 1e-9)
+  const vehicles = spawnVehicles(paths, 4)
+  check('sim: spawns vehicles', vehicles.length === 4)
+  const before = vehicles.map((v) => v.s)
+  stepSimulation(vehicles, paths, 1)
+  const after = vehicles.map((v) => v.s)
+  check('sim: advances by speed*dt (wrap-aware)', vehicles.every((v, i) => ((after[i] - before[i]) % 100 + 100) % 100 > 0))
+  const wrap = [{ id: 1, roadId: 'r1', s: 99.9, laneOffset: -1.75, speed: 10 }]
+  stepSimulation(wrap, paths, 0.1)
+  check('sim: wraps at road end', wrap[0].s < 1, String(wrap[0].s))
+  const poses = simulationPoses(vehicles, paths)
+  check('sim: poses for all vehicles', poses.length === 4)
+
+  const smoothed = smoothPolylinePoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 10 }], 2)
+  check('smoothing: endpoint preserved', smoothed[0].x === 0 && smoothed[0].y === 0)
+  check('smoothing: point count grows', smoothed.length === 16, String(smoothed.length))
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

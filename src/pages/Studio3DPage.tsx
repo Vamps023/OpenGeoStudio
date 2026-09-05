@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { Boxes, Images, Maximize, Mountain, Route, Save, RotateCcw } from 'lucide-react'
+import { Boxes, Car, Images, Maximize, Mountain, Pause, Play, Route, Save, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { buildJunctionNetwork, visibleRoadRanges } from '../engine/junctions'
@@ -12,9 +12,11 @@ import { loadImageryTexture } from '../terrain/imageryTexture'
 import { allWays, resolveTracks } from '../engine/intersections'
 import { evaluateElevation, normalizeElevationProfile } from '../engine/elevation'
 import { fitRoadGeometry } from '../engine/roadGeometry'
+import { samplePath } from '../engine/geometry'
 import { stickTrackToTerrain } from '../engine/tracks'
 import { sectionHalfWidth } from '../engine/laneLayout'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
+import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, type SimVehicle, type SimPath } from '../engine/simulation'
 import type { MeshData } from '../engine/mesh'
 import { useStore, getLaneSection } from '../state/store'
 import type { Project, RoadData } from '../state/store'
@@ -34,6 +36,9 @@ function roadSection(road: RoadData) {
 /** Lift roads above the terrain surface to avoid z-fighting (the decimated
  *  terrain grid interpolates up to ~0.5 m off the true surface). */
 const ROAD_LIFT = 1.0
+
+/** Shared vehicle body geometry (SCANeR-style surrogate vehicle). */
+const CAR_GEOMETRY = new THREE.BoxGeometry(4.2, 1.5, 1.9)
 
 // ─── Scene content built from project + registry terrain ───────────
 
@@ -123,7 +128,21 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     () => (project ? buildProjectRoadMeshes(project, drape) : []),
     [project, drape],
   )
+  // simulation paths: plan polylines sampled at 2 m per road
+  const simPaths = useMemo<SimPath[]>(() => {
+    if (!project) return []
+    return project.roads.flatMap((road) => {
+      const path = fitRoadGeometry(road)
+      if (!path) return []
+      const samples = samplePath(path, 2).map((sm) => ({ s: sm.s, x: sm.x, y: sm.y, heading: sm.heading }))
+      return [{ roadId: road.id, name: road.name, length: path.length, samples }]
+    })
+  }, [project])
 
+  // traffic simulation (SCANeR Simulation parity): vehicles driving the network
+  const [playing, setPlaying] = useState(false)
+  const [simSpeed, setSimSpeed] = useState(1)
+  const [vehicleCount, setVehicleCount] = useState(8)
   // satellite imagery draped onto the terrain surface
   const [imagery, setImagery] = useState(true)
   const [imageryTexture, setImageryTexture] = useState<THREE.CanvasTexture | null>(null)
@@ -181,6 +200,37 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         <ToolbarToggle active={imagery} onClick={() => setImagery((v) => !v)} icon={<Images className="size-3.5" />} label="Imagery" />
         <ToolbarToggle active={wireframe} onClick={() => setWireframe((v) => !v)} icon={<Boxes className="size-3.5" />} label="Wireframe" />
         <Separator orientation="vertical" className="h-5" />
+        <ToolbarToggle active={playing} onClick={() => setPlaying((v) => !v)} icon={playing ? <Pause className="size-3.5" /> : <Car className="size-3.5" />} label={playing ? 'Pause Traffic' : 'Traffic'} />
+        {playing && (
+          <>
+            <label className="flex items-center gap-1 text-muted-foreground">
+              Vehicles
+              <input
+                type="number"
+                min={1}
+                max={60}
+                className="h-6 w-14 rounded-md border border-border bg-background px-1.5 text-xs text-foreground"
+                value={vehicleCount}
+                onChange={(e) => setVehicleCount(Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 8)))}
+              />
+            </label>
+            <label className="flex items-center gap-1 text-muted-foreground">
+              Speed
+              <select
+                className="h-6 rounded-md border border-border bg-background px-1 text-xs text-foreground"
+                value={simSpeed}
+                onChange={(e) => setSimSpeed(parseFloat(e.target.value))}
+              >
+                <option value={0.25}>0.25x</option>
+                <option value={0.5}>0.5x</option>
+                <option value={1}>1x</option>
+                <option value={2}>2x</option>
+                <option value={5}>5x</option>
+              </select>
+            </label>
+          </>
+        )}
+        <Separator orientation="vertical" className="h-5" />
         <label className="flex items-center gap-2 text-muted-foreground">
           Height Scale
           <input
@@ -216,6 +266,10 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         hasContent={hasContent}
         roadCount={project?.roads.length ?? 0}
         onFit={() => setFitSignal((v) => v + 1)}
+        playing={playing}
+        simSpeed={simSpeed}
+        vehicleCount={vehicleCount}
+        simPaths={simPaths}
       />
     </div>
   )
@@ -245,9 +299,13 @@ interface Studio3DViewportProps {
   hasContent: boolean
   roadCount: number
   onFit: () => void
+  playing: boolean
+  simSpeed: number
+  vehicleCount: number
+  simPaths: SimPath[]
 }
 
-function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, hasContent, roadCount, onFit }: Studio3DViewportProps) {
+function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale, wireframe, fitSignal, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -255,9 +313,11 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     controls: OrbitControls
     terrainGroup: THREE.Group
     roadGroup: THREE.Group
+    simGroup: THREE.Group
     grid: THREE.GridHelper
     renderer: THREE.WebGLRenderer
   } | null>(null)
+  const simRef = useRef<{ vehicles: SimVehicle[]; paths: SimPath[]; last: number } | null>(null)
 
   // ── One-time scene setup ──
   useEffect(() => {
@@ -298,7 +358,9 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     controls.maxPolarAngle = Math.PI / 2 - 0.02
     controls.screenSpacePanning = false
 
-    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, grid, renderer }
+    const simGroup = new THREE.Group()
+    scene.add(simGroup)
+    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, simGroup, grid, renderer }
 
     function resize() {
       const w = container!.clientWidth
@@ -349,7 +411,51 @@ function Studio3DViewport({ roadMeshes, terrainMesh, imageryTexture, heightScale
     }
   }, [terrainMesh, roadMeshes, imageryTexture])
 
-  // ── Wireframe + height scale ──
+  // ── Traffic simulation runtime (SCANeR Simulation parity) ──
+  useEffect(() => {
+    const ref = sceneRef.current
+    if (!ref) return
+    disposeGroup(ref.simGroup)
+    if (!playing || simPaths.length === 0) {
+      simRef.current = null
+      return
+    }
+    const vehicles = spawnVehicles(simPaths, vehicleCount)
+    simRef.current = { vehicles, paths: simPaths, last: performance.now() }
+    const boxes: THREE.Mesh[] = []
+    const color = new THREE.Color()
+    for (const vehicle of vehicles) {
+      const mesh = new THREE.Mesh(CAR_GEOMETRY, new THREE.MeshStandardMaterial({
+        color: color.setHSL((vehicle.id * 0.618) % 1, 0.55, 0.5),
+        roughness: 0.4,
+        metalness: 0.2,
+      }))
+      ref.simGroup.add(mesh)
+      boxes.push(mesh)
+    }
+    let last = performance.now()
+    const timer = window.setInterval(() => {
+      const sim = simRef.current
+      if (!sim) return
+      const now = performance.now()
+      const dt = Math.min(0.25, (now - sim.last) / 1000) * simSpeed
+      sim.last = now
+      stepSimulation(sim.vehicles, sim.paths, dt)
+      const poses = simulationPoses(sim.vehicles, sim.paths)
+      poses.forEach((pose, i) => {
+        const mesh = boxes[i]
+        if (!mesh) return
+        mesh.position.set(pose.x, ROAD_LIFT + 0.8, -pose.y)
+        mesh.rotation.y = -pose.heading
+      })
+    }, 33)
+    return () => {
+      window.clearInterval(timer)
+      simRef.current = null
+    }
+  }, [playing, simPaths, vehicleCount, simSpeed])
+
+    // ── Wireframe + height scale ──
   useEffect(() => {
     const ref = sceneRef.current
     if (!ref) return
