@@ -30,6 +30,7 @@ const GRASS: Rgb = [0.40, 0.55, 0.35]
 const DIRT: Rgb = [0.55, 0.42, 0.32]
 const RUNWAY: Rgb = [0.20, 0.22, 0.25]
 const STEEL: Rgb = [0.62, 0.64, 0.68]
+const CENTER_GREEN: Rgb = [0.2, 0.85, 0.35]
 const BALLAST: Rgb = [0.44, 0.41, 0.37]
 const SLEEPER: Rgb = [0.35, 0.28, 0.20]
 
@@ -175,7 +176,8 @@ export function buildRoadMeshFromSamples(
   // Edge lines (white) at outermost borders
   if (layout.totalLeft > 0.3) strips.push({ inner: layout.totalLeft - 0.2, outer: layout.totalLeft - 0.05, color: WHITE, height: 0.025 })
   if (layout.totalRight > 0.3) strips.push({ inner: -layout.totalRight + 0.05, outer: -layout.totalRight + 0.2, color: WHITE, height: 0.025 })
-  if (layout.totalLeft > 0 && layout.totalRight > 0) strips.push({ inner: -0.075, outer: 0.075, color: YELLOW, height: 0.025 })
+  // SCANeR default style: green centre line between the two traffic directions
+  if (layout.totalLeft > 0 && layout.totalRight > 0) strips.push({ inner: -0.075, outer: 0.075, color: CENTER_GREEN, height: 0.025 })
 
   // Lane dividers (per-lane markings)
   for (const side of [layout.left, layout.right]) {

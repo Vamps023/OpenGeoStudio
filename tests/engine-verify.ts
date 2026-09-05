@@ -5,6 +5,7 @@
 import { evaluatePath } from '../src/engine/geometry'
 import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
+import { buildJunctionNetwork } from '../src/engine/junctions'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import type { Project } from '../src/state/store'
 import { importOpenDrive } from '../src/engine/opendrive'
@@ -492,6 +493,45 @@ if (odr) {
   check('phase11: diamond + catch meshes build', crossingMeshes2.length >= 9, `got ${crossingMeshes2.length}`)
 }
 
+
+
+// 24. Junctions must follow the lane SECTION (not the legacy lane counts):
+// after adding a lane in the Lanes tab the junction cuts, connections and
+// lane allocations have to adapt.
+{
+  const crossRoad = (id: string, x: number, y: number, heading: number, len: number, lanesLeft: number, lanesRight: number, laneSection?: never) => ({
+    id, name: id,
+    points: [{ x, y }, { x: x + Math.cos(heading), y: y + Math.sin(heading) }],
+    lanesLeft, lanesRight, laneWidth: 3.5, filletRadius: 50,
+    functions: [{ kind: 'segment', length: len }],
+  })
+  // stale legacy counts (1/1) but a real section with 2 left + 3 right lanes
+  const sectionRoad = {
+    ...crossRoad('sec', -80, 0, 0, 160, 1, 1),
+    laneSection: {
+      left: [
+        { id: 'l0', type: 'travel', width: 3.5, speedLimit: 50, circulation: 'both', vehicles: [], marking: 'none' },
+        { id: 'l1', type: 'travel', width: 3.2, speedLimit: 50, circulation: 'both', vehicles: [], marking: 'none' },
+      ],
+      right: [
+        { id: 'r0', type: 'travel', width: 3.5, speedLimit: 50, circulation: 'both', vehicles: [], marking: 'none' },
+        { id: 'r1', type: 'travel', width: 3.5, speedLimit: 50, circulation: 'both', vehicles: [], marking: 'none' },
+        { id: 'r2', type: 'travel', width: 3.0, speedLimit: 50, circulation: 'both', vehicles: [], marking: 'none' },
+      ],
+    },
+  }
+  const main = crossRoad('mj', 0, -80, Math.PI / 2, 160, 1, 1)
+  const network = buildJunctionNetwork([sectionRoad, main], [])
+  const junctions = network.junctions.filter((j) => !j.suppressed)
+  check('phase24: crossing junction detected', junctions.length >= 1)
+  const conns = junctions.flatMap((j) => j.connectingRoads)
+  check('phase24: junction builds connecting roads', conns.length >= 2, `got ${conns.length}`)
+  // connections on the section side must use the SECTION count (2/3), not the stale 1
+  const secConns = conns.filter((c) => c.laneLinks.some((l) => l.fromRoadId === 'sec' || l.toRoadId === 'sec'))
+  check('phase24: section-side connections exist', secConns.length >= 2, `got ${secConns.length}`)
+  const secCounts = secConns.map((c) => (c.laneLinks.filter((l) => l.fromRoadId === 'sec' || l.toRoadId === 'sec')).length)
+  check('phase24: section lane counts used', secCounts.some((n) => n >= 2), JSON.stringify(secCounts))
+}
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

@@ -1,6 +1,7 @@
 import { evaluatePath, samplePath } from './geometry'
 import type { PathSample } from './geometry'
 import { fitRoadGeometry } from './roadGeometry'
+import { getLaneSection } from '../state/store'
 import type { FittedPath, Vec2 } from './types'
 
 export interface JunctionRoad {
@@ -11,6 +12,29 @@ export interface JunctionRoad {
   lanesRight: number
   laneWidth: number
   filletRadius: number
+  /** rich lane section: when present it overrides the legacy counts */
+  laneSection?: import('./laneTypes').LaneSectionDef
+}
+
+/** Real per-side lane counts + total widths from the road's lane section. */
+export function sectionSides(road: JunctionRoad): {
+  leftCount: number; rightCount: number; leftWidth: number; rightWidth: number
+} {
+  const section = road.laneSection
+  if (section) {
+    return {
+      leftCount: section.left.length,
+      rightCount: section.right.length,
+      leftWidth: section.left.reduce((a, l) => a + l.width, 0),
+      rightWidth: section.right.reduce((a, l) => a + l.width, 0),
+    }
+  }
+  return {
+    leftCount: road.lanesLeft,
+    rightCount: road.lanesRight,
+    leftWidth: road.lanesLeft * road.laneWidth,
+    rightWidth: road.lanesRight * road.laneWidth,
+  }
 }
 
 export interface RoadCut {
@@ -47,6 +71,9 @@ export interface RoadApproach {
   heading: number
   incomingLaneCount: number
   outgoingLaneCount: number
+  /** mean lane width of the incoming/outgoing side (from the lane section) */
+  incomingLaneWidth?: number
+  outgoingLaneWidth?: number
 }
 
 export interface LaneMakerJunction {
@@ -81,6 +108,8 @@ interface DirectedEndpoint {
   forward: Vec2
   laneCount: number
   laneSign: 1 | -1
+  /** mean lane width of this side (from the lane section) */
+  laneWidth: number
 }
 
 interface TurningGroup {
@@ -110,7 +139,7 @@ export function buildJunctionNetwork(
     pathRoads.push({
       road,
       path,
-      halfWidth: ((road.lanesLeft + road.lanesRight) * road.laneWidth) / 2,
+      halfWidth: Math.max(0.5, (() => { const sd = sectionSides(road); return (sd.leftWidth + sd.rightWidth) / 2 })()),
       samples: samplePath(path, 1.5),
     })
   }
@@ -196,26 +225,32 @@ function makeApproaches(pathRoad: PathRoad, cut: RoadCut): RoadApproach[] {
   const approaches: RoadApproach[] = []
   if (cut.sStart > 0) {
     const sample = evaluatePath(pathRoad.path, cut.sStart)
+    const sd = sectionSides(pathRoad.road)
     approaches.push({
       roadId: pathRoad.road.id,
       contact: 'end',
       station: cut.sStart,
       position: { x: sample.x, y: sample.y },
       heading: sample.heading,
-      incomingLaneCount: pathRoad.road.lanesRight,
-      outgoingLaneCount: pathRoad.road.lanesLeft,
+      incomingLaneCount: sd.rightCount,
+      incomingLaneWidth: sd.rightCount > 0 ? sd.rightWidth / sd.rightCount : 3.5,
+      outgoingLaneCount: sd.leftCount,
+      outgoingLaneWidth: sd.leftCount > 0 ? sd.leftWidth / sd.leftCount : 3.5,
     })
   }
   if (cut.sEnd < pathRoad.path.length) {
     const sample = evaluatePath(pathRoad.path, cut.sEnd)
+    const sd = sectionSides(pathRoad.road)
     approaches.push({
       roadId: pathRoad.road.id,
       contact: 'start',
       station: cut.sEnd,
       position: { x: sample.x, y: sample.y },
       heading: sample.heading,
-      incomingLaneCount: pathRoad.road.lanesLeft,
-      outgoingLaneCount: pathRoad.road.lanesRight,
+      incomingLaneCount: sd.leftCount,
+      incomingLaneWidth: sd.leftCount > 0 ? sd.leftWidth / sd.leftCount : 3.5,
+      outgoingLaneCount: sd.rightCount,
+      outgoingLaneWidth: sd.rightCount > 0 ? sd.rightWidth / sd.rightCount : 3.5,
     })
   }
   return approaches
@@ -227,7 +262,6 @@ function generateConnectingRoads(
   pathRoads: PathRoad[],
   elevationSamplers: Map<string, ElevationSampler>,
 ): ConnectingRoad[] {
-  const roadMap = new Map(pathRoads.map((item) => [item.road.id, item.road]))
   const incoming = approaches
     .filter((approach) => approach.incomingLaneCount > 0)
     .map((approach) => toEndpoint(approach, 'incoming'))
@@ -263,10 +297,7 @@ function generateConnectingRoads(
 
   const connectingRoads: ConnectingRoad[] = []
   for (const group of groups) {
-    const laneWidth = Math.min(
-      roadMap.get(group.from.roadId)?.laneWidth ?? 3.5,
-      roadMap.get(group.to.roadId)?.laneWidth ?? 3.5,
-    )
+    const laneWidth = Math.min(group.from.laneWidth, group.to.laneWidth)
     const start = laneGroupCenter(group.from, group.fromBase, group.laneCount, laneWidth)
     const end = laneGroupCenter(group.to, group.toBase, group.laneCount, laneWidth)
     const fromSampler = elevationSamplers.get(group.from.roadId)
@@ -309,6 +340,7 @@ function toEndpoint(approach: RoadApproach, direction: 'incoming' | 'outgoing'):
     forward: { x: Math.cos(forwardHeading), y: Math.sin(forwardHeading) },
     laneCount: incoming ? approach.incomingLaneCount : approach.outgoingLaneCount,
     laneSign: atStart ? (incoming ? 1 : -1) : incoming ? -1 : 1,
+    laneWidth: (incoming ? approach.incomingLaneWidth : approach.outgoingLaneWidth) ?? 3.5,
   }
 }
 
