@@ -20,7 +20,7 @@ export default function CrossProfilePreview({
   const rightW = section.right.reduce((a, l) => a + l.width, 0)
   const totalW = Math.max(leftW + rightW, 1)
   const scaleX = (W * 0.95) / totalW
-  const cx = W / 2
+  const cx = W * 0.025 + rightW * scaleX
 
   let xCursor = cx
   const leftStrips = section.left.map((lane, i) => {
@@ -50,7 +50,7 @@ export default function CrossProfilePreview({
           return (
             <g key={s.lane.id} onClick={() => onSelectLane('left', s.index)} className="cursor-pointer">
               <rect
-                x={s.outerX} y={centerY - 18} width={s.innerX - s.outerX} height={36}
+                x={s.innerX} y={centerY - 18} width={s.outerX - s.innerX} height={36}
                 fill={meta.color} opacity={isSel ? 1 : 0.85}
                 stroke={isSel ? '#ffffff' : 'none'} strokeWidth={1.5}
               />

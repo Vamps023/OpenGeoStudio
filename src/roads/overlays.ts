@@ -9,6 +9,8 @@ import { FUNCTION_COLORS } from '../engine/xyFunctions'
 import { trackSlices, trackStartFrame, fitTrackPath } from '../engine/tracks'
 import { samplePath, samplePathRange } from '../engine/geometry'
 import type { Vec2 } from '../engine/types'
+import type { JunctionNetwork, LaneMakerJunction, ConnectingRoad } from '../engine/junctions'
+import { junctionSurfaceBoundary } from '../engine/junctions'
 
 export interface ExitEndpointInfo {
   roadId: string
@@ -22,6 +24,9 @@ export interface OverlayInput {
   selection: { trackIds: string[]; intersectionId: string | null }
   lockedPassageways: string[]
   selectedTrackStation: number | null
+  junctionNetwork?: JunctionNetwork
+  selectedJunctionKey?: string | null
+  selectedConnectionKey?: string | null
 }
 
 export function buildOverlays(input: OverlayInput): { lines: OverlayLine[]; markers: OverlayMarker[]; exits: ExitEndpointInfo[] } {
@@ -186,7 +191,94 @@ export function buildOverlays(input: OverlayInput): { lines: OverlayLine[]; mark
     }
   }
 
+  // ── Automatic junction network: boundaries, nodes, connection paths ──
+  const junctionNetwork = input.junctionNetwork
+  if (junctionNetwork && (layers.intersectionLogicalContent || layers.wayAxis || layers.wayLogicalContents)) {
+    for (const junction of junctionNetwork.junctions) {
+      const junctionKey = junction.configurationKey ?? junction.key
+      const isSelected = junctionKey === input.selectedJunctionKey
+      // Junction node marker (selectable in select tool)
+      if (layers.intersectionLogicalContent) {
+        markers.push({
+          id: `junction:${junctionKey}`,
+          point: junction.position,
+          color: isSelected ? '#22d3ee' : (junction.suppressed ? '#64748b' : '#fbbf24'),
+          shape: 'ring',
+          size: 4,
+          selectable: true,
+        })
+      }
+      // Junction boundary polygon from approach corners
+      if (layers.intersectionLogicalContent && junction.approaches.length >= 2) {
+        const boundary = junctionBoundary(junction)
+        if (boundary.length >= 3) {
+          lines.push({
+            points: [...boundary, boundary[0]],
+            color: isSelected ? '#22d3ee' : '#fbbf24',
+            width: 0.3,
+            opacity: 0.7,
+          })
+        }
+      }
+      // Connection paths (way axis) and movement ribbons (way logical contents)
+      if (!junction.suppressed) {
+        const connections = junction.connectingRoads
+        for (const connection of connections) {
+          const connectionKey = connectionKeyOf(connection)
+          const focused = connectionKey === input.selectedConnectionKey
+          if (layers.wayAxis) {
+            lines.push({
+              points: connection.samples.map((s) => ({ x: s.x, y: s.y })),
+              color: focused ? '#22d3ee' : '#facc15',
+              width: focused ? 0.6 : 0.3,
+              opacity: 0.9,
+            })
+          }
+          if (layers.wayLogicalContents) {
+            // Arrow at the end indicating direction
+            const last = connection.samples[connection.samples.length - 1]
+            const prev = connection.samples[connection.samples.length - 2]
+            if (last && prev) {
+              markers.push({
+                id: `jxn:${connection.id}`,
+                point: { x: last.x, y: last.y },
+                color: focused ? '#22d3ee' : '#facc15',
+                shape: 'arrow',
+                heading: Math.atan2(last.y - prev.y, last.x - prev.x),
+                size: 1.4,
+              })
+            }
+          }
+        }
+        // Render closed/denied options as red dashed lines
+        if (layers.wayAxis) {
+          for (const option of junction.connectionOptions ?? []) {
+            if (option.authorized !== false) continue
+            lines.push({
+              points: option.samples.map((s) => ({ x: s.x, y: s.y })),
+              color: '#f87171',
+              width: 0.2,
+              dashed: true,
+              opacity: 0.5,
+            })
+          }
+        }
+      }
+    }
+  }
+
   return { lines, markers, exits }
+}
+
+function connectionKeyOf(connection: ConnectingRoad): string {
+  const link = connection.laneLinks[0]
+  return JSON.stringify([connection.fromContact, connection.toContact, link?.fromRoadId, link?.fromLaneId, link?.toRoadId, link?.toLaneId])
+}
+
+function junctionBoundary(junction: LaneMakerJunction): Vec2[] {
+  // Shared smooth boundary (rounded curb-return corners) — keeps the
+  // overlay outline identical to the rendered 3D pavement surface.
+  return junctionSurfaceBoundary(junction)
 }
 
 function endKey(end: { trackId: string; contact: 'start' | 'end' }): string {

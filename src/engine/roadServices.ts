@@ -102,6 +102,7 @@ export function buildProjectJunctionNetwork(
     project.roads,
     project.suppressedJunctions,
     samplers.elevation,
+    project.junctionConfigurations,
   )
   return { network, samplers }
 }

@@ -159,6 +159,138 @@ export function appendFunction(track: TrackLike, fn: XYFunction): XYFunction[] {
   return [...fns, fn]
 }
 
+export function trackEndpointRadius(track: TrackLike, contact: 'start' | 'end'): number {
+  const fns = trackFunctions(track)
+  if (!fns) return 0
+  return functionRadiusOut(contact === 'start' ? invertFunction(fns[0]) : fns[fns.length - 1])
+}
+
+function framePoints(frame: Frame): Vec2[] {
+  return [{ x: frame.x, y: frame.y }, { x: frame.x + Math.cos(frame.heading), y: frame.y + Math.sin(frame.heading) }]
+}
+
+export function attachTrackFunction(track: TrackLike, fn: XYFunction, contact: 'start' | 'end'): { functions: XYFunction[]; startFrame: Frame } | null {
+  const startFrame = trackStartFrame(track)
+  if (!trackFunctions(track) || !startFrame) return null
+  const attached = fn.kind === 'clothoid' && fn.radiusIn === 0
+    ? { ...fn, radiusIn: trackEndpointRadius(track, contact) }
+    : fn
+  if (contact === 'end') return { functions: appendFunction(track, attached), startFrame }
+  // attach at start: invert road, append, invert back
+  const inverted = invertTrack(track)
+  if (!inverted) return null
+  return invertTrack({ ...track, points: framePoints(inverted.startFrame), functions: [...inverted.functions, attached] })
+}
+
+export function retargetTrackEnd(
+  track: TrackLike,
+  contact: 'start' | 'end',
+  point: Vec2,
+  constraint: string,
+  allowHeading: boolean,
+): { functions: XYFunction[]; startFrame: Frame } | null {
+  const startFrame = trackStartFrame(track)
+  const slices = trackSlices(track)
+  if (!startFrame || !slices?.length) return null
+  if (contact === 'end') {
+    const slice = slices[slices.length - 1]
+    const functions = [...track.functions!]
+    if (functions.length === 1 && slice.fn.kind === 'segment' && allowHeading) {
+      return {
+        functions: [{ ...slice.fn, length: Math.hypot(point.x - startFrame.x, point.y - startFrame.y) }],
+        startFrame: { ...startFrame, heading: Math.atan2(point.y - startFrame.y, point.x - startFrame.x) },
+      }
+    }
+    functions[slice.index] = retargetFunction(slice, point, constraint, allowHeading)
+    return { functions, startFrame }
+  }
+  // contact 'start': work in inverted space, then invert back. The
+  // inverted chain starts at the original end frame.
+  const inverted = invertTrack(track)
+  if (!inverted) return null
+  const invTrack = { ...track, points: framePoints(inverted.startFrame), functions: inverted.functions }
+  const slicesInv = trackSlices(invTrack)
+  if (!slicesInv?.length) return null
+  const slice = slicesInv[slicesInv.length - 1]
+  const functions = [...inverted.functions]
+  if (slice.fn.kind === 'segment' && allowHeading && functions.length > 1) {
+    const heading = Math.atan2(point.y - slice.start.y, point.x - slice.start.x)
+    functions[slice.index] = bezierConnector(slice.start, { ...point, heading })
+  } else if (slice.fn.kind === 'segment' && allowHeading) {
+    invTrack.points = framePoints({ ...inverted.startFrame, heading: Math.atan2(point.y - slice.start.y, point.x - slice.start.x) })
+    functions[slice.index] = { ...slice.fn, length: Math.hypot(point.x - slice.start.x, point.y - slice.start.y) }
+  } else {
+    functions[slice.index] = retargetFunction(slice, point, constraint, allowHeading)
+  }
+  // walk the adjusted inverted chain to find the restored chain's start
+  return invertTrack({ ...invTrack, functions })
+}
+
+function retargetFunction(
+  slice: { fn: XYFunction; start: Frame; length: number },
+  point: Vec2,
+  constraint: string,
+  allowHeading: boolean,
+): XYFunction {
+  const fn = slice.fn
+  const d = Math.hypot(point.x - slice.start.x, point.y - slice.start.y)
+  switch (fn.kind) {
+    case 'segment': {
+      if (!allowHeading) return { ...fn, length: Math.max(0.01, d) } // heading changes need a new direction: keep length
+      return { kind: 'polyline', points: [{ x: slice.start.x, y: slice.start.y }, point], splineType: 'segment' }
+    }
+    case 'arc': {
+      const headingToPoint = Math.atan2(point.y - slice.start.y, point.x - slice.start.x)
+      let deflection = headingToPoint - slice.start.heading
+      while (deflection > Math.PI) deflection -= Math.PI * 2
+      while (deflection < -Math.PI) deflection += Math.PI * 2
+      if (constraint === 'fixedLength') {
+        // solve radius so that chord matches with fixed arc length,
+        // then recompute angle so arc length is preserved
+        const len = fn.radius * Math.abs(fn.angle)
+        const radius = solveRadiusForChord(d, len) ?? fn.radius
+        const safeRadius = Math.max(0.01, radius)
+        const angle = Math.sign(fn.angle || deflection) * (len / safeRadius)
+        return { ...fn, radius: safeRadius, angle }
+      }
+      // free / fixed radius: solve radius from chord and deflection so
+      // the arc endpoint follows the cursor. chord = 2 * r * |sin(deflection)|
+      const sinDef = Math.abs(Math.sin(deflection))
+      if (sinDef < 1e-4) {
+        // nearly straight: fall back to a segment
+        return { kind: 'segment', length: Math.max(0.01, d) }
+      }
+      const radius = Math.max(0.01, d / (2 * sinDef))
+      const angle = 2 * deflection
+      return { ...fn, radius, angle }
+    }
+    case 'clothoid': {
+      const curLen = fn.length
+      const scale = Math.max(0.05, d / Math.max(1, curLen))
+      return { ...fn, length: Math.max(0.5, curLen * scale) }
+    }
+    case 'polyline':
+      return { ...fn, points: [...fn.points.slice(0, -1), point] }
+    case 'clothoidSpline':
+      return { ...fn, points: [...fn.points.slice(0, -1), point] }
+    case 'bezier':
+      return { ...fn, p3: point }
+  }
+}
+
+function solveRadiusForChord(chord: number, arcLength: number): number | null {
+  // chord = 2 r sin(L / 2r) → solve for r by bisection
+  let lo = chord / 2
+  let hi = Math.max(chord, arcLength) * 4
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    const c = 2 * mid * Math.sin(arcLength / (2 * mid))
+    if (c < chord) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
 // ─── Orientation (doc 5.5.4.3.6) ─────────────────────────────────────
 
 /**
@@ -182,7 +314,7 @@ function invertFunctionsAnchored(fns: XYFunction[], start: Frame): XYFunction[] 
       const originalStart = starts[fns.length - 1 - k]
       reversed[k] = { ...fn, p0: { x: anchor.x, y: anchor.y }, p3: { x: originalStart.x, y: originalStart.y } }
     }
-    anchor = functionEndFrame(anchor, fn)
+    anchor = functionEndFrame(anchor, reversed[k])
   }
   return reversed
 }

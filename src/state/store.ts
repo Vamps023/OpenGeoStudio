@@ -5,6 +5,7 @@ import type { LaneSectionDef } from '../engine/laneTypes'
 import { makeDefaultSection, totalLanes, totalWidth } from '../engine/laneLayout'
 import type { XYFunction } from '../engine/xyFunctions'
 import type { IntersectionData } from '../engine/intersections'
+import type { JunctionConfiguration } from '../engine/junctions'
 import { decodeTerrain, encodeTerrain, type StoredTerrain } from '../terrain/terrainCodec'
 import { setActiveTerrain } from '../terrain/terrainRegistry'
 import type { TerrainData } from '../engine/terrainMesh'
@@ -110,6 +111,7 @@ interface OgsState {
   suppressJunction: (key: string) => void
   restoreJunction: (key: string) => void
   regenerateJunctions: () => void
+  setJunctionConfiguration: (key: string, patch: Partial<JunctionConfiguration>) => void
   setTool: (tool: Tool) => void
   setConfig: (patch: Partial<EditorConfig>) => void
   setGeoRef: (geoRef: GeoReference) => void
@@ -126,6 +128,8 @@ interface OgsState {
   setProjectTerrain: (terrain: TerrainData | null) => void
   // Lane operations (mutate the active road's laneSection)
   insertLaneAt: (roadId: string, side: 'left' | 'right', index: number, lane: import('../engine/laneTypes').LaneDef) => void
+  insertLanesBatch: (roadId: string, ops: { side: 'left' | 'right'; index: number; lane: import('../engine/laneTypes').LaneDef }[]) => void
+  removeLanesBatch: (roadId: string, ops: { side: 'left' | 'right'; index: number }[]) => void
   removeLaneAt: (roadId: string, side: 'left' | 'right', index: number) => void
   updateLaneAt: (roadId: string, side: 'left' | 'right', index: number, patch: Partial<import('../engine/laneTypes').LaneDef>) => void
   moveLaneAt: (roadId: string, side: 'left' | 'right', from: number, to: number) => void
@@ -233,6 +237,35 @@ async function loadProjectsFromDisk(): Promise<Project[]> {
 }
 
 const HISTORY_LIMIT = 100
+
+/** Shift taper indices when a lane is inserted at `index` on `side`.
+ *  Tapers at or after the insertion point on the same side get +1. */
+function shiftTapersOnInsert(tapers: LaneTaper[] | undefined, side: 'left' | 'right', index: number): LaneTaper[] | undefined {
+  if (!tapers || tapers.length === 0) return tapers
+  return tapers.map((t) => t.side === side && t.index >= index ? { ...t, index: t.index + 1 } : t)
+}
+
+/** Shift/remove taper indices when a lane is removed at `index` on `side`.
+ *  Tapers pointing at the removed lane are dropped; tapers after it get -1. */
+function shiftTapersOnRemove(tapers: LaneTaper[] | undefined, side: 'left' | 'right', index: number): LaneTaper[] | undefined {
+  if (!tapers || tapers.length === 0) return tapers
+  const result = tapers
+    .filter((t) => !(t.side === side && t.index === index))
+    .map((t) => t.side === side && t.index > index ? { ...t, index: t.index - 1 } : t)
+  return result
+}
+
+/** Shift taper indices when a lane is moved from `from` to `to` on `side`. */
+function shiftTapersOnMove(tapers: LaneTaper[] | undefined, side: 'left' | 'right', from: number, to: number): LaneTaper[] | undefined {
+  if (!tapers || tapers.length === 0) return tapers
+  return tapers.map((t) => {
+    if (t.side !== side) return t
+    if (t.index === from) return { ...t, index: to }
+    if (from < to && t.index > from && t.index <= to) return { ...t, index: t.index - 1 }
+    if (from > to && t.index >= to && t.index < from) return { ...t, index: t.index + 1 }
+    return t
+  })
+}
 
 /** Drop rail fixtures whose tracks no longer exist (split/replace/delete). */
 function scrubRailFixtures(project: Project): Project {
@@ -432,6 +465,17 @@ export const useStore = create<OgsState>((set, get) => ({
     suppressedJunctions: project.suppressedJunctions.filter((item) => item !== key),
   })),
   regenerateJunctions: () => updateActiveProject(get, set, (project) => ({ ...project, suppressedJunctions: [] })),
+  setJunctionConfiguration: (key, patch) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    junctionConfigurations: {
+      ...project.junctionConfigurations,
+      [key]: {
+        ...project.junctionConfigurations?.[key],
+        ...patch,
+        ...(patch.connections ? { connections: patch.connections.map((connection) => ({ ...connection })) } : {}),
+      },
+    },
+  })),
   setTool: (tool) => set({ tool }),
   setConfig: (patch) => set({ config: { ...get().config, ...patch } }),
   setGeoRef: (geoRef) => updateActiveProject(get, set, (project) => ({ ...project, geoRef })),
@@ -483,6 +527,7 @@ export const useStore = create<OgsState>((set, get) => ({
 
   // Lane operations - operate on the active road's laneSection.
   // They ensure the section is materialized first, then mutate it.
+  // Taper indices are kept in sync with the lane array.
   insertLaneAt: (roadId, side, index, lane) => updateActiveProject(get, set, (project) => ({
     ...project,
     roads: project.roads.map((road) => {
@@ -491,9 +536,47 @@ export const useStore = create<OgsState>((set, get) => ({
       const next = { left: [...section.left], right: [...section.right] }
       next[side].splice(index, 0, lane)
       const updated = { ...road, laneSection: next }
-      // Keep legacy counts in sync.
       updated.lanesLeft = next.left.length
       updated.lanesRight = next.right.length
+      updated.tapers = shiftTapersOnInsert(road.tapers, side, index)
+      return updated
+    }),
+  })),
+  insertLanesBatch: (roadId, ops) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const next = { left: [...section.left], right: [...section.right] }
+      const sorted = [...ops].sort((a, b) => b.index - a.index)
+      let tapers = road.tapers
+      for (const op of sorted) {
+        next[op.side].splice(op.index, 0, op.lane)
+        tapers = shiftTapersOnInsert(tapers, op.side, op.index)
+      }
+      const updated = { ...road, laneSection: next }
+      updated.lanesLeft = next.left.length
+      updated.lanesRight = next.right.length
+      updated.tapers = tapers
+      return updated
+    }),
+  })),
+  removeLanesBatch: (roadId, ops) => updateActiveProject(get, set, (project) => ({
+    ...project,
+    roads: project.roads.map((road) => {
+      if (road.id !== roadId) return road
+      const section = getLaneSection(road)
+      const next = { left: [...section.left], right: [...section.right] }
+      const sorted = [...ops].sort((a, b) => b.index - a.index)
+      let tapers = road.tapers
+      for (const op of sorted) {
+        next[op.side].splice(op.index, 1)
+        tapers = shiftTapersOnRemove(tapers, op.side, op.index)
+      }
+      const updated = { ...road, laneSection: next }
+      updated.lanesLeft = next.left.length
+      updated.lanesRight = next.right.length
+      updated.tapers = tapers
       return updated
     }),
   })),
@@ -507,6 +590,7 @@ export const useStore = create<OgsState>((set, get) => ({
       const updated = { ...road, laneSection: next }
       updated.lanesLeft = next.left.length
       updated.lanesRight = next.right.length
+      updated.tapers = shiftTapersOnRemove(road.tapers, side, index)
       return updated
     }),
   })),
@@ -528,7 +612,7 @@ export const useStore = create<OgsState>((set, get) => ({
       const list = [...section[side]]
       const [item] = list.splice(from, 1)
       list.splice(to, 0, item)
-      return { ...road, laneSection: { left: side === 'left' ? list : section.left, right: side === 'right' ? list : section.right } }
+      return { ...road, laneSection: { left: side === 'left' ? list : section.left, right: side === 'right' ? list : section.right }, tapers: shiftTapersOnMove(road.tapers, side, from, to) }
     }),
   })),
   setLaneBorder: (roadId, side, index, edge, height, offset) => updateActiveProject(get, set, (project) => ({

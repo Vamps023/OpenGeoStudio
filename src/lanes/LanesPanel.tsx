@@ -6,7 +6,6 @@ import { LANE_TYPE_META } from '../engine/laneMetadata'
 import { defaultLaneByType } from '../engine/laneLayout'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
 import SideBlock from './SideBlock'
@@ -86,11 +85,11 @@ export default function LanesPanel({ road }: LanesPanelProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-w-0 flex-col">
       <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
         <div>
           <div className="text-sm font-semibold text-slate-100">Lanes</div>
-          <div className="text-[10px] uppercase tracking-wide text-slate-500">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
             {road.name} · {section.left.length + section.right.length} lanes
           </div>
         </div>
@@ -111,7 +110,7 @@ export default function LanesPanel({ road }: LanesPanelProps) {
         </Select>
       </div>
 
-      <ScrollArea className="flex-1">
+      <div className="min-w-0">
         <div className="space-y-3 p-3">
           <SideBlock
             side="left"
@@ -150,6 +149,7 @@ export default function LanesPanel({ road }: LanesPanelProps) {
               <Separator />
               <LanePropertiesEditor
                 lane={selectedLane}
+                side={selSide}
                 onChange={(patch) => onUpdate(selSide, selIndex, patch)}
               />
               <Separator />
@@ -171,17 +171,17 @@ export default function LanesPanel({ road }: LanesPanelProps) {
               </Button>
               <div className="grid grid-cols-2 gap-2">
                 <div className="grid gap-1">
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Ground Name</span>
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Ground Name</span>
                   <input
-                    className="h-7 rounded-md border border-slate-700 bg-slate-900/60 px-2 text-xs text-slate-100"
+                    className="h-7 rounded-md border border-border bg-background px-2 text-xs text-slate-100"
                     value={selectedLane.groundName ?? 'Default'}
                     onChange={(e) => onUpdate(selSide, selIndex, { groundName: e.target.value })}
                   />
                 </div>
                 <div className="grid gap-1">
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">Material Name</span>
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Material Name</span>
                   <input
-                    className="h-7 rounded-md border border-slate-700 bg-slate-900/60 px-2 text-xs text-slate-100"
+                    className="h-7 rounded-md border border-border bg-background px-2 text-xs text-slate-100"
                     value={selectedLane.materialName ?? ''}
                     placeholder="None"
                     onChange={(e) => onUpdate(selSide, selIndex, { materialName: e.target.value })}
@@ -194,12 +194,12 @@ export default function LanesPanel({ road }: LanesPanelProps) {
               />
             </>
           ) : (
-            <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 p-3 text-center text-xs text-slate-500">
+            <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 p-3 text-center text-xs text-muted-foreground">
               Select a lane above to edit its properties.
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   )
 }
@@ -212,17 +212,17 @@ const BEHAVIOURS: { value: MarkingBehaviour; label: string }[] = [
   { value: 'cancross', label: 'Can cross (dotted)' },
 ]
 
-function MarkingStyleEditor({ lane, onChange }: { lane: LaneDef; onChange: (patch: Partial<LaneDef>) => void }) {
+export function MarkingStyleEditor({ lane, onChange }: { lane: LaneDef; onChange: (patch: Partial<LaneDef>) => void }) {
   const style: MarkingStyle = lane.markingStyle ?? {}
   const set = (patch: Partial<MarkingStyle>) => onChange({ markingStyle: { ...style, ...patch } })
   return (
     <div className="rounded border border-slate-700 bg-slate-900/40 p-2">
-      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
         Marking editor
       </div>
       <div className="grid grid-cols-2 gap-1.5">
         <select
-          className="h-6 rounded border border-slate-700 bg-slate-900/60 px-1 text-xs text-slate-100"
+          className="h-6 rounded border border-border bg-background px-1 text-xs text-slate-100"
           value={style.crossLeft ?? 'cannot'}
           onChange={(e) => set({ crossLeft: e.target.value as MarkingBehaviour })}
           title="Behaviour for vehicles coming from the left"
@@ -230,7 +230,7 @@ function MarkingStyleEditor({ lane, onChange }: { lane: LaneDef; onChange: (patc
           {BEHAVIOURS.map((b) => <option key={b.value} value={b.value}>Left: {b.label}</option>)}
         </select>
         <select
-          className="h-6 rounded border border-slate-700 bg-slate-900/60 px-1 text-xs text-slate-100"
+          className="h-6 rounded border border-border bg-background px-1 text-xs text-slate-100"
           value={style.crossRight ?? 'cannot'}
           onChange={(e) => set({ crossRight: e.target.value as MarkingBehaviour })}
           title="Behaviour for vehicles coming from the right"
@@ -258,34 +258,34 @@ function MarkingStyleEditor({ lane, onChange }: { lane: LaneDef; onChange: (patc
       </div>
       <div className="mt-1.5 grid grid-cols-3 gap-1.5">
         <div className="grid gap-0.5">
-          <span className="text-[10px] text-slate-500">Dot length (m)</span>
+          <span className="text-[10px] text-muted-foreground">Dot length (m)</span>
           <input
             type="number"
             step={0.5}
             min={0}
-            className="h-6 rounded border border-slate-700 bg-slate-900/60 px-1 text-xs text-slate-100"
+            className="h-6 rounded border border-border bg-background px-1 text-xs text-slate-100"
             value={style.dotLength ?? 3}
             onChange={(e) => set({ dotLength: Math.max(0, Number.parseFloat(e.target.value) || 0) })}
           />
         </div>
         <div className="grid gap-0.5">
-          <span className="text-[10px] text-slate-500">Total length (m)</span>
+          <span className="text-[10px] text-muted-foreground">Total length (m)</span>
           <input
             type="number"
             step={0.5}
             min={0}
-            className="h-6 rounded border border-slate-700 bg-slate-900/60 px-1 text-xs text-slate-100"
+            className="h-6 rounded border border-border bg-background px-1 text-xs text-slate-100"
             value={style.totalLength ?? 9}
             onChange={(e) => set({ totalLength: Math.max(0, Number.parseFloat(e.target.value) || 0) })}
           />
         </div>
         <div className="grid gap-0.5">
-          <span className="text-[10px] text-slate-500">Line width (m)</span>
+          <span className="text-[10px] text-muted-foreground">Line width (m)</span>
           <input
             type="number"
             step={0.05}
             min={0.05}
-            className="h-6 rounded border border-slate-700 bg-slate-900/60 px-1 text-xs text-slate-100"
+            className="h-6 rounded border border-border bg-background px-1 text-xs text-slate-100"
             value={style.width ?? 0.15}
             onChange={(e) => set({ width: Math.max(0.05, Number.parseFloat(e.target.value) || 0) })}
           />

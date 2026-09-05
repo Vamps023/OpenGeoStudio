@@ -215,21 +215,15 @@ export function buildRoadMeshFromSamples(
   }
 
   // Edge lines (white) at outermost borders — markings
-  if (layout.totalLeft > 0.3) strips.push({ inner: layout.totalLeft - 0.2, outer: layout.totalLeft - 0.05, color: WHITE, height: 0.025, surface: 'marking' })
-  if (layout.totalRight > 0.3) strips.push({ inner: -layout.totalRight + 0.05, outer: -layout.totalRight + 0.2, color: WHITE, height: 0.025, surface: 'marking' })
+  const boundaryMarkings = buildLaneMarkings(samples, section, layoutAt ?? (() => layout), elevation, banking)
   // SCANeR default style: green centre line between the two traffic directions — marking
   if (layout.totalLeft > 0 && layout.totalRight > 0) strips.push({ inner: -0.075, outer: 0.075, color: CENTER_GREEN, height: 0.025, surface: 'marking' })
 
   // Lane dividers (per-lane markings) — markings
-  for (const side of [layout.left, layout.right]) {
-    for (let i = 1; i < side.length; i++) {
-      const dividerColor: Rgb = WHITE
-      strips.push({ inner: side[i].inner - 0.06, outer: side[i].inner + 0.06, color: dividerColor, height: 0.025, surface: 'marking' })
-    }
-  }
-
   const laneStripCount = section.left.length + section.right.length
-  return buildStripsSplit(samples, strips, elevation, banking, layoutAt ? { layoutAt, laneStripCount } : undefined)
+  const result = buildStripsSplit(samples, strips, elevation, banking, layoutAt ? { layoutAt, laneStripCount } : undefined)
+  result.markings = mergeMarkings(result.markings, boundaryMarkings)
+  return result
 }
 
 /** Lane strips recomputed with per-lane (tapered) widths. */
@@ -244,6 +238,109 @@ function taperedLayout(leftWidths: number[], rightWidths: number[]): { left: Lan
     return strips
   }
   return { left: build(leftWidths, 1), right: build(rightWidths, -1) }
+}
+
+function mergeMarkings(a: MeshData | null, b: MeshData | null): MeshData | null {
+  if (!a) return b
+  if (!b) return a
+  const positions = new Float32Array(a.positions.length + b.positions.length)
+  positions.set(a.positions)
+  positions.set(b.positions, a.positions.length)
+  const colors = new Float32Array(a.colors.length + b.colors.length)
+  colors.set(a.colors)
+  colors.set(b.colors, a.colors.length)
+  const indices = new Uint32Array(a.indices.length + b.indices.length)
+  indices.set(a.indices)
+  indices.set(b.indices.map((i) => i + a.positions.length / 3), a.indices.length)
+  return { positions, colors, indices }
+}
+
+function buildLaneMarkings(
+  samples: PathSample[],
+  section: LaneSectionDef,
+  layoutAt: (s: number) => { left: LaneStrip[]; right: LaneStrip[] },
+  elevation?: ElevationSampler,
+  banking?: ElevationSampler,
+): MeshData | null {
+  const positions: number[] = []
+  const colors: number[] = []
+  const indices: number[] = []
+  const safeLength = (value: number | undefined, fallback: number, min: number, max: number) =>
+    Number.isFinite(value) && value! > 0 ? Math.max(min, Math.min(max, value!)) : fallback
+  const span = samples[samples.length - 1].s - samples[0].s
+  const interpolate = (a: PathSample, b: PathSample, s: number): PathSample => {
+    const t = (s - a.s) / (b.s - a.s)
+    const turn = Math.atan2(Math.sin(b.heading - a.heading), Math.cos(b.heading - a.heading))
+    return {
+      s, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t,
+      heading: a.heading + turn * t,
+      z: a.z !== undefined && b.z !== undefined ? a.z + (b.z - a.z) * t : undefined,
+    }
+  }
+  for (const side of ['left', 'right'] as const) {
+    const sign = side === 'left' ? 1 : -1
+    section[side].forEach((lane, laneIndex) => {
+      const marking = lane.marking ?? 'solid'
+      if (marking === 'none') return
+      const style = lane.markingStyle ?? {}
+      const width = safeLength(style.width, 0.15, 0.01, 2)
+      const period = Math.max(safeLength(style.totalLength, 9, 0.1, 1e6), span / 20000)
+      const dot = Math.min(period, safeLength(style.dotLength, 3, 0.01, 1e6))
+      const patterns = marking === 'double-solid' ? [false, false]
+        : marking === 'solid-dashed' ? [false, true]
+          : marking === 'dashed-solid' ? [true, false] : [marking === 'dashed']
+      patterns.forEach((dashed, stripeIndex) => {
+        const emit = (a: PathSample, b: PathSample) => {
+          if (!(b.s - a.s > 1e-8)) return
+          const corners: number[] = []
+          for (const sample of [a, b]) {
+            const strip = layoutAt(sample.s)[side][laneIndex]
+            const laneWidth = Math.abs(strip.outer - strip.inner)
+            if (!Number.isFinite(laneWidth)) return
+            const inset = Math.min(0.05, laneWidth / 10)
+            const lineWidth = Math.min(width, (laneWidth - inset) / (patterns.length === 2 ? 3 : 1))
+            const center = strip.outer - sign * (inset + lineWidth / 2 + (patterns.length - 1 - stripeIndex) * 2 * lineWidth)
+            const height = (sample.z ?? elevation?.(sample.s) ?? 0)
+              + (side === 'left' ? lane.borderLeftHeight ?? 0 : lane.borderRightHeight ?? 0) + 0.025
+            const bank = Math.tan(banking?.(sample.s) ?? 0)
+            for (const offset of [center - lineWidth / 2, center + lineWidth / 2]) {
+              corners.push(Math.fround(sample.x - Math.sin(sample.heading) * offset),
+                Math.fround(height + bank * offset), Math.fround(-(sample.y + Math.cos(sample.heading) * offset)))
+            }
+          }
+          if (!corners.every(Number.isFinite)) return
+          const triangles: number[] = []
+          for (const [a, b, c] of [[0, 1, 2], [1, 3, 2]]) {
+            const up = (corners[c * 3] - corners[a * 3]) * (corners[b * 3 + 2] - corners[a * 3 + 2])
+              - (corners[b * 3] - corners[a * 3]) * (corners[c * 3 + 2] - corners[a * 3 + 2])
+            if (Math.abs(up) <= 1e-12) continue
+            triangles.push(...(up < 0 ? [a, c, b] : [a, b, c]))
+          }
+          if (!triangles.length) return
+          const base = positions.length / 3
+          positions.push(...corners)
+          for (let v = 0; v < 4; v++) colors.push(...WHITE)
+          indices.push(...triangles.map((i) => i + base))
+        }
+        for (let i = 1; i < samples.length; i++) {
+          const a = samples[i - 1], b = samples[i]
+          if (!(b.s > a.s) || !Number.isFinite(a.s) || !Number.isFinite(b.s)) continue
+          if (!dashed || dot >= period) {
+            emit(a, b)
+            continue
+          }
+          const first = Math.floor(a.s / period)
+          const last = Math.floor(b.s / period)
+          for (let cycle = first; cycle <= last; cycle++) {
+            const start = Math.max(a.s, cycle * period)
+            const end = Math.min(b.s, cycle * period + dot)
+            if (end - start > 1e-8) emit(interpolate(a, b, start), interpolate(a, b, end))
+          }
+        }
+      })
+    })
+  }
+  return indices.length ? { positions: new Float32Array(positions), colors: new Float32Array(colors), indices: new Uint32Array(indices) } : null
 }
 
 export function buildConnectingRoadMesh(samples: PathSample[], laneCount: number, laneWidth: number): RoadMeshResult {
@@ -344,7 +441,7 @@ function buildStripsSplit(
   const markingStrips = strips.filter((s) => s.surface === 'marking')
   return {
     pavement: buildStrips(samples, pavementStrips, elevation, banking, taperLayout),
-    markings: buildStrips(samples, markingStrips, elevation, banking, taperLayout),
+    markings: buildStrips(samples, markingStrips, elevation, banking),
   }
 }
 

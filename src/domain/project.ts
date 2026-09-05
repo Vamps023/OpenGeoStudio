@@ -16,6 +16,7 @@ import type { IntersectionData } from './junction'
 import type { OsmBuildingData } from '../engine/osmBuildings'
 import type { PcgProjectConfig } from '../engine/pcgBuildings'
 import type { StoredTerrain } from '../terrain/terrainCodec'
+import type { JunctionConfiguration } from '../engine/junctions'
 
 /** Canonical project definition — the authoritative project data model. */
 export interface Project {
@@ -24,6 +25,7 @@ export interface Project {
   createdAt: string
   roads: RoadData[]
   suppressedJunctions: string[]
+  junctionConfigurations?: Record<string, JunctionConfiguration>
   /** Explicit intersections (SCANeR Roads tab). */
   intersections?: IntersectionData[]
   geoRef?: GeoReference

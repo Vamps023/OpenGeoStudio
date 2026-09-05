@@ -360,7 +360,7 @@ export function supportsConstraints(fn: XYFunction): boolean {
 export function functionRadiusOut(fn: XYFunction | undefined): number {
   if (!fn) return INFINITE_RADIUS
   if (fn.kind === 'segment') return INFINITE_RADIUS
-  if (fn.kind === 'arc') return fn.radius
+  if (fn.kind === 'arc') return Math.sign(fn.angle) * fn.radius
   if (fn.kind === 'clothoid') return fn.radiusOut
   return INFINITE_RADIUS
 }
@@ -614,15 +614,21 @@ export function normalize(v: Vec2): Vec2 {
   return l < 1e-9 ? { x: 0, y: 0 } : { x: v.x / l, y: v.y / l }
 }
 
-/** Create a bezier connector between two frames (used by Link Tracks). */
+/** Create a bezier connector between two frames (used by Link Tracks).
+ *  Uses Hermite-style control arms (chord/3) and clamps the scalar
+ *  projections of p1/p2 onto the chord so the curve never self-intersects. */
 export function bezierConnector(from: Frame, to: Frame): BezierFunction {
   const chord = Math.hypot(to.x - from.x, to.y - from.y)
-  const d = chord * 0.6
+  const d = chord / 3
+  const chordDir = { x: (to.x - from.x) / (chord || 1), y: (to.y - from.y) / (chord || 1) }
+  // Control point projections onto the chord, clamped to [0, chord]
+  const proj1 = Math.max(0, Math.min(chord, d))
+  const proj2 = Math.max(0, Math.min(chord, d))
   return {
     kind: 'bezier',
     p0: { x: from.x, y: from.y },
-    p1: { x: from.x + Math.cos(from.heading) * d, y: from.y + Math.sin(from.heading) * d },
-    p2: { x: to.x - Math.cos(to.heading) * d, y: to.y - Math.sin(to.heading) * d },
+    p1: { x: from.x + Math.cos(from.heading) * proj1, y: from.y + Math.sin(from.heading) * proj1 },
+    p2: { x: to.x - Math.cos(to.heading) * proj2, y: to.y - Math.sin(to.heading) * proj2 },
     p3: { x: to.x, y: to.y },
   }
 }

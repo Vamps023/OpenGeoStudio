@@ -77,7 +77,7 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
   const elevationSamplers = samplers.elevation
   const bankingSamplers = samplers.banking
 
-  const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, elevationSamplers)
+  const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, elevationSamplers, project.junctionConfigurations)
   if (!junctionNetwork) return []
 
   const objects: StudioRoadObject[] = []
@@ -100,7 +100,7 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
   // instead of overlapping full-width turning-road strips
   for (const junction of junctionNetwork.junctions.filter((j) => !j.suppressed)) {
     const surface = buildJunctionSurface(junction, elevationSamplers)
-    push(`jx:${junction.id}`, `Junction · ${junction.approaches.length} arms`, 'junction', surface.mesh, 'pavement')
+    push(`jx:${junction.id}`, junction.configuration?.name || `Junction · ${junction.approaches.length} arms`, 'junction', surface.mesh, 'pavement')
     const markings = buildJunctionMarkings(junction)
     push(`jx:${junction.id}:markings`, `Junction markings`, 'junction', markings, 'marking')
   }
@@ -110,9 +110,10 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
   for (const intersection of project.intersections ?? []) {
     if (intersection.trackEnds.length < 2) continue
     for (const way of allWays(intersection, resolved)) {
+      if (!way.authorized) continue
       const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
       push(`ix:${intersection.id}`, intersection.groundName || 'Intersection', 'intersection', result.pavement, 'pavement')
-      push(`ix:${intersection.id}:markings`, `${intersection.groundName || 'Intersection'} (markings)`, 'intersection', result.markings, 'marking')
+      if (intersection.markings) push(`ix:${intersection.id}:markings`, `${intersection.groundName || 'Intersection'} (markings)`, 'intersection', result.markings, 'marking')
     }
   }
   // rail fixtures (turnout blades, frogs/diamonds, guard rails, catch points)

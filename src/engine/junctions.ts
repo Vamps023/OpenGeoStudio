@@ -1,7 +1,8 @@
 import { evaluatePath, samplePath } from './geometry'
 import type { PathSample } from './geometry'
 import { fitRoadGeometry } from './roadGeometry'
-import { getLaneSection } from '../state/store'
+import type { LaneDef } from './laneTypes'
+import type { LaneTaper } from '../domain/road'
 import type { FittedPath, Vec2 } from './types'
 import type { MeshData } from './mesh'
 
@@ -15,6 +16,9 @@ export interface JunctionRoad {
   filletRadius: number
   /** rich lane section: when present it overrides the legacy counts */
   laneSection?: import('./laneTypes').LaneSectionDef
+  /** lane expansion/reduction tapers: change the pavement width actually
+   *  reached at the junction cut stations */
+  tapers?: LaneTaper[]
 }
 
 /** Real per-side lane counts + total widths from the road's lane section. */
@@ -26,8 +30,8 @@ export function sectionSides(road: JunctionRoad): {
     return {
       leftCount: section.left.length,
       rightCount: section.right.length,
-      leftWidth: section.left.reduce((a, l) => a + l.width, 0),
-      rightWidth: section.right.reduce((a, l) => a + l.width, 0),
+      leftWidth: section.left.reduce((a, l) => a + (Number.isFinite(l.width) && l.width > 0 ? l.width : 0), 0),
+      rightWidth: section.right.reduce((a, l) => a + (Number.isFinite(l.width) && l.width > 0 ? l.width : 0), 0),
     }
   }
   return {
@@ -47,6 +51,29 @@ export interface RoadCut {
 export type ContactPoint = 'start' | 'end'
 export type TurningSemantics = 'straight' | 'left' | 'right' | 'uturn'
 
+export interface JunctionLaneConnection {
+  fromRoadId: string
+  fromContact: ContactPoint
+  fromLaneId: number
+  toRoadId: string
+  toContact: ContactPoint
+  toLaneId: number
+  enabled: boolean
+}
+
+export interface JunctionConfiguration {
+  name?: string
+  markings?: boolean
+  connections?: JunctionLaneConnection[]
+}
+
+export interface JunctionLaneEndpoint {
+  laneId: number
+  name: string
+  width: number
+  offset: number
+}
+
 export interface LaneLink {
   fromRoadId: string
   fromLaneId: number
@@ -62,6 +89,9 @@ export interface ConnectingRoad {
   laneWidth: number
   samples: PathSample[]
   laneLinks: LaneLink[]
+  fromContact?: ContactPoint
+  toContact?: ContactPoint
+  authorized?: boolean
 }
 
 export interface RoadApproach {
@@ -75,6 +105,10 @@ export interface RoadApproach {
   /** mean lane width of the incoming/outgoing side (from the lane section) */
   incomingLaneWidth?: number
   outgoingLaneWidth?: number
+  incomingLanes?: JunctionLaneEndpoint[]
+  outgoingLanes?: JunctionLaneEndpoint[]
+  leftWidth?: number
+  rightWidth?: number
 }
 
 export interface LaneMakerJunction {
@@ -83,6 +117,10 @@ export interface LaneMakerJunction {
   position: Vec2
   approaches: RoadApproach[]
   connectingRoads: ConnectingRoad[]
+  configurationKey?: string
+  configuration?: JunctionConfiguration
+  connectionOptions?: ConnectingRoad[]
+  configurationWarnings?: string[]
   suppressed: boolean
 }
 
@@ -108,7 +146,8 @@ interface DirectedEndpoint {
   origin: Vec2
   forward: Vec2
   laneCount: number
-  laneSign: 1 | -1
+  lanes: JunctionLaneEndpoint[]
+  normal: Vec2
   /** mean lane width of this side (from the lane section) */
   laneWidth: number
 }
@@ -130,6 +169,7 @@ export function buildJunctionNetwork(
   roads: JunctionRoad[],
   suppressedKeys: string[] = [],
   elevationSamplers: Map<string, ElevationSampler> = new Map(),
+  configurations: Record<string, JunctionConfiguration> = {},
 ): JunctionNetwork {
   const pathRoads: PathRoad[] = []
   const paths = new Map<string, FittedPath>()
@@ -145,15 +185,18 @@ export function buildJunctionNetwork(
     })
   }
 
-  const candidates: { a: number; b: number; sA: number; sB: number; point: Vec2; angle: number }[] = []
+  const candidates: { a: number; b: number; sA: number; sB: number; point: Vec2; angle: number; configurationKey: string }[] = []
   for (let a = 0; a < pathRoads.length; a++) {
     for (let b = a + 1; b < pathRoads.length; b++) {
+      const ids = [pathRoads[a].road.id, pathRoads[b].road.id].sort()
       const hits = findIntersections(pathRoads[a].samples, pathRoads[b].samples)
-      for (const hit of hits) {
+        .sort((x, y) => ids[0] === pathRoads[a].road.id ? x.sA - y.sA : x.sB - y.sB)
+      const distinct = hits.filter((hit, index) => !hits.slice(0, index).some((item) => distance(item.point, hit.point) < 3))
+      distinct.forEach((hit, ordinal) => {
         if (!candidates.some((item) => distance(item.point, hit.point) < 3)) {
-          candidates.push({ a, b, ...hit })
+          candidates.push({ a, b, ...hit, configurationKey: `${JSON.stringify(ids)}:${ordinal}` })
         }
-      }
+      })
     }
   }
 
@@ -179,12 +222,20 @@ export function buildJunctionNetwork(
       cuts.push(cutA, cutB)
     }
     const id = `junction-${junctions.length + 1}`
+    const configurationKey = candidate.configurationKey
+    const configuration = configurations[configurationKey]
+    const configurationWarnings: string[] = []
+    const connectionOptions = generateConnectingRoads(id, approaches, elevationSamplers, configuration, configurationWarnings)
     junctions.push({
       id,
       key,
+      configurationKey,
+      configuration,
+      configurationWarnings,
+      connectionOptions,
       position: candidate.point,
       approaches,
-      connectingRoads: suppressed ? [] : generateConnectingRoads(id, approaches, pathRoads, elevationSamplers),
+      connectingRoads: suppressed ? [] : connectionOptions.filter((connection) => connection.authorized !== false),
       suppressed,
     })
   }
@@ -222,36 +273,94 @@ function makeCut(pathRoad: PathRoad, s: number, overlapHalf: number): RoadCut | 
   return { roadId: pathRoad.road.id, sStart, sEnd }
 }
 
+function approachLanes(road: JunctionRoad, contact: ContactPoint, incoming: boolean, station: number, roadLength: number): JunctionLaneEndpoint[] {
+  const lanes: JunctionLaneEndpoint[] = []
+  for (const side of ['left', 'right'] as const) {
+    const sign = side === 'left' ? 1 : -1
+    const definitions = road.laneSection?.[side]
+    const count = definitions?.length ?? (side === 'left' ? road.lanesLeft : road.lanesRight)
+    // tapered widths: a lane absent at the junction gets no endpoint and
+    // no turning connections, matching the pavement that is actually there
+    const tapered = taperedLaneWidths(road, side, station, roadLength)
+    let offset = 0
+    for (let index = 0; index < count; index++) {
+      const lane = definitions?.[index]
+      const width = tapered[index] ?? 0
+      const validWidth = width > 0.05
+      const center = offset + (validWidth ? width / 2 : 0)
+      offset += validWidth ? width : 0
+      const circulation = lane?.circulation ?? 'forward'
+      const normalIncoming = (contact === 'end') === (side === 'right')
+      const allowed = circulation === 'both' || (circulation === 'forward' ? normalIncoming === incoming : circulation === 'backward' && normalIncoming !== incoming)
+      if (!validWidth || !allowed || (lane && !isConnectionLane(lane))) continue
+      lanes.push({ laneId: sign * (index + 1), name: lane?.name || `${side === 'left' ? 'Left' : 'Right'} ${index + 1}`, width, offset: sign * center })
+    }
+  }
+  return lanes.sort((a, b) => Math.abs(a.offset) - Math.abs(b.offset) || a.laneId - b.laneId)
+}
+
+function isConnectionLane(lane: LaneDef): boolean {
+  return ['travel', 'bus', 'bike', 'paved_major'].includes(lane.type)
+}
+
+/** Taper factor per lane index on one side at station s — mirrors the road
+ *  mesh exactly: the last taper targeting a lane wins, 0 = lane absent. */
+function laneTaperFactors(road: JunctionRoad, side: 'left' | 'right', count: number, s: number, roadLength: number): number[] {
+  const factors = Array.from({ length: count }, () => 1)
+  for (const taper of road.tapers ?? []) {
+    if (taper.side !== side || taper.index >= count) continue
+    if (taper.mode === 'in') {
+      const start = taper.startS ?? 0
+      factors[taper.index] = s <= start ? 0 : clamp((s - start) / Math.max(0.01, taper.length), 0, 1)
+    } else {
+      const end = taper.endS ?? roadLength
+      factors[taper.index] = s >= end ? 0 : clamp((end - s) / Math.max(0.01, taper.length), 0, 1)
+    }
+  }
+  return factors
+}
+
+/** Per-lane widths on one side with tapers applied at station s. Lanes
+ *  absent at s (fully tapered out) get width 0. */
+function taperedLaneWidths(road: JunctionRoad, side: 'left' | 'right', s: number, roadLength: number): number[] {
+  const definitions = road.laneSection?.[side]
+  const count = definitions?.length ?? (side === 'left' ? road.lanesLeft : road.lanesRight)
+  const factors = laneTaperFactors(road, side, count, s, roadLength)
+  const widths: number[] = []
+  for (let index = 0; index < count; index++) {
+    const raw = definitions?.[index]?.width ?? road.laneWidth
+    widths.push(Number.isFinite(raw) && raw > 0 ? raw * factors[index] : 0)
+  }
+  return widths
+}
+
 function makeApproaches(pathRoad: PathRoad, cut: RoadCut): RoadApproach[] {
   const approaches: RoadApproach[] = []
-  if (cut.sStart > 0) {
-    const sample = evaluatePath(pathRoad.path, cut.sStart)
-    const sd = sectionSides(pathRoad.road)
+  const roadLength = pathRoad.path.length
+  for (const contact of ['end', 'start'] as const) {
+    const station = contact === 'end' ? cut.sStart : cut.sEnd
+    if (contact === 'end' ? station <= 0 : station >= roadLength) continue
+    const sample = evaluatePath(pathRoad.path, station)
+    const incomingLanes = approachLanes(pathRoad.road, contact, true, station, roadLength)
+    const outgoingLanes = approachLanes(pathRoad.road, contact, false, station, roadLength)
+    // widths must match the tapered pavement the road mesh actually
+    // renders at the cut, so the junction surface meets the road edges
+    const leftWidth = taperedLaneWidths(pathRoad.road, 'left', station, roadLength).reduce((a, w) => a + w, 0)
+    const rightWidth = taperedLaneWidths(pathRoad.road, 'right', station, roadLength).reduce((a, w) => a + w, 0)
     approaches.push({
       roadId: pathRoad.road.id,
-      contact: 'end',
-      station: cut.sStart,
+      contact,
+      station,
       position: { x: sample.x, y: sample.y },
       heading: sample.heading,
-      incomingLaneCount: sd.rightCount,
-      incomingLaneWidth: sd.rightCount > 0 ? sd.rightWidth / sd.rightCount : 3.5,
-      outgoingLaneCount: sd.leftCount,
-      outgoingLaneWidth: sd.leftCount > 0 ? sd.leftWidth / sd.leftCount : 3.5,
-    })
-  }
-  if (cut.sEnd < pathRoad.path.length) {
-    const sample = evaluatePath(pathRoad.path, cut.sEnd)
-    const sd = sectionSides(pathRoad.road)
-    approaches.push({
-      roadId: pathRoad.road.id,
-      contact: 'start',
-      station: cut.sEnd,
-      position: { x: sample.x, y: sample.y },
-      heading: sample.heading,
-      incomingLaneCount: sd.leftCount,
-      incomingLaneWidth: sd.leftCount > 0 ? sd.leftWidth / sd.leftCount : 3.5,
-      outgoingLaneCount: sd.rightCount,
-      outgoingLaneWidth: sd.rightCount > 0 ? sd.rightWidth / sd.rightCount : 3.5,
+      incomingLanes,
+      outgoingLanes,
+      incomingLaneCount: incomingLanes.length,
+      outgoingLaneCount: outgoingLanes.length,
+      incomingLaneWidth: incomingLanes.reduce((sum, lane) => sum + lane.width, 0) / (incomingLanes.length || 1),
+      outgoingLaneWidth: outgoingLanes.reduce((sum, lane) => sum + lane.width, 0) / (outgoingLanes.length || 1),
+      leftWidth,
+      rightWidth,
     })
   }
   return approaches
@@ -260,8 +369,9 @@ function makeApproaches(pathRoad: PathRoad, cut: RoadCut): RoadApproach[] {
 function generateConnectingRoads(
   junctionId: string,
   approaches: RoadApproach[],
-  pathRoads: PathRoad[],
   elevationSamplers: Map<string, ElevationSampler>,
+  configuration: JunctionConfiguration | undefined,
+  warnings: string[],
 ): ConnectingRoad[] {
   const incoming = approaches
     .filter((approach) => approach.incomingLaneCount > 0)
@@ -269,6 +379,29 @@ function generateConnectingRoads(
   const outgoing = approaches
     .filter((approach) => approach.outgoingLaneCount > 0)
     .map((approach) => toEndpoint(approach, 'outgoing'))
+  if (configuration?.connections !== undefined) {
+    const connections: ConnectingRoad[] = []
+    const seen = new Set<string>()
+    configuration.connections.forEach((row, index) => {
+      const label = `Connection ${index + 1}`
+      const key = JSON.stringify([row.fromRoadId, row.fromContact, row.fromLaneId, row.toRoadId, row.toContact, row.toLaneId])
+      if (seen.has(key)) { warnings.push(`${label}: duplicate lane connection.`); return }
+      seen.add(key)
+      const from = incoming.find((endpoint) => endpoint.roadId === row.fromRoadId && endpoint.contact === row.fromContact)
+      const to = outgoing.find((endpoint) => endpoint.roadId === row.toRoadId && endpoint.contact === row.toContact)
+      const fromLane = from?.lanes.find((lane) => lane.laneId === row.fromLaneId)
+      const toLane = to?.lanes.find((lane) => lane.laneId === row.toLaneId)
+      if (!from || !to || !fromLane || !toLane) {
+        warnings.push(`${label}: missing approach or lane, or lane type, circulation or width does not permit this movement.`)
+        return
+      }
+      if (typeof row.enabled !== 'boolean') { warnings.push(`${label}: enabled must be a boolean.`); return }
+      const connection = makeLaneConnection(junctionId, index, from, to, fromLane, toLane, row.enabled, elevationSamplers)
+      if (connection) connections.push(connection)
+      else warnings.push(`${label}: lane endpoints are coincident; no connection geometry could be built.`)
+    })
+    return connections
+  }
   const groups: TurningGroup[] = []
 
   for (const from of incoming) {
@@ -298,50 +431,62 @@ function generateConnectingRoads(
 
   const connectingRoads: ConnectingRoad[] = []
   for (const group of groups) {
-    const laneWidth = Math.min(group.from.laneWidth, group.to.laneWidth)
-    const start = laneGroupCenter(group.from, group.fromBase, group.laneCount, laneWidth)
-    const end = laneGroupCenter(group.to, group.toBase, group.laneCount, laneWidth)
-    const fromSampler = elevationSamplers.get(group.from.roadId)
-    const toSampler = elevationSamplers.get(group.to.roadId)
-    const zStart = fromSampler ? fromSampler(group.from.station) : 0
-    const zEnd = toSampler ? toSampler(group.to.station) : 0
-    const samples = connectRays(start, group.from.forward, end, group.to.forward, zStart, zEnd)
-    if (samples.length < 2) continue
-    const laneLinks: LaneLink[] = []
     for (let lane = 0; lane < group.laneCount; lane++) {
-      laneLinks.push({
-        fromRoadId: group.from.roadId,
-        fromLaneId: group.from.laneSign * (group.fromBase + lane + 1),
-        toRoadId: group.to.roadId,
-        toLaneId: group.to.laneSign * (group.toBase + lane + 1),
-      })
+      const fromLane = group.from.lanes[group.fromBase + lane]
+      const toLane = group.to.lanes[group.toBase + lane]
+      if (!fromLane || !toLane) continue
+      const connection = makeLaneConnection(junctionId, connectingRoads.length, group.from, group.to, fromLane, toLane, true, elevationSamplers)
+      if (connection) connectingRoads.push(connection)
     }
-    connectingRoads.push({
-      id: `${junctionId}-connection-${connectingRoads.length + 1}`,
-      junctionId,
-      turn: group.turn,
-      laneCount: group.laneCount,
-      laneWidth,
-      samples,
-      laneLinks,
-    })
   }
   return connectingRoads
+}
+
+function makeLaneConnection(
+  junctionId: string, index: number, from: DirectedEndpoint, to: DirectedEndpoint,
+  fromLane: JunctionLaneEndpoint, toLane: JunctionLaneEndpoint, authorized: boolean,
+  elevationSamplers: Map<string, ElevationSampler>,
+): ConnectingRoad | null {
+  const start = laneCenter(from, fromLane)
+  const end = laneCenter(to, toLane)
+  const zStart = elevationSamplers.get(from.roadId)?.(from.station) ?? 0
+  const zEnd = elevationSamplers.get(to.roadId)?.(to.station) ?? 0
+  const samples = connectRays(start, from.forward, end, to.forward, zStart, zEnd)
+  if (samples.length < 2) return null
+  return {
+    id: `${junctionId}-connection-${index + 1}`,
+    junctionId,
+    turn: classifyTurn(from, to),
+    laneCount: 1,
+    laneWidth: Math.min(fromLane.width, toLane.width),
+    samples,
+    laneLinks: [{ fromRoadId: from.roadId, fromLaneId: fromLane.laneId, toRoadId: to.roadId, toLaneId: toLane.laneId }],
+    fromContact: from.contact,
+    toContact: to.contact,
+    authorized,
+  }
 }
 
 function toEndpoint(approach: RoadApproach, direction: 'incoming' | 'outgoing'): DirectedEndpoint {
   const atStart = approach.contact === 'start'
   const incoming = direction === 'incoming'
   const forwardHeading = incoming === atStart ? approach.heading + Math.PI : approach.heading
+  const laneSign = atStart ? (incoming ? 1 : -1) : incoming ? -1 : 1
+  const laneWidth = (incoming ? approach.incomingLaneWidth : approach.outgoingLaneWidth) ?? 3.5
+  const lanes = (incoming ? approach.incomingLanes : approach.outgoingLanes) ?? Array.from(
+    { length: incoming ? approach.incomingLaneCount : approach.outgoingLaneCount },
+    (_, index) => ({ laneId: laneSign * (index + 1), name: `Lane ${laneSign * (index + 1)}`, width: laneWidth, offset: laneSign * (index + 0.5) * laneWidth }),
+  )
   return {
     roadId: approach.roadId,
     contact: approach.contact,
     station: approach.station,
     origin: approach.position,
     forward: { x: Math.cos(forwardHeading), y: Math.sin(forwardHeading) },
-    laneCount: incoming ? approach.incomingLaneCount : approach.outgoingLaneCount,
-    laneSign: atStart ? (incoming ? 1 : -1) : incoming ? -1 : 1,
-    laneWidth: (incoming ? approach.incomingLaneWidth : approach.outgoingLaneWidth) ?? 3.5,
+    laneCount: lanes.length,
+    lanes,
+    normal: { x: -Math.sin(approach.heading), y: Math.cos(approach.heading) },
+    laneWidth,
   }
 }
 
@@ -406,10 +551,8 @@ function nearInteger(value: number): boolean {
   return Math.abs(value - Math.round(value)) < 1e-4
 }
 
-function laneGroupCenter(endpoint: DirectedEndpoint, base: number, count: number, width: number): Vec2 {
-  const right = { x: endpoint.forward.y, y: -endpoint.forward.x }
-  const offset = (base + count / 2) * width
-  return { x: endpoint.origin.x + right.x * offset, y: endpoint.origin.y + right.y * offset }
+function laneCenter(endpoint: DirectedEndpoint, lane: JunctionLaneEndpoint): Vec2 {
+  return { x: endpoint.origin.x + endpoint.normal.x * lane.offset, y: endpoint.origin.y + endpoint.normal.y * lane.offset }
 }
 
 function connectRays(start: Vec2, startDir: Vec2, end: Vec2, endDir: Vec2, zStart: number, zEnd: number): PathSample[] {
@@ -534,6 +677,132 @@ interface SurfacePoint {
   z: number
 }
 
+/** Default curb-return radius for junction corners (metres). */
+const JUNCTION_CORNER_RADIUS = 6
+
+/** Build the pavement boundary polygon for a junction with rounded
+ *  curb-return corners. The polygon traces each approach's road edges
+ *  from the cut stations toward the centre; wherever the edges of two
+ *  different arms would meet in a sharp point, the corner is extended to
+ *  the true curb line intersection and replaced with a tangent arc.
+ *  Shared by the 3D pavement mesh and the 2D overlay outline. */
+export function junctionSurfaceBoundary(
+  junction: LaneMakerJunction,
+  cornerRadius = JUNCTION_CORNER_RADIUS,
+): Vec2[] {
+  if (junction.approaches.length < 2) return []
+
+  // Approach corner points: left (+leftWidth) and right (-rightWidth)
+  // road edges at the cut station.
+  const corners: { approach: RoadApproach; point: Vec2 }[] = []
+  for (const approach of junction.approaches) {
+    const leftWidth = approach.leftWidth ?? (approach.outgoingLaneWidth ?? 3.5) * approach.outgoingLaneCount
+    const rightWidth = approach.rightWidth ?? (approach.incomingLaneWidth ?? 3.5) * approach.incomingLaneCount
+    const px = -Math.sin(approach.heading)
+    const py = Math.cos(approach.heading)
+    corners.push(
+      { approach, point: { x: approach.position.x + px * leftWidth, y: approach.position.y + py * leftWidth } },
+      { approach, point: { x: approach.position.x - px * rightWidth, y: approach.position.y - py * rightWidth } },
+    )
+  }
+  if (corners.length < 3) return corners.map((c) => c.point)
+
+  // Order the corners by angle around the junction centre. The two
+  // corners of one arm stay adjacent in this order, so a consecutive
+  // pair from DIFFERENT arms is exactly a curb corner to round.
+  let cx0 = 0, cy0 = 0
+  for (const c of corners) { cx0 += c.point.x; cy0 += c.point.y }
+  cx0 /= corners.length
+  cy0 /= corners.length
+  const ordered = corners
+    .map((c) => ({ c, angle: Math.atan2(c.point.y - cy0, c.point.x - cx0) }))
+    .sort((a, b) => a.angle - b.angle)
+    .map((item) => item.c)
+
+  // Remove near-duplicate points (corners from different approaches that
+  // land at the same position) to avoid degenerate triangles.
+  const deduped: { approach: RoadApproach; point: Vec2 }[] = []
+  for (const c of ordered) {
+    const last = deduped[deduped.length - 1]
+    if (!last || distance(c.point, last.point) > 0.5) deduped.push(c)
+  }
+  if (deduped.length >= 3 && distance(deduped[0].point, deduped[deduped.length - 1].point) < 0.5) {
+    deduped.pop()
+  }
+  if (deduped.length < 3) return deduped.map((c) => c.point)
+
+  // Trace the boundary, rounding each corner between two different arms.
+  const boundary: Vec2[] = []
+  const n = deduped.length
+  for (let i = 0; i < n; i++) {
+    const cur = deduped[i]
+    const next = deduped[(i + 1) % n]
+    boundary.push(cur.point)
+    if (cur.approach === next.approach) continue // arm mouth: straight cap where the road pavement stops
+    boundary.push(...cornerFillet(cur.point, cur.approach.heading, next.point, next.approach.heading, cornerRadius))
+  }
+  return boundary
+}
+
+/** Tangent arc points rounding the corner between two road edges. The
+ *  edges (defined by an endpoint at the cut station plus the road
+ *  heading there) are extended, intersected at the sharp curb corner and
+ *  the corner is replaced with a quadratic Bézier tangent to both edges.
+ *  Returns [] when the edges are parallel, degenerate or the round-off
+ *  would be invisible. */
+function cornerFillet(aFrom: Vec2, aHeading: number, bFrom: Vec2, bHeading: number, radius: number): Vec2[] {
+  const aDir = { x: Math.cos(aHeading), y: Math.sin(aHeading) }
+  const bDir = { x: Math.cos(bHeading), y: Math.sin(bHeading) }
+  const corner = lineIntersection(aFrom, aDir, bFrom, bDir)
+  if (!corner) return []
+  const da = distance(aFrom, corner)
+  const db = distance(corner, bFrom)
+  if (da < 0.1 || db < 0.1) return []
+  const inDir = normalize2({ x: corner.x - aFrom.x, y: corner.y - aFrom.y })
+  const outDir = normalize2({ x: bFrom.x - corner.x, y: bFrom.y - corner.y })
+  // Deflection angle at the corner; nearly straight corners need no arc
+  const cosTurn = clamp(-dot(inDir, outDir), -1, 1)
+  const turn = Math.acos(cosTurn)
+  if (turn < 0.15) return []
+  // Keep the tangent points on the edge segments we actually have
+  const tangent = Math.min(radius * Math.tan(turn / 2), 0.8 * da, 0.8 * db)
+  if (tangent < 0.25) return []
+  const tA = { x: corner.x - inDir.x * tangent, y: corner.y - inDir.y * tangent }
+  const tB = { x: corner.x + outDir.x * tangent, y: corner.y + outDir.y * tangent }
+  const steps = Math.max(2, Math.min(8, Math.ceil(turn / (Math.PI / 12))))
+  const points: Vec2[] = []
+  for (let i = 0; i <= steps; i++) {
+    points.push(quadBezier(tA, corner, tB, i / steps))
+  }
+  return points
+}
+
+function lineIntersection(pA: Vec2, dirA: Vec2, pB: Vec2, dirB: Vec2): Vec2 | null {
+  const denom = dirA.x * dirB.y - dirA.y * dirB.x
+  if (Math.abs(denom) < 1e-9) return null
+  const dx = pB.x - pA.x
+  const dy = pB.y - pA.y
+  const t = (dx * dirB.y - dy * dirB.x) / denom
+  return { x: pA.x + dirA.x * t, y: pA.y + dirA.y * t }
+}
+
+function quadBezier(p0: Vec2, control: Vec2, p1: Vec2, t: number): Vec2 {
+  const u = 1 - t
+  return {
+    x: u * u * p0.x + 2 * u * t * control.x + t * t * p1.x,
+    y: u * u * p0.y + 2 * u * t * control.y + t * t * p1.y,
+  }
+}
+
+function dot(a: Vec2, b: Vec2): number {
+  return a.x * b.x + a.y * b.y
+}
+
+function normalize2(v: Vec2): Vec2 {
+  const len = Math.hypot(v.x, v.y) || 1
+  return { x: v.x / len, y: v.y / len }
+}
+
 /** Build a unified pavement surface for a junction from its approaches.
  *  Returns a triangulated mesh (positions + indices + colors + UVs) that
  *  covers the junction area as one continuous surface, plus the boundary
@@ -544,37 +813,8 @@ export function buildJunctionSurface(
 ): { mesh: MeshData | null; boundary: Vec2[] } {
   if (junction.approaches.length < 2) return { mesh: null, boundary: [] }
 
-  // Collect approach corner points (left + right edges of each approach)
-  const corners: Vec2[] = []
-  for (const approach of junction.approaches) {
-    const sd = {
-      left: approach.outgoingLaneCount,
-      right: approach.incomingLaneCount,
-      leftWidth: (approach.outgoingLaneWidth ?? 3.5) * approach.outgoingLaneCount,
-      rightWidth: (approach.incomingLaneWidth ?? 3.5) * approach.incomingLaneCount,
-    }
-    const totalWidth = sd.leftWidth + sd.rightWidth
-    // approach.heading is the forward direction of the road at this point
-    // left = +90° from heading, right = -90°
-    const cosH = Math.cos(approach.heading)
-    const sinH = Math.sin(approach.heading)
-    // perpendicular (left)
-    const px = -sinH
-    const py = cosH
-    // Right edge of the approach (incoming side, -perpendicular)
-    const rightOffset = -sd.rightWidth
-    // Left edge of the approach (outgoing side, +perpendicular)
-    const leftOffset = sd.leftWidth
-    corners.push(
-      { x: approach.position.x + px * leftOffset, y: approach.position.y + py * leftOffset },
-      { x: approach.position.x + px * rightOffset, y: approach.position.y + py * rightOffset },
-    )
-  }
-
-  // Build a convex hull of the corner points — this gives us one continuous
-  // polygon that covers the junction area without overlaps.
-  const hull = convexHull(corners)
-  if (hull.length < 3) return { mesh: null, boundary: [] }
+  const deduped = junctionSurfaceBoundary(junction)
+  if (deduped.length < 3) return { mesh: null, boundary: deduped }
 
   // Triangulate the hull polygon (fan triangulation for convex polygons)
   const positions: number[] = []
@@ -585,9 +825,9 @@ export function buildJunctionSurface(
   // Compute centroid for UV origin and elevation
   let cx = 0
   let cy = 0
-  for (const p of hull) { cx += p.x; cy += p.y }
-  cx /= hull.length
-  cy /= hull.length
+  for (const p of deduped) { cx += p.x; cy += p.y }
+  cx /= deduped.length
+  cy /= deduped.length
 
   // Sample elevation at the centroid from any available sampler
   let baseZ = 0
@@ -603,8 +843,8 @@ export function buildJunctionSurface(
   const asphaltColor: [number, number, number] = [0.17, 0.19, 0.22]
 
   // Add vertices
-  for (let i = 0; i < hull.length; i++) {
-    const p = hull[i]
+  for (let i = 0; i < deduped.length; i++) {
+    const p = deduped[i]
     // interpolate z toward the centroid (smooth, flat junction surface)
     const z = baseZ + 0.02 // tiny lift above terrain to avoid z-fighting
     positions.push(p.x, z, -p.y)
@@ -613,19 +853,9 @@ export function buildJunctionSurface(
     uvs.push((p.x - cx) / 6, (p.y - cy) / 6)
   }
 
-  // Fan triangulation (convex hull is always convex, so this is safe)
-  for (let i = 1; i < hull.length - 1; i++) {
-    // winding: ensure upward-facing (check cross product)
-    const ax = positions[0], az = positions[2]
-    const bx = positions[i * 3], bz = positions[i * 3 + 2]
-    const ccx = positions[(i + 1) * 3], ccz = positions[(i + 1) * 3 + 2]
-    const cross = (bx - ax) * (ccz - az) - (bz - az) * (ccx - ax)
-    if (cross < 0) {
-      indices.push(0, i + 1, i)
-    } else {
-      indices.push(0, i, i + 1)
-    }
-  }
+  // Ear-clipping triangulation (handles non-convex polygons)
+  const triIndices = earClip2D(deduped)
+  indices.push(...triIndices)
 
   const mesh: MeshData = {
     positions: new Float32Array(positions),
@@ -634,30 +864,86 @@ export function buildJunctionSurface(
     uvs: new Float32Array(uvs),
   }
 
-  return { mesh, boundary: hull }
+  return { mesh, boundary: deduped }
 }
 
-/** Andrew's monotone chain convex hull algorithm.
- *  Returns the hull in counter-clockwise order. */
-function convexHull(points: Vec2[]): Vec2[] {
-  if (points.length < 3) return points.slice()
-  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y)
-  const cross = (o: Vec2, a: Vec2, b: Vec2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+/** Ear-clipping triangulation for a 2D simple polygon.
+ *  Points are in world (x, y) coordinates. Returns triangle indices. */
+function earClip2D(points: Vec2[]): number[] {
+  const n = points.length
+  if (n < 3) return []
+  if (n === 3) return [0, 1, 2]
 
-  const lower: Vec2[] = []
-  for (const p of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop()
-    lower.push(p)
+  // Determine winding order (signed area)
+  let area = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    area += points[i].x * points[j].y - points[j].x * points[i].y
   }
-  const upper: Vec2[] = []
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i]
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop()
-    upper.push(p)
+  const ccw = area > 0
+
+  // Build index list
+  const indices: number[] = []
+  const remaining: number[] = points.map((_, i) => i)
+
+  let guard = 0
+  while (remaining.length > 2 && guard < n * n) {
+    guard++
+    let clipped = false
+    for (let i = 0; i < remaining.length; i++) {
+      const prev = remaining[(i - 1 + remaining.length) % remaining.length]
+      const curr = remaining[i]
+      const next = remaining[(i + 1) % remaining.length]
+
+      const a = points[prev]
+      const b = points[curr]
+      const c = points[next]
+
+      // Cross product to check if curr is a convex vertex
+      const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+      const isConvex = ccw ? cross > 0 : cross < 0
+      if (!isConvex) continue
+
+      // Check no other point is inside this triangle
+      let inside = false
+      for (const idx of remaining) {
+        if (idx === prev || idx === curr || idx === next) continue
+        if (pointInTriangle(points[idx], a, b, c)) {
+          inside = true
+          break
+        }
+      }
+      if (inside) continue
+
+      // Clip this ear
+      if (ccw) {
+        indices.push(prev, curr, next)
+      } else {
+        indices.push(prev, next, curr)
+      }
+      remaining.splice(i, 1)
+      clipped = true
+      break
+    }
+    if (!clipped) {
+      // Fallback: fan triangulation from first vertex
+      for (let i = 1; i < remaining.length - 1; i++) {
+        if (ccw) indices.push(remaining[0], remaining[i], remaining[i + 1])
+        else indices.push(remaining[0], remaining[i + 1], remaining[i])
+      }
+      break
+    }
   }
-  lower.pop()
-  upper.pop()
-  return lower.concat(upper)
+  return indices
+}
+
+function pointInTriangle(p: Vec2, a: Vec2, b: Vec2, c: Vec2): boolean {
+  const d1 = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
+  const d2 = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y)
+  const d3 = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y)
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0
+  return !(hasNeg && hasPos)
 }
 
 /** Build lane markings for a junction: draw the turning paths as thin
@@ -666,7 +952,7 @@ function convexHull(points: Vec2[]): Vec2[] {
 export function buildJunctionMarkings(
   junction: LaneMakerJunction,
 ): MeshData | null {
-  if (junction.connectingRoads.length === 0) return null
+  if (junction.suppressed || junction.configuration?.markings === false || junction.connectingRoads.length === 0) return null
   const positions: number[] = []
   const colors: number[] = []
   const indices: number[] = []
@@ -674,7 +960,7 @@ export function buildJunctionMarkings(
 
   for (const connection of junction.connectingRoads) {
     // Draw the centerline of each turning path as a thin strip
-    if (connection.samples.length < 2) continue
+    if (connection.authorized === false || connection.samples.length < 2) continue
     const lineWidth = 0.1
     const white: [number, number, number] = [0.88, 0.9, 0.93]
 

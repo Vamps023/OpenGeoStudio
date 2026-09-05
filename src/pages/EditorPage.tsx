@@ -25,19 +25,18 @@ import {
   convertPolylineToClothoidSpline,
   convertSplineToFunctions,
   functionEndFrame,
-  functionRadiusOut,
   INFINITE_RADIUS,
-  invertFunction,
   snapFrame,
   splitFunction,
 } from '../engine/xyFunctions'
 import {
-  appendFunction,
+  attachTrackFunction,
   bindTrackFunctions,
   fitTrackPath,
   insertHandle,
   invertTrack,
-  invertTrackFunctions,
+  retargetTrackEnd,
+  trackEndpointRadius,
   linkTrackFunctions,
   mergeFunctionPair,
   splitTrackFunctions,
@@ -105,6 +104,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const suppressJunction = useStore((state) => state.suppressJunction)
   const restoreJunction = useStore((state) => state.restoreJunction)
   const regenerateJunctions = useStore((state) => state.regenerateJunctions)
+  const setJunctionConfiguration = useStore((state) => state.setJunctionConfiguration)
   const tool = useStore((state) => state.tool)
   const setTool = useStore((state) => state.setTool)
   const config = useStore((state) => state.config)
@@ -142,6 +142,9 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [mode, setMode] = useState<'2d' | '3d'>('2d')
   const [showMap, setShowMap] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState('selection')
+  const [selectedJunctionKey, setSelectedJunctionKey] = useState<string | null>(null)
+  const [selectedConnectionKey, setSelectedConnectionKey] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ screen: { x: number; y: number }; world: Vec2 } | null>(null)
   const [contourHandleArmed, setContourHandleArmed] = useState(false)
   // Editor top-level section: Road workspace or Train (railway) workspace.
@@ -174,7 +177,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const elevationSamplers = roadSamplers.elevation
   const bankingSamplers = roadSamplers.banking
   const junctionNetwork = useMemo(
-    () => (project ? buildJunctionNetwork(project.roads, project.suppressedJunctions, elevationSamplers) : null),
+    () => (project ? buildJunctionNetwork(project.roads, project.suppressedJunctions, elevationSamplers, project.junctionConfigurations) : null),
     [project, elevationSamplers],
   )
   const junctions = junctionNetwork?.junctions ?? []
@@ -215,6 +218,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
     if (all.length < 1) return null
     switch (tool) {
+      case 'draw-straight':
+        return all.length >= 2 ? { kind: 'segment', length: distance(all[0], all[1]) } : null
       case 'draw-clothoid': {
         if (all.length < 2) return null
         const [a, b] = all
@@ -222,7 +227,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         const turnSign = config.clothoidTurn === 'left' ? 1 : -1
         return {
           kind: 'clothoid',
-          radiusIn: dragSnapRef.current?.frame && draftPoints.length > 0 ? neighborRadiusIn(dragSnapRef.current.roadId) ?? INFINITE_RADIUS : INFINITE_RADIUS,
+          radiusIn: dragSnapRef.current?.frame && draftPoints.length > 0 ? neighborRadiusIn(dragSnapRef.current.roadId, dragSnapRef.current.contact) ?? INFINITE_RADIUS : INFINITE_RADIUS,
           radiusOut: config.clothoidRadiusOut > 0 ? config.clothoidRadiusOut * turnSign : INFINITE_RADIUS,
           length,
         }
@@ -233,14 +238,14 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         return all.length >= 2 ? { kind: 'clothoidSpline', points: all, tolerance: 0.5, symmetryThreshold: 1 } : null
       case 'draw-bezier':
         if (all.length < 2) return null
-        return bezierConnector({ x: all[0].x, y: all[0].y, heading: Math.atan2(all[1].y - all[0].y, all[1].x - all[0].x) }, { x: all[all.length - 1].x, y: all[all.length - 1].y, heading: Math.atan2(all[all.length - 1].y - all[all.length - 2].y, all[all.length - 1].x - all[all.length - 2].x) })
+        return bezierConnector(drawingFrame(all[0], all[1], dragSnapRef.current), { x: all[all.length - 1].x, y: all[all.length - 1].y, heading: Math.atan2(all[all.length - 1].y - all[all.length - 2].y, all[all.length - 1].x - all[all.length - 2].x) })
       default:
         return null
     }
-    function neighborRadiusIn(roadId: string): number | null {
+    function neighborRadiusIn(roadId: string, contact: 'start' | 'end'): number | null {
       const road = project?.roads.find((r) => r.id === roadId)
       if (!road?.functions || road.functions.length === 0) return null
-      return functionRadiusOut(road.functions[road.functions.length - 1])
+      return trackEndpointRadius(road, contact)
     }
   }, [tool, draftPoints, hoverPoint, config.clothoidRadiusOut, config.clothoidTurn, project])
 
@@ -249,8 +254,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       const all = hoverPoint && draftPoints.length > 0 ? [...draftPoints, hoverPoint] : draftPoints
       if (all.length < 1) return null
       const origin = all[0]
-      let heading = dragSnapRef.current?.frame.heading ?? 0
-      if (!dragSnapRef.current && all.length >= 2) heading = Math.atan2(all[1].y - all[0].y, all[1].x - all[0].x)
+      const heading = drawingFrame(origin, all[1] ?? origin, dragSnapRef.current).heading
       if (draftFnPreview.kind === 'polyline' || draftFnPreview.kind === 'clothoidSpline') {
         return fitTrackPath({
           id: 'draft',
@@ -312,9 +316,12 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       selection,
       lockedPassageways,
       selectedTrackStation: selection.trackStation,
+      junctionNetwork: junctionNetwork ?? undefined,
+      selectedJunctionKey,
+      selectedConnectionKey,
     })
-    return { lines: built.lines, markers: [...built.markers, ...gizmoMarkers], exits: built.exits }
-  }, [project, layers, selection, lockedPassageways, gizmoMarkers])
+    return { lines: built.lines, markers: [...built.markers.map((marker) => ({ ...marker, draggable: tool === 'select' && marker.draggable, selectable: tool === 'select' && marker.selectable })), ...gizmoMarkers], exits: built.exits }
+  }, [project, layers, selection, lockedPassageways, gizmoMarkers, junctionNetwork, selectedJunctionKey, selectedConnectionKey, tool])
 
 
 
@@ -322,7 +329,29 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   const selectedRoadLength = selectedRoad ? roadLengths.get(selectedRoad.id) ?? 0 : 0
 
   function selectRoadOnly(roadId: string | null, station?: number) {
+    setSelectedJunctionKey(null)
+    setSelectedConnectionKey(null)
     setSelection({ trackIds: roadId ? [roadId] : [], intersectionId: null, trackStation: station ?? null })
+  }
+
+  function selectAutoJunction(junction: NonNullable<typeof junctionNetwork>['junctions'][number]) {
+    setSelectedJunctionKey(junction.configurationKey ?? junction.key)
+    setSelectedConnectionKey(null)
+    setSelection({ trackIds: [], intersectionId: null, trackStation: null })
+    setSection('road')
+    setRoadSpace('road')
+    setSidebarTab('junctions')
+    chooseTool('select')
+    setLayer('wayAxis', true)
+    setLayer('wayLogicalContents', true)
+  }
+
+  function selectExplicitIntersection(id: string) {
+    setSelectedJunctionKey(null)
+    setSelectedConnectionKey(null)
+    setSelection({ trackIds: [], intersectionId: id, trackStation: null })
+    setSidebarTab('junctions')
+    chooseTool('select')
   }
 
   function chooseTool(next: Tool) {
@@ -494,6 +523,14 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   }
 
   // ─── Drawing interactions ──────────────────────────────────────────
+  function drawingFrame(start: Vec2, point: Vec2, snap: { contact: 'start' | 'end'; frame: Frame } | null): Frame {
+    return {
+      x: start.x,
+      y: start.y,
+      heading: snap ? snap.frame.heading + (snap.contact === 'start' ? Math.PI : 0) : Math.atan2(point.y - start.y, point.x - start.x),
+    }
+  }
+
   function beginDraftAt(point: Vec2, forcedHeading?: number) {
     const snap = snapToEndpoint(point)
     if (snap) {
@@ -549,9 +586,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       dragSnapRef.current = null
       setDraftPoints([])
       if (!start || distance(start, point) < 1) return
-      const heading = Math.atan2(point.y - start.y, point.x - start.x)
       const fn: XYFunction = { kind: 'segment', length: distance(start, point) }
-      commitFunction(fn, { x: start.x, y: start.y, heading }, snap)
+      commitFunction(fn, drawingFrame(start, point, snap), snap)
       return
     }
     if (tool === 'draw-clothoid') {
@@ -561,13 +597,13 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       dragSnapRef.current = null
       setDraftPoints([])
       if (!start || distance(start, point) < 2) return
-      const heading = Math.atan2(point.y - start.y, point.x - start.x)
+      const frame = drawingFrame(start, point, snap)
       const turnSign = config.clothoidTurn === 'left' ? 1 : -1
       let radiusIn = INFINITE_RADIUS
       if (snap) {
         const sourceRoad = project?.roads.find((r) => r.id === snap.roadId)
         if (sourceRoad?.functions && sourceRoad.functions.length > 0) {
-          radiusIn = functionRadiusOut(sourceRoad.functions[sourceRoad.functions.length - 1])
+          radiusIn = trackEndpointRadius(sourceRoad, snap.contact)
         }
       }
       const fn: XYFunction = {
@@ -576,7 +612,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         radiusOut: config.clothoidRadiusOut > 0 ? config.clothoidRadiusOut * turnSign : INFINITE_RADIUS,
         length: distance(start, point),
       }
-      commitFunction(fn, { x: start.x, y: start.y, heading }, snap)
+      commitFunction(fn, frame, snap)
       return
     }
     if (tool === 'extend' || tool === 'move') {
@@ -612,28 +648,14 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   function commitFunction(fn: XYFunction, frame: Frame, snap: { roadId: string; contact: 'start' | 'end'; frame: Frame } | null) {
     if (snap) {
       const road = project?.roads.find((r) => r.id === snap.roadId)
-      if (road && road.functions && road.functions.length > 0 && snap.contact === 'end') {
-        const next = appendFunction(road, fn.kind === 'clothoid' && fn.radiusIn === INFINITE_RADIUS
-          ? { ...fn, radiusIn: functionRadiusOut(road.functions[road.functions.length - 1]) }
-          : fn)
-        updateRoad(road.id, { functions: next })
+      if (road && road.functions && road.functions.length > 0) {
+        if (!guardExplicitWays(road.id)) return
+        const attached = attachTrackFunction(road, fn, snap.contact)
+        if (!attached) return
+        updateRoad(road.id, { functions: attached.functions, points: startFramePoints(attached.startFrame) })
         selectRoadOnly(road.id)
-        toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name}`)
+        toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name}${snap.contact === 'start' ? ' (start)' : ''}`)
         return
-      }
-      if (road && road.functions && road.functions.length > 0 && snap.contact === 'start') {
-        // attach at start: invert road, append, invert back
-        const inverted = invertTrackFunctions(road)
-        if (inverted) {
-          const appended = [...inverted, fn.kind === 'clothoid' && fn.radiusIn === INFINITE_RADIUS
-            ? { ...fn, radiusIn: functionRadiusOut(inverted[inverted.length - 1]) }
-            : fn]
-          const restored = [...appended].reverse().map((f) => invertFunction(f))
-          updateRoad(road.id, { functions: restored })
-          selectRoadOnly(road.id)
-          toast.success(`${FUNCTION_LABELS[fn.kind]} added to ${road.name} (start)`)
-          return
-        }
       }
       // legacy road: create a function road starting at its extremity
       createFunctionRoad(frame, [fn])
@@ -645,87 +667,9 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
   /** Extend / Move End on a function-based track (constraint aware). */
   function adjustTrackEnd(road: RoadData, contact: 'start' | 'end', point: Vec2, allowHeading: boolean) {
     if (!guardExplicitWays(road.id)) return
-    const slices = trackSlices(road)
-    if (!slices || slices.length === 0) return
-    if (contact === 'end') {
-      const slice = slices[slices.length - 1]
-      const functions = [...road.functions!]
-      functions[slice.index] = retargetFunction(slice, point, editionConstraint, allowHeading)
-      updateRoad(road.id, { functions })
-      return
-    }
-    // contact 'start': work in inverted space, then invert back. The
-    // inverted chain starts at the original end frame.
-    const inverted = invertTrack(road)
-    if (!inverted) return
-    const invStartPoints = startFramePoints(inverted.startFrame)
-    const slicesInv = trackSlices({ ...road, points: invStartPoints, functions: inverted.functions })
-    if (!slicesInv) return
-    const slice = slicesInv[slicesInv.length - 1]
-    const functions = [...inverted.functions]
-    functions[slice.index] = retargetFunction(slice, point, editionConstraint, allowHeading)
-    // walk the adjusted inverted chain to find the restored chain's start
-    let frame = inverted.startFrame
-    for (const s of trackSlices({ ...road, points: invStartPoints, functions }) ?? []) {
-      frame = functionEndFrame(s.start, s.fn)
-    }
-    const restored = [...functions].reverse().map(invertFunction)
-    updateRoad(road.id, { functions: restored, points: startFramePoints(frame) })
-  }
-
-  function retargetFunction(
-    slice: { fn: XYFunction; start: Frame; length: number },
-    point: Vec2,
-    constraint: string,
-    allowHeading: boolean,
-  ): XYFunction {
-    const fn = slice.fn
-    const d = distance({ x: slice.start.x, y: slice.start.y }, point)
-    switch (fn.kind) {
-      case 'segment': {
-        if (!allowHeading) return { ...fn, length: Math.max(0.01, d) }
-        return fn // heading changes need a new direction: keep length
-      }
-      case 'arc': {
-        const headingToPoint = Math.atan2(point.y - slice.start.y, point.x - slice.start.x)
-        let deflection = headingToPoint - slice.start.heading
-        while (deflection > Math.PI) deflection -= Math.PI * 2
-        while (deflection < -Math.PI) deflection += Math.PI * 2
-        if (constraint === 'fixedLength') {
-          // solve radius so that chord matches with fixed arc length
-          const len = fn.radius * Math.abs(fn.angle)
-          const radius = solveRadiusForChord(d, len) ?? fn.radius
-          return { ...fn, radius: Math.max(0.01, radius) }
-        }
-        // free / fixed radius: adjust sweep
-        const angle = 2 * deflection
-        return { ...fn, angle }
-      }
-      case 'clothoid': {
-        const curLen = fn.length
-        const scale = Math.max(0.05, d / Math.max(1, curLen))
-        return { ...fn, length: Math.max(0.5, curLen * scale) }
-      }
-      case 'polyline':
-        return { ...fn, points: [...fn.points.slice(0, -1), point] }
-      case 'clothoidSpline':
-        return { ...fn, points: [...fn.points.slice(0, -1), point] }
-      case 'bezier':
-        return { ...fn, p3: point }
-    }
-  }
-
-  function solveRadiusForChord(chord: number, arcLength: number): number | null {
-    // chord = 2 r sin(L / 2r) → solve for r by bisection
-    let lo = chord / 2
-    let hi = Math.max(chord, arcLength) * 4
-    for (let i = 0; i < 60; i++) {
-      const mid = (lo + hi) / 2
-      const c = 2 * mid * Math.sin(arcLength / (2 * mid))
-      if (c < chord) lo = mid
-      else hi = mid
-    }
-    return (lo + hi) / 2
+    const adjusted = retargetTrackEnd(road, contact, point, editionConstraint, allowHeading)
+    if (!adjusted) return
+    updateRoad(road.id, { functions: adjusted.functions, points: startFramePoints(adjusted.startFrame) })
   }
 
   function handleDragCancel() {
@@ -783,10 +727,8 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       if (draftPoints.length === 0) {
         beginDraftAt(point)
       } else {
-        const start = dragSnapRef.current?.frame
-          ? { ...dragSnapRef.current.frame }
-          : { x: draftPoints[0].x, y: draftPoints[0].y, heading: Math.atan2(point.y - draftPoints[0].y, point.x - draftPoints[0].x) }
         const snap = dragSnapRef.current
+        const start = drawingFrame(draftPoints[0], point, snap)
         const fn = bezierConnector(start, { x: point.x, y: point.y, heading: Math.atan2(point.y - start.y, point.x - start.x) })
         dragSnapRef.current = null
         setDraftPoints([])
@@ -808,15 +750,18 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         setDraftPoints([])
         setHoverPoint(null)
         const fitted = fitRoadGeometry({ points: next, geometryType: 'arc', filletRadius: 0 })
-        if (fitted && fitted.elements[0]?.type === 'arc') {
-          const el = fitted.elements[0]
+        const el = fitted?.elements[0]
+        if (el && el.type === 'arc' && Math.abs(el.curvature) > 1e-6) {
           const fn: XYFunction = {
             kind: 'arc',
             radius: 1 / Math.abs(el.curvature),
             angle: el.curvature * el.length,
           }
-          const heading = Math.atan2(next[1].y - next[0].y, next[1].x - next[0].x)
-          commitFunction(fn, { x: next[0].x, y: next[0].y, heading }, snap)
+          commitFunction(fn, { x: el.x, y: el.y, heading: el.heading }, snap)
+        } else if (el) {
+          // Nearly-straight triple: commit as a segment
+          const fn: XYFunction = { kind: 'segment', length: el.length }
+          commitFunction(fn, { x: el.x, y: el.y, heading: el.heading }, snap)
         }
       } else {
         setDraftPoints(next)
@@ -867,7 +812,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
 
     if (tool === 'select') {
       if (nodeHit) {
+        setSelectedJunctionKey(null)
+        setSelectedConnectionKey(null)
+        setSidebarTab('selection')
         setSelection({ trackIds: additive ? selection.trackIds : [], intersectionId: nodeHit.id, trackStation: null })
+        return
+      }
+      const autoJunction = !additive && roadSpace === 'road' ? nearestJunction(junctions, point) : null
+      if (autoJunction && distance(autoJunction.position, point) < Math.max(3, Math.min(10, ...autoJunction.approaches.map((approach) => distance(approach.position, autoJunction.position))))) {
+        selectAutoJunction(autoJunction)
         return
       }
       if (additive && hit) {
@@ -882,6 +835,14 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         return
       }
       selectRoadOnly(hit?.road.id ?? null, hit?.s)
+      if (hit && roadSpace === 'lane') {
+        const projection = projectOntoRoad(hit.road, point)
+        if (projection) {
+          const side = projection.t >= 0 ? 'left' : 'right'
+          const index = laneLayout(getLaneSection(hit.road))[side].findIndex((strip) => projection.t >= Math.min(strip.inner, strip.outer) && projection.t <= Math.max(strip.inner, strip.outer))
+          setSelectedLaneKey(index >= 0 ? `${side}:${index}` : null)
+        }
+      }
       return
     }
     if (tool === 'delete') {
@@ -1776,13 +1737,10 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     const mode: 'in' | 'out' = direction === 'after' ? 'in' : 'out'
     const index = gizmo.kind === 'begin' ? 0 : section[gizmo.side].length
     const lane = defaultLaneByType('travel')
+    // insertLaneAt now shifts taper indices automatically
     insertLaneAt(road.id, gizmo.side, index, lane)
-    const tapers = [...(road.tapers ?? [])]
-    if (index === 0) {
-      for (const t of tapers) {
-        if (t.side === gizmo.side) t.index += 1
-      }
-    }
+    // Append the new taper for this express lane
+    const tapers = [...(useStore.getState().projects.find((p) => p.id === project?.id)?.roads.find((r) => r.id === road.id)?.tapers ?? [])]
     tapers.push({
       side: gizmo.side,
       index,
@@ -2204,14 +2162,15 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
         </div>
 
         {/* Sidebar */}
-        <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-card/60">
-          {section === 'road' && roadSpace === 'road' ? (
-          <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col gap-0">
+        <aside className="flex w-[min(24rem,42vw)] min-w-72 shrink-0 flex-col border-l border-border bg-card/60">
+          {section === 'road' ? (
+          <Tabs value={sidebarTab} onValueChange={setSidebarTab} className="flex min-h-0 flex-1 flex-col gap-0">
             <div className="shrink-0 border-b border-border p-3">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="selection">Selection</TabsTrigger>
+                <TabsTrigger value="lanes">Lanes</TabsTrigger>
+                <TabsTrigger value="junctions">Junctions</TabsTrigger>
                 <TabsTrigger value="roads">Roads</TabsTrigger>
-                <TabsTrigger value="network">Network</TabsTrigger>
               </TabsList>
             </div>
 
@@ -2279,58 +2238,6 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                 />
               </TabsContent>
 
-              <TabsContent value="roads" className="grid gap-1.5 p-4">
-                <RoadsTab
-                  roads={project.roads}
-                  selectedIds={selection.trackIds}
-                  roadLengths={roadLengths}
-                  tool={tool}
-                  draftLength={draftPath?.length ?? null}
-                  onRoadClick={(roadId, additive) => {
-                    if (additive) {
-                      setSelection({
-                        trackIds: selection.trackIds.includes(roadId)
-                          ? selection.trackIds.filter((id) => id !== roadId)
-                          : [...selection.trackIds, roadId],
-                        // keep the intersection selected so Ctrl+L keeps working
-                        intersectionId: selection.intersectionId,
-                        trackStation: null,
-                      })
-                    } else {
-                      selectRoadOnly(roadId)
-                    }
-                  }}
-                />
-              </TabsContent>
-
-              <TabsContent value="network" className="grid gap-2 p-4">
-                <NetworkTab
-                  intersections={project.intersections ?? []}
-                  junctions={junctions}
-                  activeJunctionCount={activeJunctions.length}
-                  layers={layers}
-                  selectedIntersectionId={selection.intersectionId}
-                  selectedRoad={selectedRoad}
-                  selectedRoadLength={selectedRoad ? roadLengths.get(selectedRoad.id) ?? 0 : 0}
-                  onSelectIntersection={(id) => setSelection({ trackIds: [], intersectionId: id, trackStation: null })}
-                  onDeleteIntersection={deleteIntersectionById}
-                  onToggleJunction={(junction) => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
-                  onRegenerateJunctions={regenerateJunctions}
-                  onSetLayer={setLayer}
-                />
-              </TabsContent>
-            </ScrollArea>
-          </Tabs>
-          ) : section === 'road' ? (
-          <Tabs defaultValue="lanes" className="flex min-h-0 flex-1 flex-col gap-0">
-            <div className="shrink-0 border-b border-border p-3">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="lanes">Lanes</TabsTrigger>
-                <TabsTrigger value="sidewalks">Sidewalks</TabsTrigger>
-                <TabsTrigger value="roads">Roads</TabsTrigger>
-              </TabsList>
-            </div>
-            <ScrollArea className="min-h-0 flex-1">
               <TabsContent value="lanes" className="grid gap-4 p-4">
                 {selectedRoad ? (
                   <>
@@ -2339,6 +2246,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                     </p>
                     <LanesTab road={selectedRoad} />
                     <PortionProfileEditor road={selectedRoad} length={roadLengths.get(selectedRoad.id) ?? 0} />
+                    <SidewalkPanel road={selectedRoad} />
                   </>
                 ) : (
                   <div className="grid gap-2 rounded-md border border-dashed border-border/60 p-4 text-center">
@@ -2347,13 +2255,30 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                   </div>
                 )}
               </TabsContent>
-              <TabsContent value="sidewalks" className="grid gap-4 p-4">
-                {selectedRoad ? (
-                  <SidewalkPanel road={selectedRoad} />
-                ) : (
-                  <p className="text-xs text-muted-foreground">Select a road to add sidewalks and curbs along its alignment.</p>
-                )}
+
+              <TabsContent value="junctions" className="grid gap-2 p-4">
+                <NetworkTab
+                  intersections={project.intersections ?? []}
+                  junctions={junctions}
+                  roads={project.roads}
+                  activeJunctionCount={activeJunctions.length}
+                  layers={layers}
+                  selectedIntersectionId={selection.intersectionId}
+                  selectedJunctionKey={selectedJunctionKey}
+                  selectedConnectionKey={selectedConnectionKey}
+                  selectedRoad={selectedRoad}
+                  selectedRoadLength={selectedRoad ? roadLengths.get(selectedRoad.id) ?? 0 : 0}
+                  onSelectIntersection={(id) => selectExplicitIntersection(id)}
+                  onDeleteIntersection={deleteIntersectionById}
+                  onSelectJunction={(junction) => selectAutoJunction(junction)}
+                  onUpdateJunction={(key, patch) => setJunctionConfiguration(key, patch)}
+                  onFocusConnection={setSelectedConnectionKey}
+                  onToggleJunction={(junction) => (junction.suppressed ? restoreJunction(junction.key) : suppressJunction(junction.key))}
+                  onRegenerateJunctions={regenerateJunctions}
+                  onSetLayer={setLayer}
+                />
               </TabsContent>
+
               <TabsContent value="roads" className="grid gap-1.5 p-4">
                 <RoadsTab
                   roads={project.roads}

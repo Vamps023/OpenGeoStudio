@@ -8,7 +8,6 @@ import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react'
 import type { LaneDef, LaneType, CirculationWay, VehicleCategory, LaneMarking } from '../engine/laneTypes'
 import {
   LANE_TYPE_META,
-  CIRCULATION_META,
   VEHICLE_META,
   MARKING_META,
   ALL_VEHICLES,
@@ -22,6 +21,8 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { circulationLabel } from './LanePropertiesEditor'
+import { MarkingStyleEditor } from './LanesPanel'
 
 interface LaneSelectionPanelProps {
   lane: LaneDef
@@ -117,20 +118,20 @@ export default function LaneSelectionPanel({
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] text-muted-foreground">Circulation way</Label>
+          <Label className="text-[11px] text-muted-foreground">Circulation direction</Label>
           <Select value={lane.circulation} onValueChange={(value) => onChange({ circulation: value as CirculationWay })}>
             <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {ALL_CIRCULATIONS.map((way) => (
                 <SelectItem key={way} value={way} className="text-xs">
-                  {CIRCULATION_META[way].symbol} {CIRCULATION_META[way].label}
+                  {circulationLabel(way, side)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] text-muted-foreground">Marking</Label>
+          <Label className="text-[11px] text-muted-foreground">Outer boundary marking</Label>
           <Select value={lane.marking ?? 'solid'} onValueChange={(value) => onChange({ marking: value as LaneMarking })}>
             <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -143,8 +144,11 @@ export default function LaneSelectionPanel({
           </Select>
         </div>
       </div>
+      <p className="text-[11px] text-muted-foreground">Forward follows the normal side direction: left toward road start, right toward road end. Backward reverses it; Both is bidirectional.</p>
+      <p className="text-[11px] text-muted-foreground">Marking controls the outer edge away from the road center. Double patterns are ordered inner stripe, then outer stripe; the green center line is unchanged.</p>
+      <MarkingStyleEditor lane={lane} onChange={onChange} />
       <div className="space-y-1">
-        <Label className="text-[11px] text-muted-foreground">Vehicle categories</Label>
+        <Label className="text-[11px] text-muted-foreground">Allowed vehicles</Label>
         <div className="flex flex-wrap gap-x-3 gap-y-1">
           {ALL_VEHICLES.map((vehicle) => (
             <label key={vehicle} className="flex items-center gap-1 text-xs">

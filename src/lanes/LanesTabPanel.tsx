@@ -1,14 +1,14 @@
 import { useMemo } from 'react'
 import { useStore, getLaneSection } from '../state/store'
 import type { RoadData } from '../state/store'
-import { LANE_TYPE_META, CIRCULATION_META } from '../engine/laneMetadata'
+import { LANE_TYPE_META } from '../engine/laneMetadata'
+import { circulationLabel } from './LanePropertiesEditor'
 import { defaultLaneByType, totalLanes, totalWidth } from '../engine/laneLayout'
 import type { LaneType, LaneDef } from '../engine/laneTypes'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, ArrowUp, ArrowDown, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import CrossProfilePreview from './CrossProfilePreview'
 import LaneSelectionPanel from './LaneSelectionPanel'
@@ -93,7 +93,7 @@ export default function LanesTabPanel({ road }: LanesTabPanelProps) {
   }
 
   return (
-    <div className="flex h-full flex-col gap-2 p-3 text-xs">
+    <div className="flex min-w-0 flex-col gap-3 text-xs">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Badge variant="outline">Lanes</Badge>
@@ -170,7 +170,7 @@ function LaneSideColumn({
         <span className="font-semibold">{label}</span>
         <span className="text-muted-foreground">{lanes.length}</span>
       </div>
-      <ScrollArea className="max-h-48">
+      <div>
         <div className="flex flex-col gap-1">
           <InsertionMenu onPick={onAddBefore} label="Insert Before" />
           {lanes.map((lane, idx) => {
@@ -188,7 +188,7 @@ function LaneSideColumn({
                 <span className="flex flex-col">
                   <span className="font-medium">{meta.label}</span>
                   <span className="text-muted-foreground">
-                    {lane.width.toFixed(2)}m · {lane.speedLimit} km/h · {CIRCULATION_META[lane.circulation].symbol}
+                    {lane.width.toFixed(2)} m · {lane.speedLimit} km/h · {circulationLabel(lane.circulation, side)}
                   </span>
                 </span>
               </button>
@@ -199,7 +199,7 @@ function LaneSideColumn({
           )}
           <InsertionMenu onPick={onAddAfter} label="Insert After" />
         </div>
-      </ScrollArea>
+      </div>
     </div>
   )
 }

@@ -44,8 +44,11 @@ function flattenedXml(frame: Frame, fn: XYFunction, s: number, length: number, d
     const b = samples[i]
     const seg = Math.hypot(b.x - a.x, b.y - a.y)
     if (seg < 1e-3) continue
+    // Use the segment direction, not the curve tangent, so the <line>
+    // geometry actually connects (a.x,a.y) to (b.x,b.y).
+    const hdg = Math.atan2(b.y - a.y, b.x - a.x)
     out.push(
-      `      <geometry s="${num(s + a.s)}" x="${num(a.x)}" y="${num(a.y)}" hdg="${num(b.heading, 6)}" length="${num(seg)}">\n        <line/>\n      </geometry>`,
+      `      <geometry s="${num(s + a.s)}" x="${num(a.x)}" y="${num(a.y)}" hdg="${num(hdg, 6)}" length="${num(seg)}">\n        <line/>\n      </geometry>`,
     )
   }
   void length

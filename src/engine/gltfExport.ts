@@ -91,7 +91,7 @@ export function buildExportScene(project: Project, options: ExportOptions = {}):
   })
 
   const samplers = buildRoadSamplers(effective, true)
-  const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, samplers.elevation)
+  const junctionNetwork = buildJunctionNetwork(effective, project.suppressedJunctions, samplers.elevation, project.junctionConfigurations)
   if (!junctionNetwork) return { meshes, origin: project.geoRef, version: 1 }
 
   // ── Road surfaces + markings ──
@@ -115,7 +115,7 @@ export function buildExportScene(project: Project, options: ExportOptions = {}):
   // ── Junction surfaces + markings ──
   for (const junction of junctionNetwork.junctions.filter((j: { suppressed: boolean }) => !j.suppressed)) {
     const surface = buildJunctionSurface(junction, samplers.elevation)
-    if (surface.mesh) meshes.push({ id: `jx:${junction.id}`, name: `Junction:${junction.id}`, category: 'junction', mesh: surface.mesh })
+    if (surface.mesh) meshes.push({ id: `jx:${junction.id}`, name: `Junction:${junction.configuration?.name || junction.id}`, category: 'junction', mesh: surface.mesh })
     const markings = buildJunctionMarkings(junction)
     if (markings) meshes.push({ id: `jx:${junction.id}:markings`, name: `JunctionMarkings:${junction.id}`, category: 'marking', mesh: markings })
   }
@@ -125,9 +125,10 @@ export function buildExportScene(project: Project, options: ExportOptions = {}):
   for (const intersection of project.intersections ?? []) {
     if (intersection.trackEnds.length < 2) continue
     for (const way of allWays(intersection, resolved)) {
+      if (!way.authorized) continue
       const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
       if (result.pavement) meshes.push({ id: `ix:${intersection.id}`, name: `Intersection:${intersection.groundName || intersection.id}`, category: 'intersection', mesh: result.pavement })
-      if (result.markings) meshes.push({ id: `ix:${intersection.id}:markings`, name: `IntersectionMarkings:${intersection.groundName || intersection.id}`, category: 'marking', mesh: result.markings })
+      if (intersection.markings && result.markings) meshes.push({ id: `ix:${intersection.id}:markings`, name: `IntersectionMarkings:${intersection.groundName || intersection.id}`, category: 'marking', mesh: result.markings })
     }
   }
 

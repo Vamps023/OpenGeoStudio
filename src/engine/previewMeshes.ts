@@ -14,7 +14,7 @@
 import { buildRoadMeshRange, buildConnectingRoadMesh, buildRailwayMesh } from './mesh'
 import type { MeshData } from './mesh'
 import { buildRailFixtureMeshes } from './railFixtures'
-import { visibleRoadRanges } from './junctions'
+import { buildJunctionSurface, buildJunctionMarkings, visibleRoadRanges } from './junctions'
 import type { JunctionNetwork } from './junctions'
 import { allWays, resolveTracks } from './intersections'
 import { getLaneSection, type RoadSamplers } from './roadServices'
@@ -83,6 +83,7 @@ export function buildEditorPreviewMeshes(
       for (const range of visibleRoadRanges(path, cuts)) {
         const result = buildRoadMeshRange(path, laneSection, range.sStart, range.sEnd, 1, samplers.elevation.get(road.id), samplers.banking.get(road.id), road.tapers)
         if (result.pavement) roadMeshes.push({ roadId: road.id, mesh: result.pavement })
+        if (result.markings) roadMeshes.push({ roadId: road.id, mesh: result.markings })
       }
     }
   }
@@ -91,10 +92,10 @@ export function buildEditorPreviewMeshes(
   const connectingMeshes: MeshData[] = []
   if (layers.intersection3dGeneration) {
     for (const junction of junctionNetwork.junctions.filter((j) => !j.suppressed)) {
-      for (const connection of junction.connectingRoads) {
-        const result = buildConnectingRoadMesh(connection.samples, connection.laneCount, connection.laneWidth)
-        if (result.pavement) connectingMeshes.push(result.pavement)
-      }
+      const surface = buildJunctionSurface(junction, samplers.elevation)
+      if (surface.mesh) connectingMeshes.push(surface.mesh)
+      const markings = buildJunctionMarkings(junction)
+      if (markings) connectingMeshes.push(markings)
     }
   }
 
@@ -105,8 +106,10 @@ export function buildEditorPreviewMeshes(
     for (const intersection of project.intersections ?? []) {
       if (intersection.trackEnds.length < 2) continue
       for (const way of allWays(intersection, resolved)) {
+        if (!way.authorized) continue
         const result = buildConnectingRoadMesh(way.samples, Math.max(1, way.laneCount), way.laneWidth)
         if (result.pavement) intersectionWayMeshes.push(result.pavement)
+        if (intersection.markings && result.markings) intersectionWayMeshes.push(result.markings)
       }
     }
   }

@@ -1,11 +1,14 @@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SelectionPanel from '../../roads/SelectionPanel'
 import type { SelectionPanelProps } from '../../roads/SelectionPanel'
 import { maxAbsGrade } from '../../engine/elevation'
 import { clampInt, clampNumber } from '../tooling'
 import type { EditorConfig, GeoReference, RoadData } from '../../state/store'
+
+const PROFILE_PRESETS = ['Default', 'Highway', 'Urban', 'Rural', 'Bridge', 'Tunnel', 'Roundabout']
 
 export interface SelectionTabProps extends SelectionPanelProps {
   config: EditorConfig
@@ -15,13 +18,46 @@ export interface SelectionTabProps extends SelectionPanelProps {
   onGeoRefChange: (geo: GeoReference) => void
 }
 
-/** Selection tab: selection panel + Model/New Road parameters + Map Location. */
+/** Selection tab: selection panel + road properties + Model/New Road parameters + Map Location. */
 export default function SelectionTab(props: SelectionTabProps) {
   const { config, geoRef, onConfigChange, onUpdateRoad, onGeoRefChange, ...panelProps } = props
   const selectedRoad = props.selectedRoad
   return (
     <>
       <SelectionPanel {...panelProps} />
+
+      <Separator />
+
+      {/* Road properties for the selected road */}
+      {selectedRoad ? (
+        <div className="grid gap-3">
+          <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Road Properties</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="road-id">Road ID</Label>
+              <Input id="road-id" className="text-xs text-muted-foreground" value={selectedRoad.id} readOnly />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="road-length">Length (m)</Label>
+              <Input id="road-length" className="text-xs text-muted-foreground" value={props.roadLength.toFixed(1)} readOnly />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="road-name">Road name</Label>
+            <Input id="road-name" value={selectedRoad.name}
+              onChange={(event) => onUpdateRoad({ name: event.target.value })} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="road-profile">Road profile / style</Label>
+            <Select value={selectedRoad.profileName ?? 'Default'} onValueChange={(v) => onUpdateRoad({ profileName: v === 'Default' ? undefined : v })}>
+              <SelectTrigger id="road-profile" className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PROFILE_PRESETS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      ) : null}
 
       <Separator />
 
@@ -49,6 +85,12 @@ export default function SelectionTab(props: SelectionTabProps) {
           {selectedRoad.elevationProfile && selectedRoad.elevationProfile.length >= 2 && (
             <p className="text-[11px] text-muted-foreground">
               Max grade: <b className="font-medium text-foreground">{(maxAbsGrade(selectedRoad.elevationProfile, props.roadLength) * 100).toFixed(1)}%</b>
+            </p>
+          )}
+          {selectedRoad.functions && selectedRoad.functions.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Functions: <b className="font-medium text-foreground">{selectedRoad.functions.length}</b> ·
+              Portions: <b className="font-medium text-foreground">{selectedRoad.portions?.length ?? 0}</b>
             </p>
           )}
         </div>

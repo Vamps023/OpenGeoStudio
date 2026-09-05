@@ -8,7 +8,11 @@
     "dev:electron": "concurrently -k -n vite,electron \"vite\" \"cross-env OGS_DEV=1 node electron/launch.cjs\"",
     "build": "vite build",
     "start": "npm run build && node electron/launch.cjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:engine && npm run test:overlays && npm run test:configuration",
+    "test:engine": "esbuild tests/engine-verify.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/engine-verify.cjs --external:zustand && node node_modules/.cache/engine-verify.cjs",
+    "test:overlays": "esbuild tests/overlay-verify.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/overlay-verify.cjs --external:zustand && node node_modules/.cache/overlay-verify.cjs",
+    "test:configuration": "esbuild tests/configuration-verify.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/configuration-verify.cjs --external:zustand && node node_modules/.cache/configuration-verify.cjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

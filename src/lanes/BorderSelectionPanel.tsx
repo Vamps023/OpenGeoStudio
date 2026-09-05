@@ -51,16 +51,16 @@ export default function BorderSelectionPanel({ section, side, edge, roadId }: Bo
   }
 
   return (
-    <div className="space-y-2 rounded border border-slate-800 bg-slate-900/40 p-3">
+    <div className="space-y-2 rounded border border-border bg-card/40 p-3">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold text-slate-100">
+        <div className="text-xs font-semibold text-foreground">
           Border · {side} · {edge}
         </div>
         <Badge variant="outline" className="text-[10px]">{LANE_TYPE_META[lane.type].label} #{idx}</Badge>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[10px] uppercase text-slate-500">Height (m)</Label>
+          <Label className="text-[10px] uppercase text-muted-foreground">Height (m)</Label>
           <Input
             type="number" min={0} max={1} step={0.01}
             className="h-7 text-xs"
@@ -69,7 +69,7 @@ export default function BorderSelectionPanel({ section, side, edge, roadId }: Bo
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-[10px] uppercase text-slate-500">Offset (m)</Label>
+          <Label className="text-[10px] uppercase text-muted-foreground">Offset (m)</Label>
           <Input
             type="number" min={0} max={2} step={0.01}
             className="h-7 text-xs"
@@ -82,26 +82,25 @@ export default function BorderSelectionPanel({ section, side, edge, roadId }: Bo
         <button
           type="button"
           onClick={() => applyHeight(0.05)}
-          className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 hover:bg-slate-700"
+          className="rounded border border-border bg-muted px-2 py-0.5 hover:bg-accent"
           title={TIP_SOFT}
         >Soft 5cm</button>
         <button
           type="button"
           onClick={() => applyHeight(0.1)}
-          className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 hover:bg-slate-700"
+          className="rounded border border-border bg-muted px-2 py-0.5 hover:bg-accent"
           title={TIP_HARD}
         >Hard 10cm</button>
         <button
           type="button"
           onClick={() => applyHeight(0.0)}
-          className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 hover:bg-slate-700"
+          className="rounded border border-border bg-muted px-2 py-0.5 hover:bg-accent"
           title={TIP_VERTICAL}
         >Vertical 0cm (unsafe)</button>
       </div>
-      <p className="text-[10px] text-slate-500">
-        Off-road feedback: when the driver leaves the road, a non-zero border
-        height triggers a steering wheel force-feedback reaction. Use the
-        presets for quick setup.
+      <p className="text-[10px] text-muted-foreground">
+        Border heights and offsets are off-road feedback settings for simulation/export.
+        This editor does not simulate steering-wheel feedback. Use the presets for quick setup.
       </p>
     </div>
   )

@@ -1,5 +1,6 @@
 import type { LaneDef, LaneType } from '../engine/laneTypes'
-import { LANE_TYPE_META, CIRCULATION_META } from '../engine/laneMetadata'
+import { LANE_TYPE_META } from '../engine/laneMetadata'
+import { circulationLabel } from './LanePropertiesEditor'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -39,7 +40,7 @@ export default function SideBlock({
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {side === 'left' ? '◀ Left side' : 'Right side ▶'} ({lanes.length})
         </div>
         <Select onValueChange={(value) => onAdd(value as LaneType)}>
@@ -63,8 +64,8 @@ export default function SideBlock({
               key={key}
               className={`group flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5 text-xs transition-colors ${
                 isSelected
-                  ? 'border-blue-500 bg-blue-500/10 text-slate-100'
-                  : 'border-slate-800 bg-slate-900/50 hover:border-slate-700 hover:bg-slate-800/40 text-slate-200'
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-border bg-card/50 hover:border-primary/50 hover:bg-muted/40 text-foreground'
               }`}
               onClick={() => onSelect(idx)}
             >
@@ -77,8 +78,8 @@ export default function SideBlock({
                 <div className="truncate text-xs font-medium">
                   #{idx} · {lane.name ?? meta.label}
                 </div>
-                <div className="truncate text-[10px] text-slate-500">
-                  {lane.width.toFixed(2)} m · {CIRCULATION_META[lane.circulation].symbol} {lane.speedLimit > 0 ? `${lane.speedLimit} km/h` : ''}
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {lane.width.toFixed(2)} m · {circulationLabel(lane.circulation, side)} · {lane.speedLimit} km/h
                 </div>
               </div>
               <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -119,7 +120,7 @@ export default function SideBlock({
           )
         })}
         {lanes.length === 0 && (
-          <div className="rounded border border-dashed border-slate-800 bg-slate-900/30 p-2 text-center text-[10px] text-slate-500">
+          <div className="rounded border border-dashed border-slate-800 bg-slate-900/30 p-2 text-center text-[10px] text-muted-foreground">
             No lanes · use + Lane to add one
           </div>
         )}

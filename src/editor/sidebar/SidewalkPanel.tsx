@@ -15,26 +15,30 @@ import { clampNumber } from '../tooling'
  * regenerate with the road mesh, and wrap around junction connecting roads.
  */
 export default function SidewalkPanel({ road }: { road: RoadData }) {
-  const insertLaneAt = useStore((s) => s.insertLaneAt)
-  const removeLaneAt = useStore((s) => s.removeLaneAt)
+  const insertLanesBatch = useStore((s) => s.insertLanesBatch)
+  const removeLanesBatch = useStore((s) => s.removeLanesBatch)
   const updateLaneAt = useStore((s) => s.updateLaneAt)
 
   const section = getLaneSection(road)
 
   function addSide(side: 'left' | 'right') {
     const len = getLaneSection(road)[side].length
-    insertLaneAt(road.id, side, len, defaultLaneByType('curb', 0.3))
-    // after the curb insert, the sidewalk goes at the new outer end
-    insertLaneAt(road.id, side, len + 1, defaultLaneByType('sidewalk', 2))
+    // Batch curb + sidewalk insert into a single undo operation
+    insertLanesBatch(road.id, [
+      { side, index: len, lane: defaultLaneByType('curb', 0.3) },
+      { side, index: len + 1, lane: defaultLaneByType('sidewalk', 2) },
+    ])
   }
 
   function removeSide(side: 'left' | 'right') {
     const lanes = getLaneSection(road)[side]
+    const ops: { side: 'left' | 'right'; index: number }[] = []
+    // Collect indices to remove (from the end so batch sort handles order)
     const last = lanes[lanes.length - 1]
-    if (last?.type === 'sidewalk') removeLaneAt(road.id, side, lanes.length - 1)
-    const remaining = getLaneSection(road)[side]
-    const last2 = remaining[remaining.length - 1]
-    if (last2?.type === 'curb') removeLaneAt(road.id, side, remaining.length - 1)
+    if (last?.type === 'sidewalk') ops.push({ side, index: lanes.length - 1 })
+    const last2 = ops.length > 0 ? lanes[lanes.length - 2] : lanes[lanes.length - 1]
+    if (last2?.type === 'curb') ops.push({ side, index: ops.length > 0 ? lanes.length - 2 : lanes.length - 1 })
+    if (ops.length > 0) removeLanesBatch(road.id, ops)
   }
 
   function hasSide(side: 'left' | 'right') {

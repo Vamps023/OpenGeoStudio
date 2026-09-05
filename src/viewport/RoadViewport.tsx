@@ -21,6 +21,7 @@ export interface OverlayMarker {
   heading?: number
   size?: number     // meters
   draggable?: boolean
+  selectable?: boolean
 }
 
 export interface ViewportOverlays {
@@ -54,6 +55,7 @@ interface RoadViewportProps {
 
 interface ViewRefs {
   applyMode: (mode: '2d' | '3d') => void
+  fitPlanMeshes: (meshes: MeshData[]) => void
   roadGroup: THREE.Group
   highlightGroup: THREE.Group
   markerGroup: THREE.Group
@@ -235,13 +237,14 @@ export default function RoadViewport({
       activeCamera = camera
     }
     attach(ortho, true)
-    roadGroup.position.y = 480 // 2D plan view: ignore road elevation
+    roadGroup.position.y = 0 // 2D plan view: ignore road elevation
 
     // ── Tile fetching + compositing ──
     const tileCache = new Map<string, HTMLImageElement>()
     const pendingTiles = new Set<string>()
     let compositeDirty = false
     let lastTileKey = ''
+    let disposed = false
 
     function fetchTile(zoom: number, tx: number, ty: number): Promise<HTMLImageElement | null> {
       const key = `${zoom}/${tx}/${ty}`
@@ -268,7 +271,7 @@ export default function RoadViewport({
     }
 
     function updateMapTiles() {
-      if (!showMapRef.current || activeMode !== '2d') return
+      if (disposed || !showMapRef.current || activeMode !== '2d') return
       const containerW = container!.clientWidth
       const containerH = container!.clientHeight
       if (!containerW || !containerH) return
@@ -325,7 +328,9 @@ export default function RoadViewport({
 
       // Fetch and composite
       Promise.all(tilesToFetch.map((t) => fetchTile(t.z, t.x, t.y))).then(() => {
-        compositeTiles(slippyZoom, txMin, txMax, tyMin, tyMax, center, scale)
+        if (!disposed && showMapRef.current && activeMode === '2d' && tileKey === lastTileKey) {
+          compositeTiles(slippyZoom, txMin, txMax, tyMin, tyMax, center, scale)
+        }
       })
     }
 
@@ -705,10 +710,10 @@ export default function RoadViewport({
 
     refsRef.current = {
       applyMode(next) {
-        if (next === activeMode) return
-        activeMode = next
-        roadGroup.position.y = next === '2d' ? 480 : 0
-        attach(next === '2d' ? ortho : persp, next === '2d')
+        if (next !== activeMode) {
+          activeMode = next
+          attach(next === '2d' ? ortho : persp, next === '2d')
+        }
         const mapActive = next === '2d' && showMapRef.current
         renderer.setClearColor(0x0b1220, mapActive ? 0 : 1)
         mapMesh.visible = mapActive
@@ -717,6 +722,7 @@ export default function RoadViewport({
           updateMapTiles()
         }
       },
+      fitPlanMeshes: (nextMeshes) => fitPlanCamera(ortho, nextMeshes),
       roadGroup,
       highlightGroup,
       markerGroup,
@@ -730,6 +736,7 @@ export default function RoadViewport({
     }
 
     return () => {
+      disposed = true
       cancelAnimationFrame(animationFrame)
       clearInterval(mapUpdateInterval)
       observer.disconnect()
@@ -775,6 +782,7 @@ export default function RoadViewport({
   useEffect(() => {
     const refs = refsRef.current
     if (!refs) return
+    refs.fitPlanMeshes(draftMesh ? [...meshes, ...highlightMeshes, draftMesh] : [...meshes, ...highlightMeshes])
     disposeGroup(refs.roadGroup)
     for (const mesh of meshes) refs.roadGroup.add(toThreeMesh(mesh, false))
     if (draftMesh) refs.roadGroup.add(toThreeMesh(draftMesh, false))
@@ -805,6 +813,23 @@ export default function RoadViewport({
       <div className="viewport-hint">{hint}</div>
     </div>
   )
+}
+
+export function fitPlanCamera(camera: THREE.OrthographicCamera, meshes: MeshData[]): void {
+  let minHeight = 0
+  let maxHeight = 0
+  for (const mesh of meshes) {
+    for (let i = 1; i < mesh.positions.length; i += 3) {
+      const height = mesh.positions[i]
+      if (!Number.isFinite(height)) continue
+      minHeight = Math.min(minHeight, height)
+      maxHeight = Math.max(maxHeight, height)
+    }
+  }
+  camera.position.y = maxHeight + 500
+  camera.far = Math.max(5000, camera.position.y - minHeight + 500)
+  camera.updateProjectionMatrix()
+  camera.updateMatrixWorld()
 }
 
 function toThreeMesh(mesh: MeshData, highlighted: boolean): THREE.Mesh {

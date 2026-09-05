@@ -20,6 +20,8 @@ import { buildRoadSamplers, buildProjectJunctionNetwork, getLaneSection, getRoad
 import { buildEditorPreviewMeshes, flattenPreviewMeshes, previewRoadIds } from '../src/engine/previewMeshes'
 import { buildExportScene, encodeGLB, exportProjectToGLB } from '../src/engine/gltfExport'
 import { DOMParser as LinkedomDOMParser } from 'linkedom'
+import { OrthographicCamera, Vector3 } from 'three'
+import { fitPlanCamera } from '../src/viewport/RoadViewport'
 
 // OpenDRIVE import needs a DOM parser in node — polyfill from linkedom
 if (typeof globalThis.DOMParser === 'undefined') {
@@ -547,8 +549,8 @@ if (odr) {
   // connections on the section side must use the SECTION count (2/3), not the stale 1
   const secConns = conns.filter((c) => c.laneLinks.some((l) => l.fromRoadId === 'sec' || l.toRoadId === 'sec'))
   check('phase24: section-side connections exist', secConns.length >= 2, `got ${secConns.length}`)
-  const secCounts = secConns.map((c) => (c.laneLinks.filter((l) => l.fromRoadId === 'sec' || l.toRoadId === 'sec')).length)
-  check('phase24: section lane counts used', secCounts.some((n) => n >= 2), JSON.stringify(secCounts))
+  const secLaneIds = secConns.flatMap((c) => c.laneLinks.flatMap((link) => [link.fromRoadId === 'sec' ? link.fromLaneId : 0, link.toRoadId === 'sec' ? link.toLaneId : 0]))
+  check('phase24: section lane counts used', secLaneIds.some((id) => Math.abs(id) >= 2), JSON.stringify(secLaneIds))
 }
 
 
@@ -832,6 +834,37 @@ if (odr) {
     const tSurface = buildJunctionSurface(tJunction, new Map())
     check('T-junction surface: mesh built', !!tSurface.mesh)
   }
+
+  // Lane tapers: the junction must meet the pavement actually rendered at
+  // the cut (tapered width), not the full lane section — otherwise the
+  // boundary overhangs the road and turning paths anchor off-pavement.
+  const taperRoads: import('../src/engine/junctions').JunctionRoad[] = [
+    { id: 'ht', points: [{ x: -60, y: 0 }, { x: 60, y: 0 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0,
+      tapers: [{ side: 'right', index: 0, mode: 'out', length: 30, endS: 85 }] },
+    { id: 'xt', points: [{ x: -5, y: -34.64 }, { x: 55, y: 34.64 }], geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0 },
+  ]
+  const taperNetwork = buildJunctionNetwork(taperRoads)
+  const taperJunction = taperNetwork.junctions.find((j) => !j.suppressed)
+  check('taper junction: found', !!taperJunction)
+  if (taperJunction) {
+    const hApproaches = taperJunction.approaches.filter((a) => a.roadId === 'ht')
+    check('taper junction: both h approaches', hApproaches.length === 2)
+    // endS=85 is the junction centre: at the west cut (s≈74.4) the right
+    // lane is tapered to (85-74.4)/30 ≈ 0.35 → right width ≈ 1.24, not 3.5
+    const west = hApproaches.find((a) => a.contact === 'end')
+    if (west) {
+      check('taper junction: right width follows taper', Math.abs((west.rightWidth ?? 0) - 3.5 * ((85 - west.station) / 30)) < 0.05,
+        `rightWidth=${west.rightWidth?.toFixed(3)} at s=${west.station.toFixed(2)}`)
+      check('taper junction: left width unaffected', Math.abs((west.leftWidth ?? 0) - 3.5) < 0.001)
+      const rightLanes = west.outgoingLanes.filter((l) => l.laneId < 0)
+      check('taper junction: tapered lane endpoint uses tapered width', rightLanes.every((l) => l.width < 3.5))
+    }
+    const surface = buildJunctionSurface(taperJunction, new Map())
+    check('taper junction: surface built', !!surface.mesh)
+    let clean = true
+    for (const v of surface.mesh?.positions ?? []) { if (!Number.isFinite(v)) { clean = false; break } }
+    check('taper junction: no NaN positions', clean)
+  }
 }
 
 // ─── Section 29: Domain model (canonical types + serialization) ─────
@@ -1027,6 +1060,14 @@ if (odr) {
     check('previewMeshes: road meshes exist', meshes.roadMeshes.length > 0)
     check('previewMeshes: road meshes have positions', meshes.roadMeshes.every((e) => e.mesh.positions.length > 0))
     check('previewMeshes: road meshes have indices', meshes.roadMeshes.every((e) => e.mesh.indices.length > 0))
+    check('previewMeshes: lane markings survive into editor', meshes.roadMeshes.some(({ mesh }) =>
+      mesh.colors.some((value, i) => i % 3 === 0 && value > 0.8 && mesh.colors[i + 1] > 0.8 && mesh.colors[i + 2] > 0.8)))
+    const junctionSurface = buildJunctionSurface(network.junctions[0], samplers.elevation).mesh!
+    check('previewMeshes: unified junction surface survives into editor', meshes.connectingMeshes.some((mesh) =>
+      mesh.positions.length === junctionSurface.positions.length && mesh.positions.every((value, i) => value === junctionSurface.positions[i])))
+    const junctionMarks = buildJunctionMarkings(network.junctions[0])!
+    check('previewMeshes: junction markings survive into editor', meshes.connectingMeshes.some((mesh) =>
+      mesh.positions.length === junctionMarks.positions.length && mesh.positions.every((value, i) => value === junctionMarks.positions[i])))
 
     // Connecting meshes (junction connectors)
     check('previewMeshes: connecting meshes exist', meshes.connectingMeshes.length > 0)
@@ -1058,6 +1099,33 @@ if (odr) {
     // Disable intersection3dGeneration → no connecting meshes
     const noInter = buildEditorPreviewMeshes(project, network, samplers, { road3dGeneration: true, intersection3dGeneration: false }, false, null)
     check('previewMeshes: no connecting meshes when disabled', noInter.connectingMeshes.length === 0)
+    const suppressed = buildEditorPreviewMeshes(project, { ...network, junctions: network.junctions.map((junction) => ({ ...junction, suppressed: true })) }, samplers, layers, false, null)
+    check('previewMeshes: suppressed junctions have no surface or markings', suppressed.connectingMeshes.length === 0)
+    const elevatedProject = { ...project, roads: roads.map((road) => ({ ...road, elevationProfile: [{ s: 0, z: 1200 }, { s: 100, z: 1200 }] })) }
+    const elevatedNetwork = buildProjectJunctionNetwork(elevatedProject, false)!
+    const elevatedMeshes = buildEditorPreviewMeshes(elevatedProject, elevatedNetwork.network, elevatedNetwork.samplers, layers, false, null)
+    check('previewMeshes: elevated junction surfaces and markings stay above terrain', elevatedMeshes.connectingMeshes.every((mesh) =>
+      mesh.positions.every((value, i) => i % 3 !== 1 || (value >= 1200 && value < 1201))))
+
+    const camera = new OrthographicCamera(-100, 100, 100, -100, 0.1, 5000)
+    camera.position.set(20, 500, -30)
+    camera.up.set(0, 0, -1)
+    camera.lookAt(20, 0, -30)
+    camera.zoom = 2
+    const cameraMeshes = flattenPreviewMeshes(elevatedMeshes)
+    const positionsBefore = cameraMeshes.map((mesh) => mesh.positions.slice())
+    fitPlanCamera(camera, cameraMeshes)
+    const elevatedPoint = new Vector3(20, 1200, -30).project(camera)
+    const groundPoint = new Vector3(20, 0, -30).project(camera)
+    check('viewport: elevated roads fit within plan camera clipping planes', Math.abs(elevatedPoint.z) < 1)
+    check('viewport: ground overlays remain inside plan camera clipping planes', Math.abs(groundPoint.z) < 1)
+    check('viewport: plan projection aligns road and ground selection', Math.hypot(elevatedPoint.x - groundPoint.x, elevatedPoint.y - groundPoint.y) < 1e-9)
+    check('viewport: fitting elevation preserves pan and zoom', camera.position.x === 20 && camera.position.z === -30 && camera.zoom === 2)
+    check('viewport: fitting does not modify 3D mesh elevations', cameraMeshes.every((mesh, index) => mesh.positions.every((value, i) => value === positionsBefore[index][i])))
+    fitPlanCamera(camera, [{ positions: new Float32Array([20, -6000, -30, 20, 9000, -30]), colors: new Float32Array(6), indices: new Uint32Array() }])
+    check('viewport: below-sea-level and mountain roads remain visible', [-6000, 9000].every((height) => Math.abs(new Vector3(20, height, -30).project(camera).z) < 1))
+    fitPlanCamera(camera, [])
+    check('viewport: clearing roads resets plan camera depth', camera.position.y === 500 && camera.far === 5000)
   }
 }
 
@@ -1168,6 +1236,87 @@ if (odr) {
   check('gltfExport: empty GLB is valid', emptyGlb.byteLength > 0)
   const emptyView = new DataView(emptyGlb)
   check('gltfExport: empty GLB magic', emptyView.getUint32(0, true) === 0x46546c67)
+}
+
+{
+  const lane = (id: string, width: number, type: import('../src/engine/laneTypes').LaneType = 'travel', circulation: import('../src/engine/laneTypes').CirculationWay = 'forward'): import('../src/engine/laneTypes').LaneDef => ({
+    id, name: id, width, type, circulation, speedLimit: 50, vehicles: ['all'],
+  })
+  const horizontal: RoadData = {
+    id: 'configured-h', name: 'Horizontal', points: [{ x: -100, y: 0 }, { x: 100, y: 0 }],
+    geometryType: 'straight', lanesLeft: 1, lanesRight: 1, laneWidth: 3.5, filletRadius: 0,
+    laneSection: { left: [lane('left-travel', 4), lane('left-walk', 2, 'sidewalk')], right: [lane('median', 1, 'median'), lane('right-travel', 3), lane('right-walk', 2, 'sidewalk'), lane('bus', 5, 'bus')] },
+  }
+  const vertical: RoadData = { ...horizontal, id: 'configured-v', name: 'Vertical', points: [{ x: 0, y: -100 }, { x: 0, y: 100 }] }
+  const roads = [horizontal, vertical]
+  const initial = buildJunctionNetwork(roads).junctions[0]
+  const configKey = initial.configurationKey!
+  check('lane configuration: crossing has stable configuration key', !!configKey)
+  check('lane configuration: every default is one signed lane movement', initial.connectionOptions!.length > 0 && initial.connectionOptions!.every((c) => c.laneCount === 1 && c.laneLinks.length === 1 && c.laneLinks[0].fromLaneId !== 0 && !!c.fromContact && !!c.toContact && c.authorized === true))
+  const entry = initial.approaches.find((a) => a.roadId === horizontal.id && a.contact === 'end')!
+  check('lane configuration: sidewalk and median excluded from vehicle lanes', entry.incomingLanes!.map((l) => l.laneId).join(',') === '-2,-4' && entry.outgoingLanes!.map((l) => l.laneId).join(',') === '1')
+  check('lane configuration: non-travel physical pavement widths preserved', entry.leftWidth === 6 && entry.rightWidth === 11)
+  check('lane configuration: mixed-width lane centers include median and sidewalk', entry.incomingLanes![0].offset === -2.5 && entry.incomingLanes![1].offset === -8.5)
+  const route: import('../src/engine/junctions').JunctionLaneConnection = { fromRoadId: horizontal.id, fromContact: 'end', fromLaneId: -2, toRoadId: vertical.id, toContact: 'start', toLaneId: -4, enabled: true }
+  const configured = (configuration: import('../src/engine/junctions').JunctionConfiguration, input = roads) => buildJunctionNetwork(input, [], new Map([[horizontal.id, () => 7], [vertical.id, () => 12]]), { [configKey]: configuration }).junctions.find((j) => j.configurationKey === configKey)!
+  const custom = configured({ name: 'Custom crossing', connections: [route] })
+  check('lane configuration: custom set replaces defaults completely', custom.connectingRoads.length === 1 && custom.configuration?.name === 'Custom crossing')
+  const samples = custom.connectingRoads[0].samples
+  const exit = custom.approaches.find((a) => a.roadId === vertical.id && a.contact === 'start')!
+  check('lane configuration: source samples use actual lane center and profile', Math.abs(samples[0].x - entry.position.x) < 1e-6 && Math.abs(samples[0].y + 2.5) < 1e-6 && samples[0].z === 7)
+  check('lane configuration: target samples use side-specific width and profile', Math.abs(samples.at(-1)!.x - 8.5) < 1e-6 && Math.abs(samples.at(-1)!.y - exit.position.y) < 1e-6 && samples.at(-1)!.z === 12)
+  const remapped = configured({ connections: [{ ...route, fromLaneId: -4, toLaneId: -2 }] }).connectingRoads[0]
+  check('lane configuration: changing mapping changes both endpoints', Math.abs(remapped.samples[0].y + 8.5) < 1e-6 && Math.abs(remapped.samples.at(-1)!.x - 2.5) < 1e-6)
+  check('lane configuration: connector uses actual lane widths', custom.connectingRoads[0].laneWidth === 3 && remapped.laneWidth === 3)
+  const disabled = configured({ connections: [{ ...route, enabled: false }] })
+  check('lane configuration: disabled candidate retained but no movement', disabled.connectingRoads.length === 0 && disabled.connectionOptions!.length === 1 && disabled.connectionOptions![0].authorized === false)
+  const empty = configured({ connections: [] })
+  check('lane configuration: explicit empty set has no candidates or movements', empty.connectingRoads.length === 0 && empty.connectionOptions!.length === 0)
+  check('lane configuration: surface retained when all routes disabled', !!buildJunctionSurface(disabled, new Map()).mesh && !!buildJunctionSurface(empty, new Map()).mesh && buildJunctionMarkings(disabled) === null)
+  const noMarkings = configured({ markings: false })
+  check('lane configuration: name and markings do not change auto connectivity', configured({ name: 'Renamed' }).connectingRoads.length === initial.connectingRoads.length && noMarkings.connectingRoads.length === initial.connectingRoads.length)
+  check('lane configuration: markings flag hides only markings', buildJunctionMarkings(noMarkings) === null && !!buildJunctionSurface(noMarkings, new Map()).mesh)
+  const invalid = configured({ connections: [route, { ...route }, { ...route, fromLaneId: -3 }, { ...route, fromLaneId: -99 }, { ...route, toRoadId: 'deleted' }, { ...route, fromContact: 'start' }] })
+  check('lane configuration: duplicate and stale/ineligible rows warn without rerouting', invalid.configurationWarnings!.length === 5 && invalid.connectingRoads.length === 1)
+  const zeroWidth = { ...horizontal, laneSection: { ...horizontal.laneSection!, right: horizontal.laneSection!.right.map((l, i) => i === 1 ? { ...l, width: 0 } : l) } }
+  const invalidWidth = configured({ connections: [route] }, [zeroWidth, vertical])
+  check('lane configuration: zero width invalidates configured lane', invalidWidth.connectingRoads.length === 0 && invalidWidth.configurationWarnings!.length === 1)
+  const reversed: RoadData = { ...horizontal, laneSection: { left: [lane('left-reversed', 4, 'travel', 'backward')], right: [lane('right-reversed', 3, 'travel', 'backward'), lane('bike-both', 1.5, 'bike', 'both'), lane('paved', 2, 'paved_major')] } }
+  const reversedJunction = buildJunctionNetwork([reversed, vertical]).junctions[0]
+  const reversedEnd = reversedJunction.approaches.find((a) => a.roadId === horizontal.id && a.contact === 'end')!
+  const reversedStart = reversedJunction.approaches.find((a) => a.roadId === horizontal.id && a.contact === 'start')!
+  check('lane configuration: backward reverses normal left/right circulation', reversedEnd.incomingLanes!.some((l) => l.laneId === 1) && reversedEnd.outgoingLanes!.some((l) => l.laneId === -1) && reversedStart.incomingLanes!.some((l) => l.laneId === -1) && reversedStart.outgoingLanes!.some((l) => l.laneId === 1))
+  check('lane configuration: both direction bike lane allowed at both contacts', [reversedEnd, reversedStart].every((a) => a.incomingLanes!.some((l) => l.laneId === -2) && a.outgoingLanes!.some((l) => l.laneId === -2)))
+  check('lane configuration: paved major is connection eligible', reversedEnd.incomingLanes!.some((l) => l.laneId === -3))
+  const legacy = buildJunctionNetwork(roads.map((r) => ({ ...r, laneSection: undefined }))).junctions[0]
+  check('lane configuration: legacy counts retain default signed lanes', legacy.approaches.every((a) => a.incomingLaneCount === 1 && a.outgoingLaneCount === 1 && Math.abs(a.incomingLanes![0].offset) === 1.75))
+  const repeatRoads: RoadData[] = [
+    { ...horizontal, id: 'repeat-h', laneSection: undefined, points: [{ x: -150, y: 0 }, { x: 150, y: 0 }] },
+    { ...vertical, id: 'repeat-v', laneSection: undefined, geometryType: 'polyline', points: [{ x: -80, y: -80 }, { x: -80, y: 80 }, { x: 80, y: 80 }, { x: 80, y: -80 }] },
+  ]
+  const repeated = buildJunctionNetwork(repeatRoads).junctions
+  check('lane configuration: repeated crossings have distinct keys and same suppression pair', repeated.length === 2 && repeated[0].configurationKey !== repeated[1].configurationKey && repeated[0].key === repeated[1].key)
+  const extra: RoadData = { ...horizontal, id: 'unrelated', points: [{ x: -100, y: 300 }, { x: 100, y: 300 }] }
+  const reordered = buildJunctionNetwork([extra, ...repeatRoads.slice().reverse()], [repeated[0].key], new Map(), { [repeated[1].configurationKey!]: { name: 'Second', connections: [] } }).junctions
+  check('lane configuration: keys survive suppression, reordering and unrelated road addition', repeated.every((j) => reordered.some((r) => r.configurationKey === j.configurationKey && Math.hypot(r.position.x - j.position.x, r.position.y - j.position.y) < 1e-6)) && reordered.every((j) => j.suppressed))
+  check('lane configuration: repeated crossing settings stay isolated', reordered.find((j) => j.configurationKey === repeated[1].configurationKey)?.configuration?.name === 'Second' && !reordered.find((j) => j.configurationKey === repeated[0].configurationKey)?.configuration)
+  const project: DomainProject = { id: 'lane-config-project', name: 'Configured', createdAt: '', roads, suppressedJunctions: [], junctionConfigurations: { [configKey]: { name: 'Saved', markings: false, connections: [route, { ...route, fromLaneId: -4, enabled: false }] } } }
+  const restored = deserializeProject(JSON.parse(JSON.stringify(serializeProject(project))))!
+  check('lane configuration: serialization retains names, flags, routes and denied rows', JSON.stringify(restored.junctionConfigurations) === JSON.stringify(project.junctionConfigurations))
+  const built = buildProjectJunctionNetwork(restored)!
+  check('lane configuration: shared road services propagate configuration', built.network.junctions[0].connectingRoads.length === 1 && built.network.junctions[0].connectionOptions!.length === 2)
+  const preview = buildEditorPreviewMeshes(restored, built.network, built.samplers, { road3dGeneration: true, intersection3dGeneration: true }, false, null)
+  check('lane configuration: preview keeps only surface when markings disabled', preview.connectingMeshes.length === 1)
+  const scene = buildExportScene(restored, { drape: false })
+  check('lane configuration: export retains configured name and omits junction markings', scene.meshes.some((m) => m.category === 'junction' && m.name === 'Junction:Saved') && !scene.meshes.some((m) => m.id.startsWith('jx:') && m.category === 'marking'))
+  const explicitProject: DomainProject = { ...project, roads: [roadA, roadB, roadC].map((r) => ({ ...r, lanesLeft: 2, lanesRight: 2 })), junctionConfigurations: {}, intersections: [{ ...node, markings: false }] }
+  const explicitNetwork = buildProjectJunctionNetwork(explicitProject)!
+  const explicitPreview = buildEditorPreviewMeshes(explicitProject, explicitNetwork.network, explicitNetwork.samplers, { road3dGeneration: true, intersection3dGeneration: true }, false, null)
+  const explicitMarked = buildEditorPreviewMeshes({ ...explicitProject, intersections: [{ ...node, markings: true }] }, explicitNetwork.network, explicitNetwork.samplers, { road3dGeneration: true, intersection3dGeneration: true }, false, null)
+  check('lane configuration: explicit intersection markings flag respected in preview', explicitMarked.intersectionWayMeshes.length > explicitPreview.intersectionWayMeshes.length)
+  const deniedNode = { ...node, authorizations: Object.fromEntries(ways.map((way) => [way.key, false])) }
+  const deniedPreview = buildEditorPreviewMeshes({ ...explicitProject, intersections: [deniedNode] }, explicitNetwork.network, explicitNetwork.samplers, { road3dGeneration: true, intersection3dGeneration: true }, false, null)
+  check('lane configuration: denied explicit ways not rendered in preview', deniedPreview.intersectionWayMeshes.length === 0)
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)
