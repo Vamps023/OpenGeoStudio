@@ -247,10 +247,13 @@ interface OgsState {
   moveLaneAt: (roadId: string, side: 'left' | 'right', from: number, to: number) => void
   setLaneBorder: (roadId: string, side: 'left' | 'right', index: number, edge: 'inner' | 'outer', height: number, offset?: number) => void
   refreshProjects: () => Promise<void>
+  markHydrated: () => void
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
   history: { past: Project[]; future: Project[] }
+  /** true once refreshProjects has loaded disk state — blocks stale saves before that */
+  hydrated: boolean
   undo: () => void
   redo: () => void
 }
@@ -378,8 +381,11 @@ function updateActiveProject(
   const nextProjects = projects.map((project) => (project.id === activeProjectId ? update(project) : project))
   // pre-mutation snapshot for undo; any new mutation clears the redo stack
   const past = [...history.past, current].slice(-HISTORY_LIMIT)
-  persistLocal(nextProjects)
   set({ projects: nextProjects, history: { past, future: [] } })
+  // Block stale saves until disk state has been loaded: without this, the
+  // renderer's localStorage snapshot could clobber newer project files
+  if (!get().hydrated) return
+  persistLocal(nextProjects)
   // Also save to file (async, non-blocking)
   const active = nextProjects.find((p) => p.id === activeProjectId)
   if (active) void saveProjectToFile(active)
@@ -411,6 +417,7 @@ export const useStore = create<OgsState>((set, get) => ({
   insertOptions: { stickToTerrain: false, defaultProfile: 'travel' },
   lockedPassageways: [],
   history: { past: [], future: [] },
+  hydrated: false,
 
   setSelection: (selection) => set({ selection }),
   toggleTrackSelection: (trackId, additive) => {
@@ -560,6 +567,7 @@ export const useStore = create<OgsState>((set, get) => ({
     ...project,
     catchPoints: (project.catchPoints ?? []).filter((item) => item.id !== id),
   })),
+  markHydrated: () => set({ hydrated: true }),
   setProjectTerrain: (terrain) => {
     if (terrain) setActiveTerrain(terrain)
     updateActiveProject(get, set, (project) => ({
@@ -650,7 +658,7 @@ export const useStore = create<OgsState>((set, get) => ({
   refreshProjects: async () => {
     const projects = await loadProjectsFromDisk()
     persistLocal(projects)
-    set({ projects })
+    set({ hydrated: true, projects })
     // Also fetch workspace path
     if (window.ogs?.getWorkspacePath) {
       const ws = await window.ogs.getWorkspacePath()
