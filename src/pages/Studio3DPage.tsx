@@ -16,6 +16,7 @@ import { samplePath } from '../engine/geometry'
 import { stickTrackToTerrain } from '../engine/tracks'
 import { sectionHalfWidth } from '../engine/laneLayout'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
+import { buildBuildingMesh, ringCentroid } from '../engine/osmBuildings'
 import { getAsphaltTextures, type RoadWear } from '../viewport/asphaltMaterial'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, type SimVehicle, type SimPath } from '../engine/simulation'
 import type { MeshData } from '../engine/mesh'
@@ -47,8 +48,10 @@ const CAR_GEOMETRY = new THREE.BoxGeometry(4.2, 1.5, 1.9)
 export interface StudioRoadObject {
   id: string
   name: string
-  kind: 'road' | 'junction' | 'intersection' | 'rail'
+  kind: 'road' | 'junction' | 'intersection' | 'rail' | 'building'
   mesh: MeshData
+  /** OSM tags etc. for the inspector */
+  tags?: Record<string, string>
 }
 
 /** Build all road meshes (roads + junction connectors + intersection ways +
@@ -120,13 +123,17 @@ function buildProjectRoadObjects(project: Project, drape: boolean): StudioRoadOb
 export interface OutlinerEntry {
   id: string
   name: string
-  kind: 'terrain' | 'road' | 'junction' | 'intersection' | 'rail' | 'traffic' | 'helpers'
+  kind: 'terrain' | 'road' | 'junction' | 'intersection' | 'rail' | 'building' | 'traffic' | 'helpers'
+  /** OSM attributes for the inspector */
+  tags?: Record<string, string>
 }
 
 export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   const projects = useStore((s) => s.projects)
   const activeProjectId = useStore((s) => s.activeProjectId)
   const saveCurrentProject = useStore((s) => s.saveCurrentProject)
+  const setOsmBuildings = useStore((s) => s.setOsmBuildings)
+  const deleteOsmBuilding = useStore((s) => s.deleteOsmBuilding)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [heightScale, setHeightScale] = useState(1)
@@ -148,6 +155,20 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     () => (project ? buildProjectRoadObjects(project, drape) : []),
     [project, drape],
   )
+  // OSM buildings extruded on the terrain (each one a selectable outliner object)
+  const buildingObjects = useMemo<StudioRoadObject[]>(() => {
+    const buildings = project?.osmBuildings
+    if (!buildings?.length || !project?.geoRef) return []
+    const sampler = makeTerrainSampler(project.geoRef)
+    const out: StudioRoadObject[] = []
+    for (const building of buildings) {
+      const centroid = ringCentroid(building.ring)
+      const baseZ = sampler(centroid.x, centroid.y) ?? 0
+      const mesh = buildBuildingMesh(building, baseZ)
+      if (mesh) out.push({ id: building.id, name: building.name, kind: 'building', mesh, tags: building.tags })
+    }
+    return out
+  }, [project?.osmBuildings, project?.geoRef])
 
   // ── Scene outliner state ──
   const [playing, setPlaying] = useState(false)
@@ -163,10 +184,13 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     for (const object of roadObjects) {
       entries.push({ id: object.id, name: object.name, kind: object.kind })
     }
+    for (const building of buildingObjects) {
+      entries.push({ id: building.id, name: building.name, kind: 'building', tags: building.tags })
+    }
     if (playing) entries.push({ id: 'traffic', name: 'Traffic vehicles', kind: 'traffic' })
     entries.push({ id: 'helpers', name: 'Grid (helper)', kind: 'helpers' })
     return entries
-  }, [terrainMesh, roadObjects, playing])
+  }, [terrainMesh, roadObjects, buildingObjects, playing])
 
   // drop selections that no longer exist after project edits
   useEffect(() => {
@@ -186,6 +210,14 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   }
   function toggleLocked(id: string) {
     setLockedIds((map) => ({ ...map, [id]: !map[id] }))
+  }
+  /** hide everything except the given object (outliner isolate) */
+  function isolateEntry(id: string) {
+    const map: Record<string, boolean> = {}
+    for (const entry of outlinerEntries) {
+      if (entry.id !== id) map[entry.id] = true
+    }
+    setHiddenIds(map)
   }
   // simulation paths: plan polylines sampled at 2 m per road
   const simPaths = useMemo<SimPath[]>(() => {
@@ -228,7 +260,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     }
   }
 
-  const hasContent = roadObjects.length > 0 || !!terrainMesh
+  const hasContent = roadObjects.length > 0 || buildingObjects.length > 0 || !!terrainMesh
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -333,6 +365,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
 
       <Studio3DViewport
         roadObjects={roadObjects}
+        buildingObjects={buildingObjects}
         terrainMesh={showTerrain ? terrainMesh : null}
         imageryTexture={imagery ? imageryTexture : null}
         heightScale={heightScale}
@@ -349,6 +382,8 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         onToggleHidden={toggleHidden}
         onToggleLocked={toggleLocked}
         onFocus={() => setFocusSignal((v) => v + 1)}
+        onDeleteBuilding={deleteOsmBuilding}
+        onIsolate={isolateEntry}
         hasContent={hasContent}
         roadCount={project?.roads.length ?? 0}
         onFit={() => setFitSignal((v) => v + 1)}
@@ -377,6 +412,7 @@ function ToolbarToggle({ active, onClick, icon, label }: { active: boolean; onCl
 
 interface Studio3DViewportProps {
   roadObjects: StudioRoadObject[]
+  buildingObjects: StudioRoadObject[]
   terrainMesh: TerrainMeshData | null
   imageryTexture: THREE.CanvasTexture | null
   heightScale: number
@@ -393,6 +429,8 @@ interface Studio3DViewportProps {
   onToggleHidden: (id: string) => void
   onToggleLocked: (id: string) => void
   onFocus: () => void
+  onDeleteBuilding: (id: string) => void
+  onIsolate: (id: string) => void
   hasContent: boolean
   roadCount: number
   onFit: () => void
@@ -402,7 +440,7 @@ interface Studio3DViewportProps {
   simPaths: SimPath[]
 }
 
-function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScale, wireframe, roadWear, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
+function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTexture, heightScale, wireframe, roadWear, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -410,6 +448,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     controls: OrbitControls
     terrainGroup: THREE.Group
     roadGroup: THREE.Group
+    buildingGroup: THREE.Group
     simGroup: THREE.Group
     grid: THREE.GridHelper
     renderer: THREE.WebGLRenderer
@@ -456,7 +495,8 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
 
     const terrainGroup = new THREE.Group()
     const roadGroup = new THREE.Group()
-    scene.add(terrainGroup, roadGroup)
+    const buildingGroup = new THREE.Group()
+    scene.add(terrainGroup, roadGroup, buildingGroup)
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -466,7 +506,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
 
     const simGroup = new THREE.Group()
     scene.add(simGroup)
-    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, simGroup, grid, renderer, entryGroups: new Map() }
+    sceneRef.current = { scene, camera, controls, terrainGroup, roadGroup, buildingGroup, simGroup, grid, renderer, entryGroups: new Map() }
 
     // ── Viewport picking: click (no drag) selects the outliner object under the cursor ──
     const raycaster = new THREE.Raycaster()
@@ -490,7 +530,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       )
       raycaster.setFromCamera(ndc, ref.camera)
-      const hits = raycaster.intersectObjects([ref.terrainGroup, ref.roadGroup], true)
+      const hits = raycaster.intersectObjects([ref.terrainGroup, ref.roadGroup, ref.buildingGroup], true)
       const { hiddenIds: hidden, lockedIds: locked, onSelect: select } = pickRef.current
       for (const hit of hits) {
         let node: THREE.Object3D | null = hit.object
@@ -582,6 +622,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
       controls.dispose()
       disposeGroup(terrainGroup)
       disposeGroup(roadGroup)
+      disposeGroup(buildingGroup)
       renderer.domElement.removeEventListener('contextmenu', suppressMenu)
       renderer.domElement.removeEventListener('pointerdown', onPickDown)
       renderer.domElement.removeEventListener('pointerup', onPickUp)
@@ -599,7 +640,10 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     if (!ref) return
     disposeGroup(ref.terrainGroup)
     disposeGroup(ref.roadGroup)
-    ref.entryGroups.clear()
+    // drop only this group's entries — buildings manage their own
+    for (const [id, group] of ref.entryGroups) {
+      if (group.parent === ref.roadGroup) ref.entryGroups.delete(id)
+    }
 
     const asphalt = getAsphaltTextures(roadWear)
     if (terrainMesh) {
@@ -626,6 +670,28 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     }
   }, [terrainMesh, roadObjects, imageryTexture, roadWear])
 
+  // ── Populate OSM building volumes ──
+  useEffect(() => {
+    const ref = sceneRef.current
+    if (!ref) return
+    disposeGroup(ref.buildingGroup)
+    for (const [id, group] of ref.entryGroups) {
+      if (group.parent === ref.buildingGroup) ref.entryGroups.delete(id)
+    }
+    for (const object of buildingObjects) {
+      let group = ref.entryGroups.get(object.id)
+      if (!group) {
+        group = new THREE.Group()
+        group.userData.outlinerId = object.id
+        ref.buildingGroup.add(group)
+        ref.entryGroups.set(object.id, group)
+      }
+      const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 0.9)
+      mesh.userData.outlinerId = object.id
+      group.add(mesh)
+    }
+  }, [buildingObjects])
+
   // ── Outliner visibility (eye icons + Roads toolbar toggle) ──
   useEffect(() => {
     const ref = sceneRef.current
@@ -637,7 +703,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     for (const [id, group] of ref.entryGroups) {
       group.visible = !hiddenIds[id]
     }
-  }, [hiddenIds, terrainMesh, roadObjects])
+  }, [hiddenIds, terrainMesh, roadObjects, buildingObjects])
 
   // ── Selection highlight: green emissive silhouette on selected objects ──
   useEffect(() => {
@@ -659,7 +725,8 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     }
     paint(ref.terrainGroup)
     paint(ref.roadGroup)
-  }, [selectedIds, terrainMesh, roadObjects])
+    paint(ref.buildingGroup)
+  }, [selectedIds, terrainMesh, roadObjects, buildingObjects])
 
   // ── Traffic simulation runtime (SCANeR Simulation parity) ──
   useEffect(() => {
@@ -711,12 +778,13 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     if (!ref) return
     ref.terrainGroup.scale.y = heightScale
     ref.roadGroup.scale.y = heightScale
-    for (const group of [ref.terrainGroup, ref.roadGroup]) {
+    ref.buildingGroup.scale.y = heightScale
+    for (const group of [ref.terrainGroup, ref.roadGroup, ref.buildingGroup]) {
       group.traverse((child) => {
         if (child instanceof THREE.Mesh) (child.material as THREE.MeshStandardMaterial).wireframe = wireframe
       })
     }
-  }, [heightScale, wireframe, terrainMesh, roadObjects])
+  }, [heightScale, wireframe, terrainMesh, roadObjects, buildingObjects])
 
   // ── Fit camera to content ──
   useEffect(() => {
@@ -735,6 +803,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     }
     if (terrainMesh) expand(terrainMesh.positions, 96)
     for (const object of roadObjects) expand(object.mesh.positions, 64)
+    for (const object of buildingObjects) expand(object.mesh.positions, 8)
     if (!any) return
 
     const center = box.getCenter(new THREE.Vector3())
@@ -746,7 +815,7 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
     ref.camera.far = Math.max(20000, radius * 12)
     ref.camera.updateProjectionMatrix()
     ref.controls.update()
-  }, [fitSignal, terrainMesh, roadObjects])
+  }, [fitSignal, terrainMesh, roadObjects, buildingObjects])
 
   // ── Focus selected: frame the active outliner object ──
   const selectionRef = useRef(selectedIds)
@@ -801,6 +870,8 @@ function Studio3DViewport({ roadObjects, terrainMesh, imageryTexture, heightScal
           onToggleHidden={onToggleHidden}
           onToggleLocked={onToggleLocked}
           onFocus={onFocus}
+          onDeleteBuilding={onDeleteBuilding}
+          onIsolate={onIsolate}
         />
       )}
 
@@ -851,11 +922,12 @@ const OUTLINER_CATEGORIES: { kind: OutlinerEntry['kind']; label: string }[] = [
   { kind: 'junction', label: 'Junctions' },
   { kind: 'intersection', label: 'Intersections' },
   { kind: 'rail', label: 'Rail fixtures' },
+  { kind: 'building', label: 'OSM Buildings' },
   { kind: 'traffic', label: 'Traffic' },
   { kind: 'helpers', label: 'Helpers' },
 ]
 
-function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus }: {
+function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate }: {
   entries: OutlinerEntry[]
   selectedIds: string[]
   hiddenIds: Record<string, boolean>
@@ -864,10 +936,14 @@ function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, o
   onToggleHidden: (id: string) => void
   onToggleLocked: (id: string) => void
   onFocus: () => void
+  onDeleteBuilding: (id: string) => void
+  onIsolate: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [showTags, setShowTags] = useState(false)
   const activeId = selectedIds.length > 0 ? selectedIds[selectedIds.length - 1] : null
+  const activeEntry = activeId ? entries.find((entry) => entry.id === activeId) : undefined
   const needle = query.trim().toLowerCase()
   const filtered = needle ? entries.filter((entry) => entry.name.toLowerCase().includes(needle)) : entries
 
@@ -947,6 +1023,45 @@ function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, o
           <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">No matching objects</p>
         )}
       </div>
+
+      {/* Inspector for the active object (OSM attributes, actions) */}
+      {activeEntry?.tags && (
+        <div className="border-t border-border">
+          <button
+            className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            onClick={() => setShowTags((v) => !v)}
+          >
+            OSM Attributes
+            <span className="font-normal normal-case">{showTags ? 'hide' : 'show'}</span>
+          </button>
+          {showTags && (
+            <div className="grid max-h-36 gap-0.5 overflow-y-auto px-2.5 pb-2">
+              {Object.entries(activeEntry.tags).map(([key, value]) => (
+                <div key={key} className="flex items-baseline justify-between gap-2 text-[10px]">
+                  <span className="min-w-0 truncate text-muted-foreground" title={key}>{key}</span>
+                  <span className="max-w-[55%] truncate text-right text-foreground" title={value}>{value}</span>
+                </div>
+              ))}
+              <div className="mt-1.5 flex gap-1.5">
+                <button
+                  className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                  onClick={() => activeId && onIsolate(activeId)}
+                  title="Hide all other objects"
+                >
+                  Isolate
+                </button>
+                <button
+                  className="flex-1 rounded border border-destructive/40 px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
+                  onClick={() => activeId && onDeleteBuilding(activeId)}
+                  title="Delete this building from the project"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

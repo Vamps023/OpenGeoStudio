@@ -21,7 +21,8 @@ const cspPlugin = {
       'https://mt2.google.com ' +
       'https://mt3.google.com ' +
       'https://api.maptiler.com ' +
-      'https://nominatim.openstreetmap.org'
+      'https://nominatim.openstreetmap.org ' +
+      'https://overpass-api.de'
     // Note: 'unsafe-inline' for styles is required by runtime-injected styles from
     // UI primitives (Radix scroll-lock, sonner toasts, React style resets).
     // This is a desktop app loading only trusted local content, so this is safe.

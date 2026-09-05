@@ -19,6 +19,8 @@ interface Props {
   gridVisible: boolean
   /** move the map camera to a location (location search / set coordinates) */
   flyTo?: { lng: number; lat: number; zoom?: number } | null
+  /** imported OSM building footprints (lng/lat rings) drawn as an overlay */
+  buildings?: { id: string; ring: [number, number][] }[]
 }
 
 interface PixelRect {
@@ -36,6 +38,7 @@ export default function TerrainMap({
   onToggleTile,
   gridVisible,
   flyTo,
+  buildings,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -56,6 +59,8 @@ export default function TerrainMap({
   const [tileRects, setTileRects] = useState<{ key: string; row: number; col: number; rect: PixelRect }[]>([])
   // Selection rectangle in pixels (for the confirmed selection)
   const [selectionRect, setSelectionRect] = useState<PixelRect | null>(null)
+  // OSM building footprints projected to pixel polygons
+  const [buildingPolys, setBuildingPolys] = useState<{ id: string; points: string }[]>([])
 
   const onBoundsSelectedRef = useRef(onBoundsSelected)
   onBoundsSelectedRef.current = onBoundsSelected
@@ -226,29 +231,48 @@ export default function TerrainMap({
       setSelectionRect(null)
     }
 
-    // Tile grid rectangles
-    if (tileGrid && gridVisible) {
-      const rects: { key: string; row: number; col: number; rect: PixelRect }[] = []
-      for (const tile of tileGrid.tiles) {
-        const nw = map.project([tile.bounds.west, tile.bounds.north])
-        const se = map.project([tile.bounds.east, tile.bounds.south])
-        rects.push({
-          key: `${tile.row},${tile.col}`,
-          row: tile.row,
-          col: tile.col,
-          rect: {
-            left: nw.x,
-            top: nw.y,
-            width: Math.abs(se.x - nw.x),
-            height: Math.abs(se.y - nw.y),
-          },
-        })
+      // Tile grid rectangles
+      if (tileGrid && gridVisible) {
+        const rects: { key: string; row: number; col: number; rect: PixelRect }[] = []
+        for (const tile of tileGrid.tiles) {
+          const nw = map.project([tile.bounds.west, tile.bounds.north])
+          const se = map.project([tile.bounds.east, tile.bounds.south])
+          rects.push({
+            key: `${tile.row},${tile.col}`,
+            row: tile.row,
+            col: tile.col,
+            rect: {
+              left: nw.x,
+              top: nw.y,
+              width: Math.abs(se.x - nw.x),
+              height: Math.abs(se.y - nw.y),
+            },
+          })
+        }
+        setTileRects(rects)
+      } else {
+        setTileRects([])
       }
-      setTileRects(rects)
-    } else {
-      setTileRects([])
-    }
-  }, [selectedBounds, tileGrid, gridVisible])
+
+      // OSM building footprint polygons
+      if (buildings && buildings.length > 0) {
+        const polys: { id: string; points: string }[] = []
+        for (const building of buildings) {
+          let path = ''
+          let offScreen = 0
+          for (const [lng, lat] of building.ring) {
+            const p = map.project([lng, lat])
+            path += `${Math.round(p.x)},${Math.round(p.y)} `
+            if (p.x < -50 || p.y < -50 || p.x > map.getCanvas().clientWidth + 50 || p.y > map.getCanvas().clientHeight + 50) offScreen++
+          }
+          if (offScreen === building.ring.length) continue // fully outside view
+          polys.push({ id: building.id, points: path.trim() })
+        }
+        setBuildingPolys(polys)
+      } else {
+        setBuildingPolys([])
+      }
+    }, [selectedBounds, tileGrid, gridVisible, buildings])
 
   // Recompute on load and when bounds/grid/visibility change (not on every move frame)
   useEffect(() => {
@@ -345,6 +369,21 @@ export default function TerrainMap({
           </div>
         )
       })}
+
+      {/* ─── OSM building footprints (SVG overlay) ─── */}
+      {buildingPolys.length > 0 && (
+        <svg className="pointer-events-none absolute inset-0" style={{ zIndex: 8 }} width="100%" height="100%">
+          {buildingPolys.map(({ id, points }) => (
+            <polygon
+              key={id}
+              points={points}
+              fill="rgba(251, 146, 60, 0.25)"
+              stroke="#fb923c"
+              strokeWidth={1.5}
+            />
+          ))}
+        </svg>
+      )}
 
       {/* ─── Status overlays ─── */}
       {!mapReady && !mapError && (

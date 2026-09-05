@@ -7,6 +7,7 @@ import { buildRailwayMesh, buildRoadMesh } from '../src/engine/mesh'
 import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
 import { buildJunctionNetwork } from '../src/engine/junctions'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, simPoseAt } from '../src/engine/simulation'
+import { parseOverpassBuildings, toBuildingData, triangulatePolygon, buildBuildingMesh } from '../src/engine/osmBuildings'
 import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import { exportOpenDrive } from '../src/engine/opendriveExport'
@@ -615,6 +616,60 @@ if (odr) {
   const smoothed = smoothPolylinePoints([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 10 }], 2)
   check('smoothing: endpoint preserved', smoothed[0].x === 0 && smoothed[0].y === 0)
   check('smoothing: point count grows', smoothed.length === 16, String(smoothed.length))
+}
+
+// ─── Section 26: OSM buildings (parse, attributes, extrusion) ───────
+{
+  const overpass = {
+    elements: [
+      { type: 'node', id: 1, lat: 18.52, lon: 73.85 },
+      { type: 'node', id: 2, lat: 18.5201, lon: 73.85 },
+      { type: 'node', id: 3, lat: 18.5201, lon: 73.8501 },
+      { type: 'node', id: 4, lat: 18.52, lon: 73.8501 },
+      { type: 'way', id: 100, tags: { building: 'yes', name: 'Tower A', height: '24 m' }, nodes: [1, 2, 3, 4, 1] },
+      { type: 'way', id: 101, tags: { building: 'residential', 'building:levels': '3' }, geometry: [
+        { lat: 18.52, lon: 73.851 }, { lat: 18.5201, lon: 73.851 }, { lat: 18.5201, lon: 73.8511 }, { lat: 18.52, lon: 73.8511 }, { lat: 18.52, lon: 73.851 },
+      ] },
+      { type: 'way', id: 102, tags: { building: 'no' }, nodes: [1, 2, 3, 4, 1] },
+      { type: 'way', id: 103, tags: { building: 'commercial', 'roof:shape': 'gabled' }, geometry: [
+        { lat: 18.5202, lon: 73.85 }, { lat: 18.5203, lon: 73.85 }, { lat: 18.5203, lon: 73.8502 }, { lat: 18.5202, lon: 73.8502 }, { lat: 18.5202, lon: 73.85 },
+      ] },
+    ],
+  }
+  const raw = parseOverpassBuildings(overpass)
+  check('osm: parses buildings, skips building=no', raw.length === 3, String(raw.length))
+  check('osm: node-map ring resolves', raw[0].ring.length === 4)
+  const geoRef = { lng: 73.85, lat: 18.52, scale: 1 }
+  const buildings = raw.map((building) => toBuildingData(building, geoRef, 6))
+  check('osm: height tag wins', Math.abs(buildings[0].height - 24) < 0.01)
+  check('osm: levels fallback', Math.abs(buildings[1].height - 3 * 3.2) < 0.01 && buildings[1].levels === 3)
+  check('osm: default fallback height', Math.abs(buildings[2].height - 6) < 0.01)
+  check('osm: projected into world frame', Math.abs(buildings[0].ring[0].x) < 0.01 && Math.abs(buildings[0].ring[0].y) < 0.01)
+
+  // L-shaped concave polygon triangulates into >= 4 triangles, all valid
+  const lShape = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 }, { x: 5, y: 5 }, { x: 5, y: 10 }, { x: 0, y: 10 }]
+  const tris = triangulatePolygon(lShape)
+  check('osm: concave triangulation covers area', tris.length >= 4, String(tris.length))
+  let triArea = 0
+  for (const [a, b, c] of tris) {
+    triArea += Math.abs(
+      (lShape[b].x - lShape[a].x) * (lShape[c].y - lShape[a].y) - (lShape[c].x - lShape[a].x) * (lShape[b].y - lShape[a].y),
+    ) / 2
+  }
+  check('osm: triangulation area matches polygon', Math.abs(triArea - 75) < 0.01, String(triArea))
+
+  const mesh = buildBuildingMesh(buildings[0], 5)
+  check('osm: extrusion builds mesh', !!mesh && mesh.positions.length >= 3 * 4 * 2 * 4)
+  let minY = Infinity
+  let maxY = -Infinity
+  for (let i = 1; i < mesh!.positions.length; i += 3) {
+    minY = Math.min(minY, mesh!.positions[i])
+    maxY = Math.max(maxY, mesh!.positions[i])
+  }
+  check('osm: walls span base..height above terrain', Math.abs(minY - 5) < 0.01 && Math.abs(maxY - 29) < 0.01)
+  const flatVariant = buildBuildingMesh({ ...buildings[2], roofShape: 'flat' }, 0)
+  const gabled = buildBuildingMesh(buildings[2], 0)
+  check('osm: gabled roof adds ridge geometry', !!gabled && !!flatVariant && gabled.positions.length > flatVariant.positions.length)
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

@@ -147,6 +147,10 @@ export interface Project {
   /** persisted tile keys (`row:col` within the working-area grid) so a reopened
    *  project restores the exact selected/deselected tile combination */
   selectedTiles?: string[]
+  /** imported OSM building footprints (world meters, project frame) */
+  osmBuildings?: import('../engine/osmBuildings').OsmBuildingData[]
+  /** OSM import metadata (attribution + refresh semantics) */
+  osmImport?: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }
 }
 
 export type Tool =
@@ -255,6 +259,8 @@ interface OgsState {
   markHydrated: () => void
   setWorkingArea: (area: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }) => void
   setSelectedTiles: (keys: string[]) => void
+  setOsmBuildings: (buildings: import('../engine/osmBuildings').OsmBuildingData[], meta: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }) => void
+  deleteOsmBuilding: (id: string) => void
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
@@ -596,6 +602,8 @@ export const useStore = create<OgsState>((set, get) => ({
   markHydrated: () => set({ hydrated: true }),
   setWorkingArea: (area) => updateActiveProject(get, set, (project) => ({ ...project, workingArea: area })),
   setSelectedTiles: (keys) => updateActiveProjectSilent(get, set, (project) => ({ ...project, selectedTiles: keys })),
+  setOsmBuildings: (buildings, meta) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: buildings, osmImport: meta })),
+  deleteOsmBuilding: (id) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: (project.osmBuildings ?? []).filter((building) => building.id !== id) })),
   setProjectTerrain: (terrain) => {
     if (terrain) setActiveTerrain(terrain)
     updateActiveProject(get, set, (project) => ({

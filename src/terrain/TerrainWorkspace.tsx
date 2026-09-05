@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Crosshair, Download, Grid3x3, Globe, Image as ImageIcon, Layers, Mountain, Search } from 'lucide-react'
+import { Building2, Crosshair, Download, Grid3x3, Globe, Image as ImageIcon, Layers, Mountain, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { resolveCRS } from '../engine/crs'
 import type { GeoBounds } from '../engine/crs'
@@ -8,6 +8,8 @@ import type { TerrainData } from '../engine/terrainMesh'
 import { setActiveTerrain } from './terrainRegistry'
 import { computeTileGrid, tileKey } from '../engine/tileGrid'
 import type { TileGrid } from '../engine/tileGrid'
+import { parseOverpassBuildings, toBuildingData, overpassQuery, ringCentroid } from '../engine/osmBuildings'
+import type { OsmBuildingData } from '../engine/osmBuildings'
 import { useStore } from '../state/store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -84,6 +86,7 @@ export default function TerrainWorkspace() {
   const setProjectTerrain = useStore((s) => s.setProjectTerrain)
   const setWorkingArea = useStore((s) => s.setWorkingArea)
   const setSelectedTilesStore = useStore((s) => s.setSelectedTiles)
+  const setOsmBuildings = useStore((s) => s.setOsmBuildings)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [selectedBounds, setSelectedBounds] = useState<GeoBounds | null>(null)
@@ -92,6 +95,79 @@ export default function TerrainWorkspace() {
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'map' | '3d'>('map')
+
+  // ── OSM Buildings ──
+  const [osmStatus, setOsmStatus] = useState<'idle' | 'fetching' | 'saving'>('idle')
+  const [osmError, setOsmError] = useState<string | null>(null)
+  const osmBuildings = project?.osmBuildings ?? []
+
+  /** world meters → lng/lat for the map footprint preview */
+  const mapBuildings = useMemo(() => {
+    const geoRef = project?.geoRef
+    if (!geoRef || osmBuildings.length === 0) return []
+    const latRad = (geoRef.lat * Math.PI) / 180
+    const metersPerDegLat = 111320
+    const metersPerDegLng = 111320 * Math.cos(latRad)
+    return osmBuildings.map((building) => ({
+      id: building.id,
+      ring: building.ring.map((point) => [
+        geoRef.lng + (point.x * geoRef.scale) / metersPerDegLng,
+        geoRef.lat + (point.y * geoRef.scale) / metersPerDegLat,
+      ] as [number, number]),
+    }))
+  }, [osmBuildings, project?.geoRef])
+
+  /** Fetch OSM buildings for the working area (area-sync semantics: existing
+   *  buildings inside the bounds are replaced, ones outside are kept). */
+  async function handleImportOsm() {
+    const geoRef = project?.geoRef
+    if (!geoRef) {
+      setOsmError('Set a project location first.')
+      return
+    }
+    if (!selectedBounds) {
+      setOsmError('Select a working area on the map first.')
+      return
+    }
+    setOsmStatus('fetching')
+    setOsmError(null)
+    try {
+      const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(overpassQuery(selectedBounds)),
+      })
+      if (!response.ok) throw new Error(`Overpass API returned ${response.status}`)
+      const json = await response.json()
+      const raw = parseOverpassBuildings(json)
+      const projected = raw.map((building) => toBuildingData(building, geoRef))
+      // area-sync merge: drop existing buildings whose centroid lies inside
+      // the imported bounds, keep everything outside untouched
+      const latRad = (geoRef.lat * Math.PI) / 180
+      const metersPerDegLat = 111320
+      const metersPerDegLng = 111320 * Math.cos(latRad)
+      const inBounds = (building: OsmBuildingData) => {
+        const c = ringCentroid(building.ring)
+        const lng = geoRef.lng + (c.x * geoRef.scale) / metersPerDegLng
+        const lat = geoRef.lat + (c.y * geoRef.scale) / metersPerDegLat
+        return lng >= selectedBounds.west && lng <= selectedBounds.east && lat >= selectedBounds.south && lat <= selectedBounds.north
+      }
+      const merged = [...(project.osmBuildings ?? []).filter((building) => !inBounds(building)), ...projected]
+      setOsmBuildings(merged, { area: selectedBounds, fetchedAt: new Date().toISOString(), total: merged.length })
+      setOsmStatus('idle')
+      if (projected.length === 0) {
+        toast.info('No OSM buildings found in this area')
+      } else {
+        toast.success(`Imported ${projected.length} building${projected.length === 1 ? '' : 's'}`, {
+          description: `${merged.length} total in project · © OpenStreetMap contributors`,
+        })
+      }
+    } catch (err) {
+      setOsmStatus('idle')
+      setOsmError((err as Error).message || 'OSM download failed')
+      toast.error('OSM import failed', { description: (err as Error).message })
+    }
+  }
 
   // STEP 1: project location — search a place or type coordinates, then set
   // the working area (also aligns the project geo reference)
@@ -466,6 +542,7 @@ export default function TerrainWorkspace() {
             onToggleTile={toggleTile}
             gridVisible={gridVisible}
             flyTo={flyTo}
+            buildings={mapBuildings}
           />
         ) : (
           <TerrainViewport terrainMesh={terrainMesh} heightScale={heightScale} />
@@ -518,6 +595,56 @@ export default function TerrainWorkspace() {
                   {selectedCount}/{totalTiles} tiles
                 </Badge>
               </div>
+            )}
+          </section>
+
+          {/* ─── OSM Buildings ──────────────────────────────── */}
+          <section className="grid gap-3">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+              <Building2 className="size-3.5" />
+              OSM Buildings
+            </h3>
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Downloads building footprints from OpenStreetMap for the current working area, then renders them as 3D volumes in the 3D Studio.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="h-7 text-xs"
+              disabled={osmStatus !== 'idle' || !selectedBounds}
+              onClick={() => void handleImportOsm()}
+              title={selectedBounds ? 'Fetch buildings for the working area' : 'Select a working area first'}
+            >
+              {osmStatus === 'fetching' ? 'Downloading…' : osmStatus === 'saving' ? 'Saving…' : osmBuildings.length ? 'Re-import / Refresh' : 'Import Buildings'}
+            </Button>
+            {osmError && (
+              <p className="text-[11px] text-destructive">{osmError}</p>
+            )}
+            {osmBuildings.length > 0 && (
+              <>
+                <Badge variant="muted" className="w-fit">
+                  {osmBuildings.length} building{osmBuildings.length === 1 ? '' : 's'} imported
+                </Badge>
+                <div className="grid max-h-40 gap-0.5 overflow-y-auto">
+                  {osmBuildings.slice(0, 100).map((building) => (
+                    <div key={building.id} className="flex items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-[11px] hover:bg-muted/60">
+                      <span className="min-w-0 truncate text-foreground" title={`${building.name} (${building.id})`}>
+                        {building.name}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {Math.round(building.height)}m{building.levels ? ` · ${building.levels} fl` : ''}
+                      </span>
+                    </div>
+                  ))}
+                  {osmBuildings.length > 100 && (
+                    <p className="px-1.5 pt-1 text-[11px] text-muted-foreground">+ {osmBuildings.length - 100} more…</p>
+                  )}
+                </div>
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  Building data © OpenStreetMap contributors (ODbL 1.0). Re-importing the same area replaces those buildings instead of duplicating them.
+                </p>
+              </>
             )}
           </section>
 
