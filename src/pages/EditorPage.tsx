@@ -1864,6 +1864,87 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
     return (project?.roads ?? []).filter((road) => road.railway)
   }
 
+  /**
+   * Create a turnout from three SELECTED railway tracks (robust path —
+   * freehand drawing cannot reliably produce three extremities at one
+   * point because the endpoint snap absorbs diverging draws). Facing,
+   * trailing and branch are determined geometrically: the facing track is
+   * the one whose extremity lies closest to the other two tracks' nearest
+   * extremities, and trailing is the best-aligned continuation.
+   */
+  function createRailPointFromSelection() {
+    if (!project) return
+    const tracks = railwayTracks().filter((road) => selection.trackIds.includes(road.id))
+    if (tracks.length !== 3) {
+      toast.error('Select exactly 3 railway tracks (facing + main + branch) to insert a turnout.')
+      return
+    }
+    const ext = (road: RoadData, contact: 'start' | 'end') => exitFrame(road, contact)
+    let best: { facing: number; facingContact: 'start' | 'end'; trailing: number; branch: number; spread: number } | null = null
+    for (const f of [0, 1, 2]) {
+      for (const fContact of ['start', 'end'] as const) {
+        const fFrame = ext(tracks[f], fContact)
+        if (!fFrame) continue
+        const others = [0, 1, 2].filter((i) => i !== f)
+        const aContact = (['start', 'end'] as const).map((c) => ({ c, frame: ext(tracks[others[0]], c) })).filter((x) => x.frame)
+        const bContact = (['start', 'end'] as const).map((c) => ({ c, frame: ext(tracks[others[1]], c) })).filter((x) => x.frame)
+        let bestSpread = Infinity
+        let bestA: 'start' | 'end' = 'start'
+        let bestB: 'start' | 'end' = 'start'
+        for (const a of aContact) {
+          for (const b of bContact) {
+            const dA = distance(a.frame!, fFrame)
+            const dB = distance(b.frame!, fFrame)
+            const between = distance(a.frame!, b.frame!)
+            const spread = Math.max(dA, dB, between)
+            if (dA <= 15 && dB <= 15 && between <= 15 && spread < bestSpread) {
+              bestSpread = spread
+              bestA = a.c
+              bestB = b.c
+            }
+          }
+        }
+        if (bestSpread < Infinity && (!best || bestSpread < best.spread)) {
+          best = { facing: f, facingContact: fContact, trailing: others[0], branch: others[1], spread: bestSpread }
+          void bestA
+          void bestB
+        }
+      }
+    }
+    if (!best) {
+      toast.error('The 3 selected tracks do not share a common extremity (within 15 m).')
+      return
+    }
+    // trailing (main line) = the non-facing track best aligned with the facing direction
+    const travel = best.facingContact === 'end' ? ext(tracks[best.facing], best.facingContact)!.heading : ext(tracks[best.facing], best.facingContact)!.heading + Math.PI
+    const other = best.facing === best.trailing ? best.branch : best.trailing
+    const outA = ext(tracks[best.trailing], 'start')
+    const outB = ext(tracks[best.branch], 'start')
+    const align = (frame: Frame | null, contact: 'start' | 'end') => {
+      if (!frame) return Infinity
+      let d = (contact === 'start' ? frame.heading : frame.heading + Math.PI) - travel
+      while (d > Math.PI / 2) d -= Math.PI
+      while (d < -Math.PI / 2) d += Math.PI
+      return Math.abs(d)
+    }
+    const [trailingIdx, branchIdx] =
+      align(outA, 'start') <= align(outB, 'start')
+        ? [best.trailing, best.branch]
+        : [best.branch, best.trailing]
+    const railPoint: RailPoint = {
+      id: uuid(),
+      name: `P${(project.railPoints?.length ?? 0) + 1}`,
+      facingTrackId: tracks[best.facing].id,
+      facingContact: best.facingContact,
+      trailingTrackId: tracks[trailingIdx].id,
+      branchTrackId: tracks[branchIdx].id,
+    }
+    addRailPoint(railPoint)
+    toast.success(`Turnout ${railPoint.name} created`, {
+      description: `${tracks[best.facing].name} → ${tracks[trailingIdx].name} (main) + ${tracks[branchIdx].name} (branch)`,
+    })
+  }
+
   function createRailPointAt(point: Vec2) {
     if (!project) return
     const tracks = railwayTracks()
@@ -1888,7 +1969,7 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
       if (road.id === facing.road.id) continue
       for (const contact of ['start', 'end'] as const) {
         const frame = exitFrame(road, contact)
-        if (frame && distance(frame, facing.frame) < 8) candidates.push({ road, contact, frame })
+        if (frame && distance(frame, facing.frame) < 15) candidates.push({ road, contact, frame })
       }
     }
     if (candidates.length < 2) {
@@ -2325,6 +2406,11 @@ export default function EditorPage({ onBack }: { onBack: () => void }) {
                 />
               </TabsContent>
               <TabsContent value="tracks" className="grid gap-1.5 p-4">
+                {selection.trackIds.length === 3 && (
+                  <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={createRailPointFromSelection}>
+                    Insert Turnout (3 selected)
+                  </Button>
+                )}
                 <RoadsTab
                   roads={project.roads.filter((r) => r.railway)}
                   selectedIds={selection.trackIds}

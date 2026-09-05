@@ -355,6 +355,17 @@ async function loadProjectsFromDisk(): Promise<Project[]> {
 
 const HISTORY_LIMIT = 100
 
+/** Drop rail fixtures whose tracks no longer exist (split/replace/delete). */
+function scrubRailFixtures(project: Project): Project {
+  const ids = new Set(project.roads.map((road) => road.id))
+  return {
+    ...project,
+    railPoints: project.railPoints?.filter((p) => ids.has(p.facingTrackId) && ids.has(p.trailingTrackId) && ids.has(p.branchTrackId)),
+    railCrossings: project.railCrossings?.filter((c) => ids.has(c.trackAId) && ids.has(c.trackBId)),
+    catchPoints: project.catchPoints?.filter((c) => ids.has(c.trackId)),
+  }
+}
+
 function updateActiveProject(
   get: () => OgsState,
   set: (patch: Partial<OgsState>) => void,
@@ -501,9 +512,9 @@ export const useStore = create<OgsState>((set, get) => ({
     if (index < 0) return project
     const roads = [...project.roads]
     roads.splice(index, 1, ...replacements)
-    return { ...project, roads }
+    return scrubRailFixtures({ ...project, roads })
   }),
-  deleteRoad: (roadId) => updateActiveProject(get, set, (project) => ({
+  deleteRoad: (roadId) => updateActiveProject(get, set, (project) => scrubRailFixtures({
     ...project,
     roads: project.roads.filter((road) => road.id !== roadId),
     suppressedJunctions: project.suppressedJunctions.filter((key) => !key.split('|').includes(roadId)),
