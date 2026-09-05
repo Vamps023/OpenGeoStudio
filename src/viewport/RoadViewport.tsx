@@ -212,14 +212,26 @@ export default function RoadViewport({
     let activeCamera: THREE.Camera = ortho
     let activeMode: '2d' | '3d' = '2d'
 
+    // ── 2D navigation state (Blender-style; camera never reacts to LEFT button) ──
+    const navTarget = new THREE.Vector3(0, 0, 0)
+    let panPointerId: number | null = null
+    let panLast = { x: 0, y: 0 }
+    let rightPointerId: number | null = null
+    let rightLast = { x: 0, y: 0 }
+    let rightPanning = false
+    let suppressNextContextMenu = false
+
     function attach(camera: THREE.Camera, is2d: boolean) {
       controls?.dispose()
-      controls = new OrbitControls(camera, renderer.domElement)
-      controls.enableRotate = !is2d
-      controls.mouseButtons = is2d
-        ? { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
-        : { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
-      controls.update()
+      if (is2d) {
+        // 2D: custom navigation (MMB/right-drag pan, wheel zoom-to-cursor).
+        controls = null
+      } else {
+        controls = new OrbitControls(camera, renderer.domElement)
+        controls.enableRotate = true
+        controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
+        controls.update()
+      }
       activeCamera = camera
     }
     attach(ortho, true)
@@ -263,7 +275,7 @@ export default function RoadViewport({
 
       const center = mapCenterRef.current
       const scale = mapScaleRef.current || 1
-      const target = controls ? controls.target : new THREE.Vector3(0, 0, 0)
+      const target = controls ? controls.target : navTarget
 
       // Camera target in world coords
       const worldCX = target.x
@@ -467,6 +479,99 @@ export default function RoadViewport({
       return null
     }
 
+    // ── 2D navigation: MMB/right-drag pan + wheel zoom-to-cursor ──
+    // Ortho top-down camera: world +x is screen-right, ground y (= -z) is screen-up.
+
+    function worldPerPixel(): number {
+      const rect = renderer.domElement.getBoundingClientRect()
+      return viewSize / (Math.max(0.0001, ortho.zoom) * Math.max(1, rect.height))
+    }
+
+    function setViewCenter(t: THREE.Vector3) {
+      navTarget.copy(t)
+      ortho.position.set(t.x, ortho.position.y, t.z)
+      ortho.updateMatrixWorld()
+    }
+
+    function panByPixels(dx: number, dy: number) {
+      const mpp = worldPerPixel()
+      setViewCenter(new THREE.Vector3(navTarget.x - dx * mpp, 0, navTarget.z - dy * mpp))
+    }
+
+    function onNavPointerDown(event: PointerEvent) {
+      if (activeMode !== '2d') return
+      if (event.button === 1) {
+        // MMB drag = pan (Blender-style); preventDefault stops Chrome autoscroll
+        event.preventDefault()
+        panPointerId = event.pointerId
+        panLast = { x: event.clientX, y: event.clientY }
+        renderer.domElement.setPointerCapture(event.pointerId)
+      } else if (event.button === 2) {
+        // right-drag pans too, but a clean right-click still opens the menu
+        rightPointerId = event.pointerId
+        rightLast = { x: event.clientX, y: event.clientY }
+        rightPanning = false
+        renderer.domElement.setPointerCapture(event.pointerId)
+      }
+    }
+
+    function onNavPointerMove(event: PointerEvent) {
+      if (activeMode !== '2d') return
+      if (event.pointerId === panPointerId) {
+        panByPixels(event.clientX - panLast.x, event.clientY - panLast.y)
+        panLast = { x: event.clientX, y: event.clientY }
+      } else if (event.pointerId === rightPointerId) {
+        if (!rightPanning && Math.hypot(event.clientX - rightLast.x, event.clientY - rightLast.y) > 3) {
+          rightPanning = true
+        }
+        if (rightPanning) {
+          panByPixels(event.clientX - rightLast.x, event.clientY - rightLast.y)
+        }
+        rightLast = { x: event.clientX, y: event.clientY }
+      }
+    }
+
+    function onNavPointerUp(event: PointerEvent) {
+      const canvasEl = renderer.domElement
+      if (event.pointerId === panPointerId) {
+        panPointerId = null
+        if (canvasEl.hasPointerCapture(event.pointerId)) canvasEl.releasePointerCapture(event.pointerId)
+      } else if (event.pointerId === rightPointerId) {
+        if (rightPanning) suppressNextContextMenu = true
+        rightPointerId = null
+        rightPanning = false
+        if (canvasEl.hasPointerCapture(event.pointerId)) canvasEl.releasePointerCapture(event.pointerId)
+      }
+    }
+
+    function onWheel(event: WheelEvent) {
+      if (activeMode !== '2d') return // 3D mode: OrbitControls dollies
+      event.preventDefault()
+      const oldZoom = ortho.zoom
+      const factor = Math.exp(-event.deltaY * 0.0015)
+      const newZoom = Math.min(200, Math.max(0.05, oldZoom * factor))
+      if (newZoom === oldZoom) return
+      const p = groundPoint(event)
+      if (p) {
+        // keep the point under the cursor stationary: T' = P - (P - T) * (oldZoom/newZoom)
+        const worldZ = -p.y
+        setViewCenter(
+          new THREE.Vector3(
+            p.x - (p.x - navTarget.x) * (oldZoom / newZoom),
+            0,
+            worldZ - (worldZ - navTarget.z) * (oldZoom / newZoom),
+          ),
+        )
+      }
+      ortho.zoom = newZoom
+      ortho.updateProjectionMatrix()
+      updateMapTiles()
+    }
+
+    function onNavAuxMouseDown(event: MouseEvent) {
+      if (activeMode === '2d' && event.button === 1) event.preventDefault() // no middle-click autoscroll
+    }
+
     function onPointerDown(event: PointerEvent) {
       if (event.button !== 0 || activePointer !== null) return
       // draggable overlay markers win over other tools (select tool only)
@@ -533,6 +638,11 @@ export default function RoadViewport({
 
     function onContextMenuEvent(event: MouseEvent) {
       event.preventDefault()
+      if (suppressNextContextMenu) {
+        // context menu follows a right-drag pan — swallow it
+        suppressNextContextMenu = false
+        return
+      }
       const rect = renderer.domElement.getBoundingClientRect()
       const synthetic = new PointerEvent('pointerdown', {
         clientX: event.clientX,
@@ -553,6 +663,12 @@ export default function RoadViewport({
     canvas.addEventListener('pointermove', onPointerMove)
     canvas.addEventListener('pointerup', onPointerUp)
     canvas.addEventListener('pointercancel', onPointerCancel)
+    canvas.addEventListener('pointerdown', onNavPointerDown)
+    canvas.addEventListener('pointermove', onNavPointerMove)
+    canvas.addEventListener('pointerup', onNavPointerUp)
+    canvas.addEventListener('pointercancel', onNavPointerUp)
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    canvas.addEventListener('mousedown', onNavAuxMouseDown)
     canvas.addEventListener('contextmenu', onContextMenuEvent)
     canvas.addEventListener('dblclick', onDoubleClick)
 
@@ -576,7 +692,7 @@ export default function RoadViewport({
     let lastZoom = 0
     function checkMapUpdate() {
       if (!showMapRef.current || activeMode !== '2d') return
-      const target = controls ? controls.target : new THREE.Vector3(0, 0, 0)
+      const target = controls ? controls.target : navTarget
       const zoom = ortho.zoom || 1
       if (target.distanceTo(lastTargetPos) > 1 || Math.abs(zoom - lastZoom) > 0.01) {
         lastTargetPos.copy(target)
@@ -621,6 +737,12 @@ export default function RoadViewport({
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerCancel)
+      canvas.removeEventListener('pointerdown', onNavPointerDown)
+      canvas.removeEventListener('pointermove', onNavPointerMove)
+      canvas.removeEventListener('pointerup', onNavPointerUp)
+      canvas.removeEventListener('pointercancel', onNavPointerUp)
+      canvas.removeEventListener('wheel', onWheel)
+      canvas.removeEventListener('mousedown', onNavAuxMouseDown)
       canvas.removeEventListener('contextmenu', onContextMenuEvent)
       canvas.removeEventListener('dblclick', onDoubleClick)
       controls?.dispose()
@@ -679,6 +801,7 @@ export default function RoadViewport({
   return (
     <div className="viewport">
       <div ref={containerRef} className="viewport-canvas" />
+      {mode === '2d' && <div className="viewport-navhint">MMB drag · pan&nbsp;&nbsp;&nbsp;Wheel · zoom</div>}
       <div className="viewport-hint">{hint}</div>
     </div>
   )
