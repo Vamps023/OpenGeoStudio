@@ -151,6 +151,8 @@ export interface Project {
   osmBuildings?: import('../engine/osmBuildings').OsmBuildingData[]
   /** OSM import metadata (attribution + refresh semantics) */
   osmImport?: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }
+  /** PCG building generation settings (style/seed/detail + per-building overrides) */
+  pcgConfig?: import('../engine/pcgBuildings').PcgProjectConfig
 }
 
 export type Tool =
@@ -261,6 +263,8 @@ interface OgsState {
   setSelectedTiles: (keys: string[]) => void
   setOsmBuildings: (buildings: import('../engine/osmBuildings').OsmBuildingData[], meta: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }) => void
   deleteOsmBuilding: (id: string) => void
+  setPcgConfig: (config: import('../engine/pcgBuildings').PcgProjectConfig) => void
+  regeneratePcgBuilding: (id: string) => void
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
@@ -604,6 +608,11 @@ export const useStore = create<OgsState>((set, get) => ({
   setSelectedTiles: (keys) => updateActiveProjectSilent(get, set, (project) => ({ ...project, selectedTiles: keys })),
   setOsmBuildings: (buildings, meta) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: buildings, osmImport: meta })),
   deleteOsmBuilding: (id) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: (project.osmBuildings ?? []).filter((building) => building.id !== id) })),
+  setPcgConfig: (config) => updateActiveProjectSilent(get, set, (project) => ({ ...project, pcgConfig: config })),
+  regeneratePcgBuilding: (id) => updateActiveProjectSilent(get, set, (project) => {
+    const config = project.pcgConfig ?? { mode: 'pcg' as const, style: 'generic' as const, seed: 1, detail: 'medium' as const, overrides: {} }
+    return { ...project, pcgConfig: { ...config, overrides: { ...config.overrides, [id]: (config.overrides[id] ?? 0) + 1 } } }
+  }),
   setProjectTerrain: (terrain) => {
     if (terrain) setActiveTerrain(terrain)
     updateActiveProject(get, set, (project) => ({

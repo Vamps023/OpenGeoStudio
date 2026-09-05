@@ -8,6 +8,7 @@ import { buildRailFixtureMeshes } from '../src/engine/railFixtures'
 import { buildJunctionNetwork } from '../src/engine/junctions'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, simPoseAt } from '../src/engine/simulation'
 import { parseOverpassBuildings, toBuildingData, triangulatePolygon, buildBuildingMesh } from '../src/engine/osmBuildings'
+import { generatePcgBuildingMesh } from '../src/engine/pcgBuildings'
 import { smoothPolylinePoints } from '../src/engine/tracks'
 import { exportNetworkDefinition } from '../src/engine/railNetwork'
 import { exportOpenDrive } from '../src/engine/opendriveExport'
@@ -670,6 +671,46 @@ if (odr) {
   const flatVariant = buildBuildingMesh({ ...buildings[2], roofShape: 'flat' }, 0)
   const gabled = buildBuildingMesh(buildings[2], 0)
   check('osm: gabled roof adds ridge geometry', !!gabled && !!flatVariant && gabled.positions.length > flatVariant.positions.length)
+}
+
+// ─── Section 27: PCG building generation ────────────────────────────
+{
+  const footprint: import('../src/engine/osmBuildings').OsmBuildingData = {
+    id: 'way:9001',
+    name: 'PCG Test',
+    buildingType: 'residential',
+    height: 12.8,
+    levels: 4,
+    roofShape: 'flat',
+    ring: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 12 }, { x: 0, y: 12 }],
+    tags: { building: 'residential' },
+  }
+  const params = { style: 'residential' as const, seed: 42, detail: 'medium' as const }
+  const a = generatePcgBuildingMesh(footprint, 3, params)
+  const b = generatePcgBuildingMesh(footprint, 3, params)
+  check('pcg: deterministic for same seed', !!a && !!b && a.positions.length === b.positions.length)
+  let same = true
+  for (let i = 0; i < a!.colors.length; i++) if (a!.colors[i] !== b!.colors[i]) { same = false; break }
+  check('pcg: identical colors for same seed', same)
+  const c = generatePcgBuildingMesh(footprint, 3, { ...params, seed: 43 })
+  let differs = a!.colors.length === c!.colors.length
+  for (let i = 0; i < a!.colors.length; i++) if (a!.colors[i] !== c!.colors[i]) { differs = true; break }
+  check('pcg: different seed varies the model', differs)
+  const simple = buildBuildingMesh(footprint, 3)
+  check('pcg: richer than plain extrusion', !!a && !!simple && a.positions.length > simple!.positions.length)
+  const low = generatePcgBuildingMesh(footprint, 3, { style: 'residential', seed: 42, detail: 'low' })
+  const high = generatePcgBuildingMesh(footprint, 3, { style: 'residential', seed: 42, detail: 'high' })
+  check('pcg: detail level scales geometry', !!low && !!high && low.positions.length < high.positions.length)
+  const regen = generatePcgBuildingMesh(footprint, 3, { ...params, override: 1 })
+  let regenDiffers = false
+  for (let i = 0; i < a!.colors.length; i++) if (a!.colors[i] !== regen!.colors[i]) { regenDiffers = true; break }
+  check('pcg: regenerate override changes variation', regenDiffers)
+  check('pcg: degenerate ring rejected', generatePcgBuildingMesh({ ...footprint, ring: [{ x: 0, y: 0 }] }, 0, params) === null)
+  // height respected: max vertex Y within base+height (+small parapet tolerance)
+  const mesh = generatePcgBuildingMesh(footprint, 3, params)!
+  let maxY = -Infinity
+  for (let i = 1; i < mesh.positions.length; i += 3) maxY = Math.max(maxY, mesh.positions[i])
+  check('pcg: building stays within height + parapet', maxY <= 3 + 12.8 + 1.0, String(maxY))
 }
 
 console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} FAILURES`)

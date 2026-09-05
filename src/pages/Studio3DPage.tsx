@@ -17,6 +17,7 @@ import { stickTrackToTerrain } from '../engine/tracks'
 import { sectionHalfWidth } from '../engine/laneLayout'
 import { makeTerrainSampler, getActiveTerrain } from '../terrain/terrainRegistry'
 import { buildBuildingMesh, ringCentroid } from '../engine/osmBuildings'
+import { generatePcgBuildingMesh, DEFAULT_PCG_CONFIG, type PcgStyle, type PcgDetail } from '../engine/pcgBuildings'
 import { getAsphaltTextures, type RoadWear } from '../viewport/asphaltMaterial'
 import { buildSimPaths, spawnVehicles, stepSimulation, simulationPoses, type SimVehicle, type SimPath } from '../engine/simulation'
 import type { MeshData } from '../engine/mesh'
@@ -126,6 +127,8 @@ export interface OutlinerEntry {
   kind: 'terrain' | 'road' | 'junction' | 'intersection' | 'rail' | 'building' | 'traffic' | 'helpers'
   /** OSM attributes for the inspector */
   tags?: Record<string, string>
+  /** PCG generation info for the inspector */
+  pcg?: { mode: string; style: string; seed: number; override: number }
 }
 
 export default function Studio3DPage({ onBack }: Studio3DPageProps) {
@@ -134,6 +137,8 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   const saveCurrentProject = useStore((s) => s.saveCurrentProject)
   const setOsmBuildings = useStore((s) => s.setOsmBuildings)
   const deleteOsmBuilding = useStore((s) => s.deleteOsmBuilding)
+  const setPcgConfig = useStore((s) => s.setPcgConfig)
+  const regeneratePcgBuilding = useStore((s) => s.regeneratePcgBuilding)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [heightScale, setHeightScale] = useState(1)
@@ -155,7 +160,8 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     () => (project ? buildProjectRoadObjects(project, drape) : []),
     [project, drape],
   )
-  // OSM buildings extruded on the terrain (each one a selectable outliner object)
+  // OSM buildings (simple extrusion or PCG-generated, per project config)
+  const pcgConfig = project?.pcgConfig ?? DEFAULT_PCG_CONFIG
   const buildingObjects = useMemo<StudioRoadObject[]>(() => {
     const buildings = project?.osmBuildings
     if (!buildings?.length || !project?.geoRef) return []
@@ -164,11 +170,18 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
     for (const building of buildings) {
       const centroid = ringCentroid(building.ring)
       const baseZ = sampler(centroid.x, centroid.y) ?? 0
-      const mesh = buildBuildingMesh(building, baseZ)
+      const mesh = pcgConfig.mode === 'pcg'
+        ? generatePcgBuildingMesh(building, baseZ, {
+            style: pcgConfig.style,
+            seed: pcgConfig.seed,
+            detail: pcgConfig.detail,
+            override: pcgConfig.overrides[building.id] || 0,
+          })
+        : buildBuildingMesh(building, baseZ)
       if (mesh) out.push({ id: building.id, name: building.name, kind: 'building', mesh, tags: building.tags })
     }
     return out
-  }, [project?.osmBuildings, project?.geoRef])
+  }, [project?.osmBuildings, project?.geoRef, pcgConfig])
 
   // ── Scene outliner state ──
   const [playing, setPlaying] = useState(false)
@@ -185,7 +198,15 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
       entries.push({ id: object.id, name: object.name, kind: object.kind })
     }
     for (const building of buildingObjects) {
-      entries.push({ id: building.id, name: building.name, kind: 'building', tags: building.tags })
+      entries.push({
+        id: building.id,
+        name: building.name,
+        kind: 'building',
+        tags: building.tags,
+        pcg: pcgConfig.mode === 'pcg'
+          ? { mode: 'pcg', style: pcgConfig.style, seed: pcgConfig.seed, override: pcgConfig.overrides[building.id] || 0 }
+          : { mode: 'extrusion', style: '-', seed: 0, override: 0 },
+      })
     }
     if (playing) entries.push({ id: 'traffic', name: 'Traffic vehicles', kind: 'traffic' })
     entries.push({ id: 'helpers', name: 'Grid (helper)', kind: 'helpers' })
@@ -218,6 +239,12 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
       if (entry.id !== id) map[entry.id] = true
     }
     setHiddenIds(map)
+  }
+  function updatePcg(patch: Partial<typeof pcgConfig>) {
+    setPcgConfig({ ...DEFAULT_PCG_CONFIG, ...pcgConfig, ...patch })
+  }
+  function regenerateAllPcg() {
+    updatePcg({ seed: 1 + Math.floor(Math.random() * 1_000_000), overrides: {} })
   }
   // simulation paths: plan polylines sampled at 2 m per road
   const simPaths = useMemo<SimPath[]>(() => {
@@ -332,6 +359,57 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
             </label>
           </>
         )}
+        {buildingObjects.length > 0 && (
+          <>
+            <Separator orientation="vertical" className="h-5" />
+            <ToolbarToggle
+              active={pcgConfig.mode === 'pcg'}
+              onClick={() => updatePcg({ mode: pcgConfig.mode === 'pcg' ? 'extrusion' : 'pcg' })}
+              icon={<Boxes className="size-3.5" />}
+              label="PCG Buildings"
+              title="Toggle procedural building generation"
+            />
+            {pcgConfig.mode === 'pcg' && (
+              <>
+                <label className="flex items-center gap-1 text-muted-foreground">
+                  Style
+                  <select
+                    className="h-6 rounded-md border border-border bg-background px-1 text-xs text-foreground"
+                    value={pcgConfig.style}
+                    onChange={(e) => updatePcg({ style: e.target.value as PcgStyle })}
+                  >
+                    <option value="residential">Residential</option>
+                    <option value="commercial">Commercial</option>
+                    <option value="industrial">Industrial</option>
+                    <option value="generic">Generic</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-1 text-muted-foreground">
+                  Detail
+                  <select
+                    className="h-6 rounded-md border border-border bg-background px-1 text-xs text-foreground"
+                    value={pcgConfig.detail}
+                    onChange={(e) => updatePcg({ detail: e.target.value as PcgDetail })}
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => regenerateAllPcg()}
+                  title="New random seed for all buildings"
+                >
+                  <RotateCcw className="size-3.5" />
+                  Regenerate All
+                </Button>
+              </>
+            )}
+          </>
+        )}
         <Separator orientation="vertical" className="h-5" />
         <label className="flex items-center gap-2 text-muted-foreground">
           Height Scale
@@ -384,6 +462,7 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
         onFocus={() => setFocusSignal((v) => v + 1)}
         onDeleteBuilding={deleteOsmBuilding}
         onIsolate={isolateEntry}
+        onRegenerateBuilding={regeneratePcgBuilding}
         hasContent={hasContent}
         roadCount={project?.roads.length ?? 0}
         onFit={() => setFitSignal((v) => v + 1)}
@@ -396,11 +475,12 @@ export default function Studio3DPage({ onBack }: Studio3DPageProps) {
   )
 }
 
-function ToolbarToggle({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: ReactNode; label: string }) {
+function ToolbarToggle({ active, onClick, icon, label, title }: { active: boolean; onClick: () => void; icon: ReactNode; label: string; title?: string }) {
   return (
     <button
       className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 font-medium transition-colors ${active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted'}`}
       onClick={onClick}
+      title={title}
     >
       {icon}
       {label}
@@ -431,6 +511,7 @@ interface Studio3DViewportProps {
   onFocus: () => void
   onDeleteBuilding: (id: string) => void
   onIsolate: (id: string) => void
+  onRegenerateBuilding: (id: string) => void
   hasContent: boolean
   roadCount: number
   onFit: () => void
@@ -440,7 +521,7 @@ interface Studio3DViewportProps {
   simPaths: SimPath[]
 }
 
-function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTexture, heightScale, wireframe, roadWear, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
+function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTexture, heightScale, wireframe, roadWear, fitSignal, focusSignal, outlinerOpen, entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate, onRegenerateBuilding, hasContent, roadCount, onFit, playing, simSpeed, vehicleCount, simPaths }: Studio3DViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<{
     scene: THREE.Scene
@@ -872,6 +953,7 @@ function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTe
           onFocus={onFocus}
           onDeleteBuilding={onDeleteBuilding}
           onIsolate={onIsolate}
+          onRegenerateBuilding={onRegenerateBuilding}
         />
       )}
 
@@ -927,7 +1009,7 @@ const OUTLINER_CATEGORIES: { kind: OutlinerEntry['kind']; label: string }[] = [
   { kind: 'helpers', label: 'Helpers' },
 ]
 
-function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate }: {
+function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, onToggleHidden, onToggleLocked, onFocus, onDeleteBuilding, onIsolate, onRegenerateBuilding }: {
   entries: OutlinerEntry[]
   selectedIds: string[]
   hiddenIds: Record<string, boolean>
@@ -938,6 +1020,7 @@ function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, o
   onFocus: () => void
   onDeleteBuilding: (id: string) => void
   onIsolate: (id: string) => void
+  onRegenerateBuilding: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -1024,9 +1107,27 @@ function SceneOutliner({ entries, selectedIds, hiddenIds, lockedIds, onSelect, o
         )}
       </div>
 
-      {/* Inspector for the active object (OSM attributes, actions) */}
+      {/* Inspector for the active object (generation info, OSM attributes, actions) */}
       {activeEntry?.tags && (
         <div className="border-t border-border">
+          {activeEntry.pcg && (
+            <div className="flex items-center justify-between gap-2 border-b border-border px-2.5 py-1.5 text-[10px] text-muted-foreground">
+              <span>
+                {activeEntry.pcg.mode === 'pcg'
+                  ? `PCG · ${activeEntry.pcg.style} · seed ${activeEntry.pcg.seed}${activeEntry.pcg.override ? ` · regen #${activeEntry.pcg.override}` : ''}`
+                  : 'Simple extrusion'}
+              </span>
+              {activeEntry.pcg.mode === 'pcg' && (
+                <button
+                  className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                  onClick={() => activeId && onRegenerateBuilding(activeId)}
+                  title="Regenerate this building with a new variation"
+                >
+                  Regenerate
+                </button>
+              )}
+            </div>
+          )}
           <button
             className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
             onClick={() => setShowTags((v) => !v)}
