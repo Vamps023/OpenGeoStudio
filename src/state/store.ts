@@ -144,6 +144,9 @@ export interface Project {
   terrain?: StoredTerrain
   /** persisted working area + tile grid size (Terrain workspace) */
   workingArea?: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }
+  /** persisted tile keys (`row:col` within the working-area grid) so a reopened
+   *  project restores the exact selected/deselected tile combination */
+  selectedTiles?: string[]
 }
 
 export type Tool =
@@ -251,6 +254,7 @@ interface OgsState {
   refreshProjects: () => Promise<void>
   markHydrated: () => void
   setWorkingArea: (area: { bounds: { west: number; south: number; east: number; north: number }; tileSizeKm: number }) => void
+  setSelectedTiles: (keys: string[]) => void
   saveCurrentProject: () => Promise<void>
   deleteProject: (id: string) => Promise<void>
   /** Undo/redo of project mutations (roads, intersections, junctions, geoRef). */
@@ -390,6 +394,25 @@ function updateActiveProject(
   if (!get().hydrated) return
   persistLocal(nextProjects)
   // Also save to file (async, non-blocking)
+  const active = nextProjects.find((p) => p.id === activeProjectId)
+  if (active) void saveProjectToFile(active)
+}
+
+/** Persist a workspace preference (e.g. terrain tile selection) without
+ *  pushing an undo step — clicking tiles is not a content edit. */
+function updateActiveProjectSilent(
+  get: () => OgsState,
+  set: (patch: Partial<OgsState>) => void,
+  update: (project: Project) => Project,
+) {
+  const { projects, activeProjectId } = get()
+  if (!activeProjectId) return
+  const current = projects.find((project) => project.id === activeProjectId)
+  if (!current) return
+  const nextProjects = projects.map((project) => (project.id === activeProjectId ? update(project) : project))
+  set({ projects: nextProjects })
+  if (!get().hydrated) return
+  persistLocal(nextProjects)
   const active = nextProjects.find((p) => p.id === activeProjectId)
   if (active) void saveProjectToFile(active)
 }
@@ -572,6 +595,7 @@ export const useStore = create<OgsState>((set, get) => ({
   })),
   markHydrated: () => set({ hydrated: true }),
   setWorkingArea: (area) => updateActiveProject(get, set, (project) => ({ ...project, workingArea: area })),
+  setSelectedTiles: (keys) => updateActiveProjectSilent(get, set, (project) => ({ ...project, selectedTiles: keys })),
   setProjectTerrain: (terrain) => {
     if (terrain) setActiveTerrain(terrain)
     updateActiveProject(get, set, (project) => ({

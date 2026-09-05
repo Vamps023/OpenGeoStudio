@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Crosshair, Download, Grid3x3, Globe, Image as ImageIcon, Layers, Mountain, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { resolveCRS } from '../engine/crs'
@@ -83,6 +83,7 @@ export default function TerrainWorkspace() {
   const setGeoRef = useStore((s) => s.setGeoRef)
   const setProjectTerrain = useStore((s) => s.setProjectTerrain)
   const setWorkingArea = useStore((s) => s.setWorkingArea)
+  const setSelectedTilesStore = useStore((s) => s.setSelectedTiles)
   const project = projects.find((p) => p.id === activeProjectId)
 
   const [selectedBounds, setSelectedBounds] = useState<GeoBounds | null>(null)
@@ -106,6 +107,14 @@ export default function TerrainWorkspace() {
   const [tileGrid, setTileGrid] = useState<TileGrid | null>(null)
   const [selectedTiles, setSelectedTiles] = useState<Set<string>>(new Set())
   const [gridVisible, setGridVisible] = useState(true)
+  /** saved selection waiting to be applied after the next grid recompute */
+  const pendingSelectionRef = useRef<Set<string> | null>(null)
+
+  /** push a user selection change to the project (persisted, no undo step) */
+  function persistSelection(next: Set<string>) {
+    setSelectedTiles(next)
+    setSelectedTilesStore([...next])
+  }
 
   // DEM settings
   const [demProvider, setDemProvider] = useState<DEMProvider>('aws-terrarium')
@@ -142,27 +151,38 @@ export default function TerrainWorkspace() {
     }
     const grid = computeTileGrid(selectedBounds, tileSizeKm)
     setTileGrid(grid)
-    // Auto-select all tiles when grid is recomputed
-    setSelectedTiles(new Set(grid.tiles.map((t) => tileKey(t.row, t.col))))
+    // A saved selection (project reopen) replaces the default select-all
+    const pending = pendingSelectionRef.current
+    if (pending) {
+      pendingSelectionRef.current = null
+      setSelectedTiles(new Set(
+        grid.tiles.filter((t) => pending.has(tileKey(t.row, t.col))).map((t) => tileKey(t.row, t.col)),
+      ))
+      return
+    }
+    // Auto-select all tiles when the grid is recomputed (new/changed working
+    // area or tile size) — persisted so stale keys from an older grid can
+    // never resurface on reopen
+    const all = new Set(grid.tiles.map((t) => tileKey(t.row, t.col)))
+    setSelectedTiles(all)
+    setSelectedTilesStore([...all])
   }, [selectedBounds, tileSizeKm])
 
   function toggleTile(row: number, col: number) {
-    setSelectedTiles((prev) => {
-      const next = new Set(prev)
-      const key = tileKey(row, col)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+    const next = new Set(selectedTiles)
+    const key = tileKey(row, col)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    persistSelection(next)
   }
 
   function selectAllTiles() {
     if (!tileGrid) return
-    setSelectedTiles(new Set(tileGrid.tiles.map((t) => tileKey(t.row, t.col))))
+    persistSelection(new Set(tileGrid.tiles.map((t) => tileKey(t.row, t.col))))
   }
 
   function deselectAllTiles() {
-    setSelectedTiles(new Set())
+    persistSelection(new Set())
   }
 
   /** Center the working area (areaKm × areaKm) on a location and align the project geo reference. */
@@ -204,10 +224,12 @@ export default function TerrainWorkspace() {
     }
   }
 
-  // Restore the persisted working area and fly to it (auto-focus on open)
+  // Restore the persisted working area + tile selection and fly to it (auto-focus on open)
   useEffect(() => {
     const area = project?.workingArea
     if (!area) return
+    // the grid recomputes from bounds/size — hand it the saved selection first
+    pendingSelectionRef.current = new Set(project?.selectedTiles ?? [])
     setSelectedBounds(area.bounds)
     setTileSizeKm(area.tileSizeKm)
     const lng = (area.bounds.west + area.bounds.east) / 2
