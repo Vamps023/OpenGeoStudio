@@ -755,17 +755,18 @@ function Studio3DViewport({ roadObjects, buildingObjects, terrainMesh, imageryTe
         ref.roadGroup.add(group)
         ref.entryGroups.set(object.id, group)
       }
-      // Pavement gets the dark asphalt PBR set (texture only, vertex colors
-      // add subtle lane-type variation). Markings get a plain vertex-colored
-      // material so white/yellow/green strips stay clean and are not affected
-      // by the asphalt texture.
+      // Pavement gets the dark asphalt PBR set. The albedo texture is already
+      // dark asphalt grey, so we do NOT multiply with vertex colors — that
+      // would make the road nearly black (0.14 × 0.16 = 0.022). Markings get
+      // a plain vertex-colored material so white/yellow/green strips stay
+      // clean and are not affected by the asphalt texture.
       if (object.surface === 'marking') {
         const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 0.6, undefined, null, true)
         mesh.userData.outlinerId = object.id
         group.add(mesh)
       } else {
-        // pavement (or untagged legacy): asphalt PBR with vertex color tint
-        const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 1.0, object.mesh.uvs, asphalt.map, true, asphalt.roughnessMap, asphalt.normalMap, true)
+        // pavement: dark asphalt PBR texture only (no vertex color multiply)
+        const mesh = meshFromData(object.mesh.positions, null, object.mesh.colors, object.mesh.indices, 1.0, object.mesh.uvs, asphalt.map, true, asphalt.roughnessMap, asphalt.normalMap, false)
         mesh.userData.outlinerId = object.id
         group.add(mesh)
       }
