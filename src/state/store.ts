@@ -263,6 +263,7 @@ interface OgsState {
   setSelectedTiles: (keys: string[]) => void
   setOsmBuildings: (buildings: import('../engine/osmBuildings').OsmBuildingData[], meta: { area: { west: number; south: number; east: number; north: number }; fetchedAt: string; total: number }) => void
   deleteOsmBuilding: (id: string) => void
+  clearOsmBuildings: () => void
   setPcgConfig: (config: import('../engine/pcgBuildings').PcgProjectConfig) => void
   regeneratePcgBuilding: (id: string) => void
   saveCurrentProject: () => Promise<void>
@@ -608,6 +609,7 @@ export const useStore = create<OgsState>((set, get) => ({
   setSelectedTiles: (keys) => updateActiveProjectSilent(get, set, (project) => ({ ...project, selectedTiles: keys })),
   setOsmBuildings: (buildings, meta) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: buildings, osmImport: meta })),
   deleteOsmBuilding: (id) => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: (project.osmBuildings ?? []).filter((building) => building.id !== id) })),
+  clearOsmBuildings: () => updateActiveProject(get, set, (project) => ({ ...project, osmBuildings: [], osmImport: undefined })),
   setPcgConfig: (config) => updateActiveProjectSilent(get, set, (project) => ({ ...project, pcgConfig: config })),
   regeneratePcgBuilding: (id) => updateActiveProjectSilent(get, set, (project) => {
     const config = project.pcgConfig ?? { mode: 'pcg' as const, style: 'generic' as const, seed: 1, detail: 'medium' as const, overrides: {} }

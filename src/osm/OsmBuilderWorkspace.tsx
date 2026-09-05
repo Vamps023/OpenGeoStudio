@@ -35,6 +35,7 @@ export default function OsmBuilderWorkspace() {
   const setGeoRef = useStore((s) => s.setGeoRef)
   const setOsmBuildings = useStore((s) => s.setOsmBuildings)
   const deleteOsmBuilding = useStore((s) => s.deleteOsmBuilding)
+  const clearOsmBuildings = useStore((s) => s.clearOsmBuildings)
   const project = projects.find((p) => p.id === activeProjectId)
 
   // ── Polygon drawing state ──
@@ -163,14 +164,14 @@ export default function OsmBuilderWorkspace() {
         return pointInPolygon(lng, lat, polygon)
       })
       const projected = inside.map((building) => toBuildingData(building, geoRef))
-      // area-sync merge: drop existing buildings inside the polygon bounds,
-      // keep buildings outside untouched
+      // area-sync merge: drop existing buildings whose centroid is inside the
+      // drawn polygon (precise point-in-polygon test, not just bounding box),
+      // keep buildings outside the polygon untouched.
       const bounds = polyBounds!
       const latRad = (geoRef.lat * Math.PI) / 180
       const metersPerDegLat = 111320
       const metersPerDegLng = 111320 * Math.cos(latRad)
-      const inPolyBounds = (building: typeof projected[number]) => {
-        // reproject centroid to lng/lat and test against polygon bounds
+      const inPolygon = (building: typeof projected[number]) => {
         const ring = building.ring
         let cx = 0
         let cy = 0
@@ -179,16 +180,20 @@ export default function OsmBuilderWorkspace() {
         cy /= ring.length
         const lng = geoRef.lng + (cx * geoRef.scale) / metersPerDegLng
         const lat = geoRef.lat + (cy * geoRef.scale) / metersPerDegLat
-        return lng >= bounds.west && lng <= bounds.east && lat >= bounds.south && lat <= bounds.north
+        return pointInPolygon(lng, lat, polygon)
       }
-      const merged = [...(currentProject.osmBuildings ?? []).filter((b) => !inPolyBounds(b)), ...projected]
+      const kept = (currentProject.osmBuildings ?? []).filter((b) => !inPolygon(b))
+      const merged = [...kept, ...projected]
       setOsmBuildings(merged, { area: bounds, fetchedAt: new Date().toISOString(), total: merged.length })
       setOsmStatus('idle')
+      const replaced = (currentProject.osmBuildings ?? []).length - kept.length
       if (projected.length === 0) {
-        toast.info('No OSM buildings found in this polygon')
+        toast.info('No OSM buildings found in this polygon', {
+          description: replaced > 0 ? `Removed ${replaced} old building${replaced === 1 ? '' : 's'} from this area` : undefined,
+        })
       } else {
         toast.success(`Imported ${projected.length} building${projected.length === 1 ? '' : 's'}`, {
-          description: `${merged.length} total in project · © OpenStreetMap contributors`,
+          description: `${merged.length} total in project${replaced > 0 ? ` · replaced ${replaced} old` : ''} · © OpenStreetMap contributors`,
         })
       }
     } catch (err) {
@@ -336,9 +341,31 @@ export default function OsmBuilderWorkspace() {
             )}
             {osmBuildings.length > 0 && (
               <>
-                <Badge variant="muted" className="w-fit">
-                  {osmBuildings.length} building{osmBuildings.length === 1 ? '' : 's'} in project
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="muted" className="w-fit">
+                    {osmBuildings.length} building{osmBuildings.length === 1 ? '' : 's'} in project
+                  </Badge>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                    onClick={() => {
+                      clearOsmBuildings()
+                      toast.success('Cleared all OSM buildings')
+                    }}
+                    disabled={osmStatus === 'fetching'}
+                    title="Remove all imported buildings from the project"
+                  >
+                    <Trash2 className="size-3" />
+                    Clear all
+                  </Button>
+                </div>
+                {project?.osmImport && (
+                  <p className="text-[10px] leading-snug text-muted-foreground tabular-nums">
+                    Last import: {new Date(project.osmImport.fetchedAt).toLocaleString()}
+                  </p>
+                )}
                 <div className="grid max-h-60 gap-0.5 overflow-y-auto">
                   {osmBuildings.slice(0, 200).map((building) => (
                     <div
@@ -367,7 +394,7 @@ export default function OsmBuilderWorkspace() {
                   )}
                 </div>
                 <p className="text-[10px] leading-snug text-muted-foreground">
-                  Building data © OpenStreetMap contributors (ODbL 1.0). Re-importing the same area replaces those buildings instead of duplicating them.
+                  Building data © OpenStreetMap contributors (ODbL 1.0). Re-importing the same area replaces buildings inside the polygon; buildings outside are kept. Use "Clear all" to start fresh.
                 </p>
               </>
             )}
