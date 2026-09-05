@@ -154,56 +154,59 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
             {projects.map((project) => (
               <Card
                 key={project.id}
-                className="group relative gap-4 bg-card/70 py-5 transition-colors hover:border-primary/40"
+                className="group h-full gap-4 bg-card/70 py-5 transition-colors hover:border-primary/40"
               >
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="absolute right-2 top-2 size-7 p-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-                  onClick={() => setDeleteTarget(project)}
-                  title="Delete project"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
                 <CardHeader className="gap-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="truncate text-base">{project.name}</CardTitle>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="min-w-0 flex-1 truncate text-base" title={project.name}>
+                      {project.name}
+                    </CardTitle>
                     <Badge variant="success" className="shrink-0">
                       <Route className="size-3" />
                       {project.roads.length} road{project.roads.length === 1 ? '' : 's'}
                     </Badge>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="size-8 shrink-0 p-0 text-muted-foreground transition-opacity hover:text-destructive focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                      onClick={() => setDeleteTarget(project)}
+                      title="Delete project"
+                      aria-label={`Delete project ${project.name}`}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
                   </div>
                   <CardDescription>
                     Created {new Date(project.createdAt).toLocaleDateString()}
                   </CardDescription>
                 </CardHeader>
-                <CardFooter className="gap-2">
+                <CardFooter className="mt-auto gap-2">
                   <Button
                     size="sm"
                     variant="secondary"
-                    className="flex-1 text-xs"
+                    className="min-w-0 flex-1 px-2 text-xs"
                     onClick={() => openInEditor(project.id)}
                   >
-                    <Layers className="size-4" />
-                    Editor
+                    <Layers className="size-3.5 shrink-0" />
+                    <span className="truncate">Editor</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 text-xs"
+                    className="min-w-0 flex-1 px-2 text-xs"
                     onClick={() => openInTerrain(project.id)}
                   >
-                    <MapIcon className="size-4" />
-                    Terrain
+                    <MapIcon className="size-3.5 shrink-0" />
+                    <span className="truncate">Terrain</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 text-xs"
+                    className="min-w-0 flex-1 px-2 text-xs"
                     onClick={() => openInStudio3D(project.id)}
                   >
-                    <Boxes className="size-4" />
-                    3D Studio
+                    <Boxes className="size-3.5 shrink-0" />
+                    <span className="truncate">3D Studio</span>
                   </Button>
                 </CardFooter>
               </Card>
