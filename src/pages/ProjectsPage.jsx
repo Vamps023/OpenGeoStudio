@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Boxes, FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Route, Trash2 } from 'lucide-react'
+import { Boxes, FolderOpen, HardDrive, Layers, Map as MapIcon, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import LogoMark from '@/components/layout/LogoMark'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -161,10 +160,6 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
                     <CardTitle className="min-w-0 flex-1 truncate text-base" title={project.name}>
                       {project.name}
                     </CardTitle>
-                    <Badge variant="success" className="shrink-0">
-                      <Route className="size-3" />
-                      {project.roads.length} road{project.roads.length === 1 ? '' : 's'}
-                    </Badge>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -185,19 +180,19 @@ export default function ProjectsPage({ onOpenEditor, onOpenTerrain, onOpenStudio
                     size="sm"
                     variant="secondary"
                     className="min-w-0 flex-1 px-2 text-xs"
-                    onClick={() => openInEditor(project.id)}
+                    onClick={() => openInTerrain(project.id)}
                   >
-                    <Layers className="size-3.5 shrink-0" />
-                    <span className="truncate">Editor</span>
+                    <MapIcon className="size-3.5 shrink-0" />
+                    <span className="truncate">Terrain</span>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
                     className="min-w-0 flex-1 px-2 text-xs"
-                    onClick={() => openInTerrain(project.id)}
+                    onClick={() => openInEditor(project.id)}
                   >
-                    <MapIcon className="size-3.5 shrink-0" />
-                    <span className="truncate">Terrain</span>
+                    <Layers className="size-3.5 shrink-0" />
+                    <span className="truncate">Editor</span>
                   </Button>
                   <Button
                     size="sm"
